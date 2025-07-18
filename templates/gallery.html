@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='styles/gallery.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="gallery-container">
+    <header class="gallery-header">
+        <div class="header-content">
+            <div>
+                <h1>Il tuo archivio</h1>
+                <p id="media-count">{{ media_items|length }} elementi</p>
+            </div>
+            <div class="header-actions">
+                <div class="grouping-controls">
+                    <span class="material-icons" title="Raggruppa per">grid_view</span>
+                    <select id="group-by-select" class="btn outlined">
+                        <option value="none">Nessun gruppo</option>
+                        <option value="day">Giorno</option>
+                        <option value="month" selected>Mese</option>
+                        <option value="year">Anno</option>
+                    </select>
+                </div>
+
+                <button class="btn outlined" id="select-all-btn" title="Seleziona Tutto" style="display: none;">
+                    <span class="material-icons">select_all</span>
+                    <span class="btn-text">Seleziona Tutto</span>
+                </button>
+                <button class="btn primary" id="download-selected-btn" title="Scarica Selezionati" style="display: none;">
+                    <span class="material-icons">download</span>
+                    <span class="btn-text">Scarica</span> (<span id="selected-count">0</span>)
+                </button>
+                
+                <form action="/upload" method="POST" enctype="multipart/form-data" class="upload-form" id="upload-form">
+                    <input type="file" id="file-input" name="file[]" accept="image/*,video/*" hidden multiple>
+                    <label for="file-input" class="btn outlined" id="upload-label">
+                        <span class="material-icons">add_photo_alternate</span>
+                        Carica
+                    </label>
+                </form>
+
+                <button class="btn outlined" id="find-duplicates-btn" title="Trova Duplicati">
+                    <span class="material-icons">manage_search</span>
+                </button>
+                <button class="btn icon" id="logout-btn" title="Esci">
+                    <span class="material-icons">logout</span>
+                </button>
+            </div>
+        </div>
+        <div id="scan-status-container" class="scan-status-container" style="display: none;">
+             <p id="scan-status"></p>
+        </div>
+        <div id="progress-container" class="progress-container" style="display: none;">
+            <p id="progress-status"></p>
+            <div class="progress-bar-background">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
+        </div>
+    </header>
+
+    <div class="gallery-grid" data-media-items='{{ media_items | tojson | safe }}'>
+        {% for item in media_items %}
+        <div class="media-card-wrapper" data-timestamp="{{ item.upload_date }}">
+            <div class="media-card clickable-media" data-index="{{ loop.index0 }}">
+                {% set file_ext = item.filename.split('.')[-1].lower() %}
+                {% if file_ext in ['jpg', 'jpeg', 'png'] %}
+                    {# Aggiungi client_id, session_id e api_key come parametri di query #}
+                    <img src="{{ url_for('media', filename=item.filename, client_id=request.args.get('client_id'), session_id=request.args.get('session_id'), api_key=request.args.get('api_key')) }}" alt="{{ item.filename }}" loading="lazy">
+                {% else %}
+                    {# Aggiungi client_id, session_id e api_key come parametri di query #}
+                    <video preload="metadata">
+                        <source src="{{ url_for('media', filename=item.filename, client_id=request.args.get('client_id'), session_id=request.args.get('session_id'), api_key=request.args.get('api_key')) }}#t=0.5" type="video/mp4">
+                    </video>
+                    <div class="video-overlay"><span class="material-icons">play_circle</span></div>
+                {% endif %}
+                <div class="media-actions">
+                    <button type="button" class="btn icon danger delete-button" data-filename="{{ item.filename }}" title="Elimina" onclick="event.stopPropagation();">
+                        <span class="material-icons">delete</span>
+                    </button>
+                </div>
+            </div>
+            <div class="selection-overlay">
+                <input type="checkbox" class="media-checkbox" data-filename="{{ item.filename }}" onclick="event.stopPropagation();">
+            </div>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <span class="material-icons">photo_library</span>
+            <h3>Nessun file caricato</h3>
+            <p>Carica la tua prima foto o video</p>
+            <label for="file-input" class="btn primary"><span class="material-icons">add</span>Carica file</label>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<form action="/logout" method="POST" id="logout-form" style="display:none;"></form>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='scripts/grouping.js') }}"></script>
+<script src="{{ url_for('static', filename='scripts/duplicates.js') }}"></script>
+<script src="{{ url_for('static', filename='scripts/selection.js') }}"></script>
+{% endblock %}

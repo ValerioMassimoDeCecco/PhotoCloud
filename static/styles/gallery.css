@@ -1,0 +1,363 @@
+.gallery-container {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    background: var(--surface);
+    border-radius: var(--radius-l); /* Softer radius */
+    overflow: hidden;
+    border: 1px solid var(--outline); /* Subtle border */
+    box-shadow: none; /* Removed initial shadow */
+}
+
+.gallery-header {
+    background: var(--surface); /* Clean white background */
+    color: var(--on-surface);
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--outline); /* Separator line */
+    z-index: 10; /* Assicura che l'header sia sopra la griglia */
+    position: relative;
+}
+
+.header-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.header-content h1 {
+    font-weight: 500;
+    margin-bottom: 0; /* Adjusted alignment */
+}
+
+.header-content p {
+    opacity: 1; /* Full opacity */
+    margin-bottom: 0;
+    color: var(--on-surface-variant);
+}
+
+.header-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+/* --- NUOVO: Stili per i controlli di raggruppamento --- */
+.grouping-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px;
+    border: 1px solid var(--outline);
+    border-radius: var(--radius-s);
+}
+.grouping-controls .material-icons {
+    color: var(--on-surface-variant);
+    padding-left: 4px;
+}
+.grouping-controls select {
+    border: none;
+    background: transparent;
+    padding: 0;
+    color: var(--primary);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+}
+.grouping-controls select:focus {
+    outline: none;
+}
+/* --------------------------------------------------- */
+
+.scan-status-container {
+    padding: 8px 24px 0; /* Add some padding */
+    color: var(--on-surface-variant);
+    font-size: 14px;
+}
+
+.upload-form {
+    display: flex;
+    gap: 8px;
+}
+
+.progress-container {
+    padding: 8px 0;
+    margin-top: 8px;
+}
+
+#progress-status {
+    font-size: 14px;
+    color: var(--on-surface-variant);
+    margin-bottom: 4px;
+}
+
+.progress-bar-background {
+    background: var(--surface-container-high);
+    border-radius: var(--radius-s);
+    height: 8px;
+    overflow: hidden;
+}
+
+.progress-bar {
+    width: 0%;
+    height: 100%;
+    background: var(--primary);
+    border-radius: var(--radius-s);
+    transition: width 0.3s ease-in-out;
+}
+
+.btn {
+    padding: 10px 16px; /* Smaller padding */
+    border-radius: var(--radius-s); /* Google's standard button radius */
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s, box-shadow 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid transparent;
+    text-decoration: none;
+}
+
+.btn.primary {
+    background: var(--primary);
+    color: var(--on-primary);
+    border-color: var(--primary);
+}
+
+.btn.primary:hover {
+    background: #1b66c9; /* Slightly darker blue on hover */
+    color: var(--on-primary);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.btn.outlined {
+    background: transparent;
+    color: var(--primary); /* Blue text for outlined buttons */
+    border: 1px solid var(--outline);
+}
+
+.btn.outlined:hover {
+    background: var(--primary-container);
+    border-color: var(--primary-container);
+}
+
+.btn.icon {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--on-surface-variant);
+    border: none;
+}
+
+.btn.icon:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.btn.danger {
+    background: transparent;
+    color: var(--error);
+}
+
+.btn.danger:hover {
+    background: var(--error-container);
+    color: var(--on-error-container);
+}
+
+/* Griglia principale: ora un contenitore per i gruppi */
+.gallery-grid {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px; /* Spazio tra i gruppi */
+    transition: opacity 0.4s ease-in-out; /* Animazione di dissolvenza */
+}
+
+/* Stile per ogni gruppo di media */
+.media-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.group-title {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--on-surface);
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--outline-variant);
+    text-transform: capitalize;
+}
+
+/* Griglia effettiva dei media all'interno di un gruppo */
+.media-group-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 8px;
+}
+
+.media-card-wrapper {
+    position: relative;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+}
+
+.media-card {
+    position: relative;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+    background: var(--surface-container);
+    box-shadow: none;
+    transition: transform 0.2s, box-shadow 0.2s;
+    aspect-ratio: 1;
+    border: 1px solid var(--outline-variant);
+    cursor: pointer;
+}
+
+.media-card-wrapper.selected .media-card {
+    transform: scale(0.9);
+    box-shadow: 0 0 0 2px var(--primary);
+}
+
+.media-card:hover {
+    transform: none;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    border-color: var(--primary);
+}
+
+.media-card img,
+.media-card video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.media-card video {
+    background: #000;
+}
+
+.video-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.video-overlay .material-icons {
+    font-size: 48px;
+    color: rgba(255, 255, 255, 0.9);
+    filter: drop-shadow(0 0 4px rgba(0,0,0,0.5));
+}
+
+.media-card:hover .video-overlay {
+    opacity: 1;
+}
+
+.media-actions {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    opacity: 0;
+    transition: opacity 0.2s;
+    display: flex;
+    gap: 4px;
+}
+
+.media-card:hover .media-actions {
+    opacity: 1;
+}
+
+.selection-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(26, 115, 232, 0.2);
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+}
+
+.media-card-wrapper.selected .selection-overlay {
+    opacity: 1;
+}
+
+.media-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    width: 24px;
+    height: 24px;
+    accent-color: var(--primary);
+    cursor: pointer;
+    z-index: 5;
+}
+
+.empty-state {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--on-surface-variant);
+    min-height: 400px;
+}
+
+.empty-state .material-icons {
+    font-size: 64px;
+    margin-bottom: 16px;
+    color: var(--on-surface-variant);
+    opacity: 0.7;
+}
+
+.empty-state h3 {
+    margin-bottom: 8px;
+    color: var(--on-surface);
+}
+
+.empty-state p {
+    margin-bottom: 24px;
+    max-width: 400px;
+}
+
+@media (max-width: 768px) {
+    .header-content {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .header-actions {
+        width: 100%;
+        justify-content: flex-start;
+        flex-wrap: wrap; /* Permette agli elementi di andare a capo */
+    }
+    
+    .media-group-grid {
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 4px;
+    }
+    .gallery-grid {
+        padding: 8px;
+    }
+}

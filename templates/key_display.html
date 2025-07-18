@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='styles/key_display.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="key-display-container">
+    <div class="key-card">
+        <div class="key-header">
+            <span class="material-icons">check_circle</span>
+            <h1>Registrazione completata!</h1>
+        </div>
+        
+        <div class="key-content">
+            {% if api_key %}
+                <div class="key-field">
+                    <label>Username</label>
+                    <div class="key-value">{{ username }}</div>
+                </div>
+                
+                <div class="key-field">
+                    <label>Chiave API</label>
+                    <div class="key-value" id="api-key">{{ api_key }}</div>
+                    <button class="btn icon" id="copy-btn" title="Copia chiave">
+                        <span class="material-icons icon-copy">content_copy</span>
+                        <span class="material-icons icon-copied" style="display: none;">done</span>
+                    </button>
+                </div>
+                
+                <div class="key-warning">
+                    <span class="material-icons">warning</span>
+                    <div>
+                        <p><strong>CONSERVA QUESTA CHIAVE CON CURA</strong></p>
+                        <p>Non potrai recuperarla se la perdi! Questa chiave è necessaria per decrittare i tuoi file.</p>
+                    </div>
+                </div>
+            {% else %}
+                <p style="text-align: center; color: var(--on-surface); font-size: 16px;">
+                    La tua registrazione con username <strong>{{ username }}</strong> è andata a buon fine.
+                </p>
+                <p style="text-align: center; color: var(--on-surface-variant); font-size: 14px; margin-top: 16px;">
+                    Ora puoi accedere utilizzando la chiave personalizzata che hai scelto.
+                </p>
+            {% endif %}
+        </div>
+        
+        <div class="key-actions">
+            <a href="{{ url_for('home') }}" class="btn primary">Vai al login</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if api_key %}
+{% endif %}
+{% endblock %}

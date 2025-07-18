@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='styles/login.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+    <div class="auth-card">
+        <div class="auth-header">
+            <h1>PhotoCloud</h1>
+            <p>Il tuo archivio foto/video sicuro</p>
+        </div>
+        
+        <div class="auth-tabs">
+            <button id="login-tab" class="auth-tab active">Accedi</button>
+            <button id="register-tab" class="auth-tab">Registrati</button>
+        </div>
+        
+        <div id="login-form" class="auth-form active">
+            <form id="actual-login-form" method="POST" action="/login"> {# Aggiunto ID per JS #}
+                <div class="form-group">
+                    <label for="login-username">Username</label>
+                    <div class="input-container">
+                        <span class="material-icons">person</span>
+                        <input type="text" id="login-username" name="username" required autocomplete="username">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="login-api-key">Chiave API</label>
+                    <div class="input-container">
+                        <span class="material-icons">key</span>
+                        <input type="password" id="login-api-key" name="api_key" required autocomplete="current-password">
+                    </div>
+                </div>
+                <button type="submit" class="btn primary">Accedi</button>
+            </form>
+        </div>
+        
+        <div id="register-form" class="auth-form">
+            <form id="actual-register-form" method="POST" action="/register"> {# Aggiunto ID per JS #}
+                <div class="form-group">
+                    <label for="register-username">Scegli username</label>
+                    <div class="input-container">
+                        <span class="material-icons">person_add</span>
+                        <input type="text" id="register-username" name="username" required autocomplete="username">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Tipo di Chiave</label>
+                    <div class="radio-group">
+                        <label>
+                            <input type="radio" name="key_type" value="generate" checked>
+                            Genera una chiave sicura per me
+                        </label>
+                        <label>
+                            <input type="radio" name="key_type" value="custom">
+                            Voglio usare una chiave personalizzata
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-group" id="custom-key-group" style="display: none;">
+                    <label for="register-custom-key">La tua chiave personalizzata</label>
+                    <div class="input-container">
+                        <span class="material-icons">password</span>
+                        <input type="password" id="register-custom-key" name="custom_key" autocomplete="new-password" minlength="8">
+                    </div>
+                    <p class="form-hint">Usa una frase o una password con almeno 8 caratteri per la massima sicurezza.</p>
+                </div>
+
+                <button type="submit" class="btn primary">Registrati</button>
+            </form>
+        </div>
+    </div>
+    
+    <div class="auth-footer">
+        <p>I tuoi file sono crittografati end-to-end</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% endblock %}
