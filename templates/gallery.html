@@ -13,6 +13,16 @@
                 <p id="media-count">{{ media_files|length }} elementi</p>
             </div>
             <div class="header-actions">
+                <div class="grouping-controls">
+                    <span class="material-icons">sort</span>
+                    <select id="group-by-select" class="btn-like-select">
+                        <option value="none">Nessun gruppo</option>
+                        <option value="day">Per Giorno</option>
+                        <option value="month" selected>Per Mese</option>
+                        <option value="year">Per Anno</option>
+                    </select>
+                </div>
+
                 <button class="btn outlined" id="select-all-btn" title="Seleziona Tutto" style="display: none;">
                     <span class="material-icons">select_all</span>
                     <span class="btn-text">Seleziona Tutto</span>
@@ -48,11 +58,15 @@
             </div>
         </div>
     </header>
-
-    <div class="gallery-grid" data-media-files='{{ media_files | tojson | safe }}'>
-        {% for file in media_files %}
-        <div class="media-card-wrapper">
+    
+    {# Estrae solo i nomi dei file per la logica esistente (es. lightbox) #}
+    {% set filenames = media_files | map(attribute='filename') | list %}
+    <div class="gallery-grid" data-media-files='{{ filenames | tojson | safe }}'>
+        {% for media in media_files %}
+        {# Aggiunto data-timestamp per il raggruppamento #}
+        <div class="media-card-wrapper" data-timestamp="{{ media.timestamp }}">
             <div class="media-card clickable-media" data-index="{{ loop.index0 }}">
+                {% set file = media.filename %}
                 {% if file.split('.')[-1] in ['jpg', 'jpeg', 'png'] %}
                     <img src="{{ url_for('media', filename=file) }}" alt="{{ file }}" loading="lazy">
                 {% else %}
@@ -90,10 +104,13 @@
 {% block scripts %}
 <script src="{{ url_for('static', filename='scripts/duplicates.js') }}"></script>
 <script src="{{ url_for('static', filename='scripts/selection.js') }}"></script>
-<script src="{{ url_for('static', filename='scripts/upload.js') }}"></script> 
+<script src="{{ url_for('static', filename='scripts/upload.js') }}"></script>
+{# Aggiunto lo script per il raggruppamento #}
+<script src="{{ url_for('static', filename='scripts/grouping.js') }}"></script> 
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     // La logica di upload è stata spostata in upload.js
+    // La logica di raggruppamento è in grouping.js
 
     // Gestione logout
     const logoutBtn = document.getElementById('logout-btn');

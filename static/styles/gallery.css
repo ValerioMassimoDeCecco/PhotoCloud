@@ -41,6 +41,42 @@
     align-items: center;
 }
 
+/* --- NUOVI Stili per i controlli di raggruppamento --- */
+.grouping-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background-color: var(--surface-container-low);
+    padding: 4px 12px;
+    border-radius: var(--radius-s);
+    border: 1px solid var(--outline);
+}
+
+.grouping-controls .material-icons {
+    color: var(--on-surface-variant);
+}
+
+.btn-like-select {
+    background: none;
+    border: none;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--on-surface-variant);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: var(--radius-s);
+}
+
+.btn-like-select:hover {
+    background-color: var(--surface-container-high);
+}
+
+.btn-like-select:focus {
+    outline: none;
+}
+/* ---------------------------------------------------- */
+
 .scan-status-container {
     padding: 8px 24px 0; /* Add some padding */
     color: var(--on-surface-variant);
@@ -52,7 +88,6 @@
     gap: 8px;
 }
 
-/* --- NUOVO: Stili per la barra di avanzamento --- */
 .progress-container {
     padding: 8px 0;
     margin-top: 8px;
@@ -78,7 +113,6 @@
     border-radius: var(--radius-s);
     transition: width 0.3s ease-in-out;
 }
-/* ------------------------------------------- */
 
 .btn {
     padding: 10px 16px; /* Smaller padding */
@@ -145,15 +179,35 @@
 }
 
 .gallery-grid {
-    padding: 8px; /* Tighter padding */
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); /* Larger items */
-    gap: 8px; /* Tighter gap */
+    padding: 8px;
     flex-grow: 1;
-    background: var(--surface); /* Match container background */
+    background: var(--surface);
+    /* Animazione per il cambio di raggruppamento */
+    transition: opacity 0.4s ease-in-out; 
 }
 
-/* --- NUOVO: Contenitore per card e checkbox --- */
+/* Stili per la griglia quando non è raggruppata */
+.gallery-grid .media-group-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 8px;
+}
+
+/* --- NUOVI Stili per i gruppi --- */
+.media-group {
+    margin-bottom: 32px;
+}
+
+.group-title {
+    font-size: 1.1rem; /* 18px */
+    font-weight: 500;
+    color: var(--on-surface);
+    margin-bottom: 16px;
+    padding-left: 8px;
+    text-transform: capitalize;
+}
+/* --------------------------------- */
+
 .media-card-wrapper {
     position: relative;
     border-radius: var(--radius-s);
@@ -162,13 +216,13 @@
 
 .media-card {
     position: relative;
-    border-radius: var(--radius-s); /* Softer radius */
+    border-radius: var(--radius-s);
     overflow: hidden;
     background: var(--surface-container);
-    box-shadow: none; /* No initial shadow */
+    box-shadow: none;
     transition: transform 0.2s, box-shadow 0.2s;
     aspect-ratio: 1;
-    border: 1px solid var(--outline-variant); /* Subtle border */
+    border: 1px solid var(--outline-variant);
     cursor: pointer;
 }
 
@@ -178,8 +232,8 @@
 }
 
 .media-card:hover {
-    transform: none; /* No movement on hover */
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Softer shadow on hover */
+    transform: none;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     border-color: var(--primary);
 }
 
@@ -213,7 +267,7 @@
 .video-overlay .material-icons {
     font-size: 48px;
     color: rgba(255, 255, 255, 0.9);
-    filter: drop-shadow(0 0 4px rgba(0,0,0,0.5)); /* Add shadow to icon */
+    filter: drop-shadow(0 0 4px rgba(0,0,0,0.5));
 }
 
 .media-card:hover .video-overlay {
@@ -227,14 +281,13 @@
     opacity: 0;
     transition: opacity 0.2s;
     display: flex;
-    gap: 4px; /* Space out action buttons */
+    gap: 4px;
 }
 
 .media-card:hover .media-actions {
     opacity: 1;
 }
 
-/* --- NUOVO: Overlay e checkbox per la selezione --- */
 .selection-overlay {
     position: absolute;
     top: 0;
@@ -244,7 +297,7 @@
     background-color: rgba(26, 115, 232, 0.2);
     opacity: 0;
     transition: opacity 0.2s;
-    pointer-events: none; /* Non intercetta i click */
+    pointer-events: none;
 }
 
 .media-card-wrapper.selected .selection-overlay {
@@ -259,9 +312,8 @@
     height: 24px;
     accent-color: var(--primary);
     cursor: pointer;
-    z-index: 5; /* Sopra l'immagine, sotto le azioni */
+    z-index: 5;
 }
-/* ---------------------------------------------------- */
 
 .empty-state {
     grid-column: 1 / -1;
@@ -272,13 +324,13 @@
     text-align: center;
     padding: 40px 20px;
     color: var(--on-surface-variant);
-    min-height: 400px; /* Ensure it takes up space */
+    min-height: 400px;
 }
 
 .empty-state .material-icons {
     font-size: 64px;
     margin-bottom: 16px;
-    color: var(--on-surface-variant); /* Less prominent color */
+    color: var(--on-surface-variant);
     opacity: 0.7;
 }
 
@@ -289,7 +341,7 @@
 
 .empty-state p {
     margin-bottom: 24px;
-    max-width: 400px; /* Limit text width */
+    max-width: 400px;
 }
 
 @media (max-width: 768px) {
@@ -300,12 +352,16 @@
     
     .header-actions {
         width: 100%;
-        justify-content: flex-start; /* Align actions to the start */
+        justify-content: flex-start;
+        flex-wrap: wrap; /* Allow actions to wrap on small screens */
     }
     
+    .gallery-grid .media-group-grid {
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 4px;
+    }
+
     .gallery-grid {
-        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); /* Smaller items on mobile */
-        gap: 4px; /* Even tighter gap */
         padding: 4px;
     }
 }

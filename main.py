@@ -131,6 +131,9 @@ def do_upload(file_data, api_key, user_folder, original_filename):
     encrypted_data = encrypt_file(file_data, api_key)
     with open(filepath, 'wb') as f:
         f.write(encrypted_data)
+    # Imposta il timestamp di modifica del file originale sul nuovo file
+    # Nota: Questo non è possibile direttamente da file_data. Usiamo il tempo di upload.
+    # L'mtime verrà impostato automaticamente alla scrittura del file.
     return True
 
 def do_media_decryption(filepath, api_key):
@@ -182,10 +185,19 @@ def do_create_zip(task_id, filenames, user_folder, temp_zip_folder, api_key):
 def home():
     if 'username' in session:
         user_folder = os.path.join(app.config['UPLOAD_FOLDER'], session['username'])
-        media_files = []
+        media_files_details = []
         if os.path.exists(user_folder):
-            media_files = sorted([f for f in os.listdir(user_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png', '.mp4', '.mov'))])
-        return render_template('gallery.html', media_files=media_files)
+            valid_extensions = ('.jpg', '.jpeg', '.png', '.mp4', '.mov')
+            filenames = [f for f in os.listdir(user_folder) if f.lower().endswith(valid_extensions)]
+            for f in filenames:
+                filepath = os.path.join(user_folder, f)
+                media_files_details.append({
+                    'filename': f,
+                    'timestamp': os.path.getmtime(filepath)
+                })
+            # Ordina i file dal più recente al meno recente
+            media_files_details.sort(key=lambda x: x['timestamp'], reverse=True)
+        return render_template('gallery.html', media_files=media_files_details)
     return render_template('login.html')
 
 @app.route('/register', methods=['POST'])
