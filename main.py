@@ -106,10 +106,10 @@ def find_user(username):
 
 # --- LOGICA DI BUSINESS (ESEGUITA IN THREAD SEPARATI) ---
 
-def do_registration(username, upload_folder):
+def do_registration(username, api_key, upload_folder):
+    """ Salva un nuovo utente dopo aver validato l'unicità del nome. """
     if find_user(username):
         raise ValueError("Username già esistente!")
-    api_key = generate_api_key()
     save_user(username, hash_key(api_key))
     user_folder = os.path.join(upload_folder, username)
     os.makedirs(user_folder, exist_ok=True)
@@ -191,12 +191,24 @@ def home():
 @app.route('/register', methods=['POST'])
 def register():
     username = request.form['username'].strip()
-    if not username: return "Username non valido!", 400
+    key_type = request.form.get('key_type', 'generate')
+    api_key = ""
+
+    if not username: 
+        return "Username non valido!", 400
+    
+    if key_type == 'custom':
+        api_key = request.form.get('custom_key')
+        if not api_key or len(api_key) < 8:
+            return "La chiave personalizzata deve avere almeno 8 caratteri.", 400
+    else: # 'generate'
+        api_key = generate_api_key()
+
     try:
         with get_dynamic_executor() as executor:
-            future = executor.submit(do_registration, username, app.config['UPLOAD_FOLDER'])
-            api_key = future.result()
-        return render_template('key_display.html', username=username, api_key=api_key)
+            future = executor.submit(do_registration, username, api_key, app.config['UPLOAD_FOLDER'])
+            final_key = future.result()
+        return render_template('key_display.html', username=username, api_key=final_key)
     except Exception as e:
         return str(e), 400
 
