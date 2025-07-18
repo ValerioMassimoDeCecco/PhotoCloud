@@ -33,6 +33,8 @@
                 </button>
                 
                 <form action="/upload" method="POST" enctype="multipart/form-data" class="upload-form" id="upload-form">
+                    <input type="hidden" name="username" value="{{ username }}">
+                    <input type="hidden" name="api_key" value="{{ api_key }}">
                     <input type="file" id="file-input" name="file[]" accept="image/*,video/*" hidden multiple>
                     <label for="file-input" class="btn outlined" id="upload-label">
                         <span class="material-icons">add_photo_alternate</span>
@@ -43,9 +45,9 @@
                 <button class="btn outlined" id="find-duplicates-btn" title="Trova Duplicati">
                     <span class="material-icons">manage_search</span>
                 </button>
-                <button class="btn icon" id="logout-btn" title="Esci">
+                <a href="{{ url_for('home') }}" class="btn icon" title="Esci">
                     <span class="material-icons">logout</span>
-                </button>
+                </a>
             </div>
         </div>
         <div id="scan-status-container" class="scan-status-container" style="display: none;">
@@ -65,12 +67,10 @@
             <div class="media-card clickable-media" data-index="{{ loop.index0 }}">
                 {% set file_ext = item.filename.split('.')[-1].lower() %}
                 {% if file_ext in ['jpg', 'jpeg', 'png'] %}
-                    {# Aggiungi client_id, session_id e api_key come parametri di query #}
-                    <img src="{{ url_for('media', filename=item.filename, client_id=request.args.get('client_id'), session_id=request.args.get('session_id'), api_key=request.args.get('api_key')) }}" alt="{{ item.filename }}" loading="lazy">
+                    <img src="{{ url_for('media', filename=item.filename) }}?username={{ username }}&api_key={{ api_key }}" alt="{{ item.filename }}" loading="lazy">
                 {% else %}
-                    {# Aggiungi client_id, session_id e api_key come parametri di query #}
                     <video preload="metadata">
-                        <source src="{{ url_for('media', filename=item.filename, client_id=request.args.get('client_id'), session_id=request.args.get('session_id'), api_key=request.args.get('api_key')) }}#t=0.5" type="video/mp4">
+                        <source src="{{ url_for('media', filename=item.filename) }}?username={{ username }}&api_key={{ api_key }}#t=0.5" type="video/mp4">
                     </video>
                     <div class="video-overlay"><span class="material-icons">play_circle</span></div>
                 {% endif %}
@@ -94,8 +94,6 @@
         {% endfor %}
     </div>
 </div>
-
-<form action="/logout" method="POST" id="logout-form" style="display:none;"></form>
 {% endblock %}
 
 {% block scripts %}

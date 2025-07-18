@@ -54,5 +54,32 @@
 
 {% block scripts %}
 {% if api_key %}
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const copyBtn = document.getElementById('copy-btn');
+        const apiKey = document.getElementById('api-key').textContent;
+        const iconCopy = copyBtn.querySelector('.icon-copy');
+        const iconCopied = copyBtn.querySelector('.icon-copied');
+        
+        copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(apiKey).then(() => {
+                // Feedback visivo
+                iconCopy.style.display = 'none';
+                iconCopied.style.display = 'inline';
+                copyBtn.classList.add('copied');
+                
+                // Ripristina dopo 2 secondi
+                setTimeout(() => {
+                    iconCopy.style.display = 'inline';
+                    iconCopied.style.display = 'none';
+                    copyBtn.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                console.error('Errore durante la copia:', err);
+                alert('Impossibile copiare la chiave. Usa Ctrl+C per copiarla manualmente.');
+            });
+        });
+    });
+</script>
 {% endif %}
 {% endblock %}
