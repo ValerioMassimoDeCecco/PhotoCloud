@@ -52,6 +52,34 @@
     gap: 8px;
 }
 
+/* --- NUOVO: Stili per la barra di avanzamento --- */
+.progress-container {
+    padding: 8px 0;
+    margin-top: 8px;
+}
+
+#progress-status {
+    font-size: 14px;
+    color: var(--on-surface-variant);
+    margin-bottom: 4px;
+}
+
+.progress-bar-background {
+    background: var(--surface-container-high);
+    border-radius: var(--radius-s);
+    height: 8px;
+    overflow: hidden;
+}
+
+.progress-bar {
+    width: 0%;
+    height: 100%;
+    background: var(--primary);
+    border-radius: var(--radius-s);
+    transition: width 0.3s ease-in-out;
+}
+/* ------------------------------------------- */
+
 .btn {
     padding: 10px 16px; /* Smaller padding */
     border-radius: var(--radius-s); /* Google's standard button radius */
@@ -125,6 +153,13 @@
     background: var(--surface); /* Match container background */
 }
 
+/* --- NUOVO: Contenitore per card e checkbox --- */
+.media-card-wrapper {
+    position: relative;
+    border-radius: var(--radius-s);
+    overflow: hidden;
+}
+
 .media-card {
     position: relative;
     border-radius: var(--radius-s); /* Softer radius */
@@ -134,6 +169,12 @@
     transition: transform 0.2s, box-shadow 0.2s;
     aspect-ratio: 1;
     border: 1px solid var(--outline-variant); /* Subtle border */
+    cursor: pointer;
+}
+
+.media-card-wrapper.selected .media-card {
+    transform: scale(0.9);
+    box-shadow: 0 0 0 2px var(--primary);
 }
 
 .media-card:hover {
@@ -192,6 +233,35 @@
 .media-card:hover .media-actions {
     opacity: 1;
 }
+
+/* --- NUOVO: Overlay e checkbox per la selezione --- */
+.selection-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(26, 115, 232, 0.2);
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none; /* Non intercetta i click */
+}
+
+.media-card-wrapper.selected .selection-overlay {
+    opacity: 1;
+}
+
+.media-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    width: 24px;
+    height: 24px;
+    accent-color: var(--primary);
+    cursor: pointer;
+    z-index: 5; /* Sopra l'immagine, sotto le azioni */
+}
+/* ---------------------------------------------------- */
 
 .empty-state {
     grid-column: 1 / -1;
