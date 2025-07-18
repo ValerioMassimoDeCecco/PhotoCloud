@@ -18,7 +18,7 @@
         </div>
         
         <div id="login-form" class="auth-form active">
-            <form id="actual-login-form" method="POST" action="/login"> {# Aggiunto ID per JS #}
+            <form id="actual-login-form" method="POST" action="/login">
                 <div class="form-group">
                     <label for="login-username">Username</label>
                     <div class="input-container">
@@ -31,6 +31,7 @@
                     <div class="input-container">
                         <span class="material-icons">key</span>
                         <input type="password" id="login-api-key" name="api_key" required autocomplete="current-password">
+                        <span class="toggle-password material-icons">visibility</span>
                     </div>
                 </div>
                 <button type="submit" class="btn primary">Accedi</button>
@@ -38,7 +39,7 @@
         </div>
         
         <div id="register-form" class="auth-form">
-            <form id="actual-register-form" method="POST" action="/register"> {# Aggiunto ID per JS #}
+            <form id="actual-register-form" method="POST" action="/register">
                 <div class="form-group">
                     <label for="register-username">Scegli username</label>
                     <div class="input-container">
@@ -103,7 +104,6 @@ document.addEventListener('DOMContentLoaded', function() {
         radio.addEventListener('change', toggleCustomKey);
     });
 
-    // Toggle tabs
     const loginTab = document.getElementById('login-tab');
     const registerTab = document.getElementById('register-tab');
     const loginForm = document.getElementById('login-form');
@@ -123,8 +123,24 @@ document.addEventListener('DOMContentLoaded', function() {
         loginForm.classList.remove('active');
     });
 
-    // Initial check
+    document.querySelectorAll('.toggle-password').forEach(icon => {
+        icon.addEventListener('click', () => {
+            const input = icon.previousElementSibling;
+            const type = input.type === 'password' ? 'text' : 'password';
+            input.type = type;
+            icon.textContent = type === 'password' ? 'visibility' : 'visibility_off';
+        });
+    });
+
     toggleCustomKey();
+
+    // Sfondo casuale
+    const backgrounds = ['wp1.jpg', 'wp2.jpg', 'wp3.jpg'];
+    const chosen = backgrounds[Math.floor(Math.random() * backgrounds.length)];
+    document.body.style.backgroundImage = `url('/static/${chosen}')`;
+    document.body.style.backgroundSize = 'cover';
+    document.body.style.backgroundPosition = 'center';
+    document.body.style.backgroundRepeat = 'no-repeat';
 });
 </script>
 {% endblock %}
