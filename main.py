@@ -119,22 +119,32 @@ def do_login(username, api_key):
     stored_hash = find_user(username)
     return stored_hash and verify_key(api_key, stored_hash)
 
-def do_upload(file_data, api_key, user_folder, original_filename):
+def do_upload(file_data, api_key, user_folder, original_filename, last_modified=None):
     _, extension = os.path.splitext(original_filename)
     os.makedirs(user_folder, exist_ok=True)
+
     while True:
         random_name = secrets.token_hex(8)
         filename = f"{random_name}{extension}"
         filepath = os.path.join(user_folder, filename)
         if not os.path.exists(filepath):
             break
+
     encrypted_data = encrypt_file(file_data, api_key)
+    
     with open(filepath, 'wb') as f:
         f.write(encrypted_data)
-    # Imposta il timestamp di modifica del file originale sul nuovo file
-    # Nota: Questo non è possibile direttamente da file_data. Usiamo il tempo di upload.
-    # L'mtime verrà impostato automaticamente alla scrittura del file.
+
+    # Imposta la data di ultima modifica (mtime) se disponibile
+    if last_modified:
+        try:
+            mtime = float(last_modified) / 1000.0  # da millisecondi a secondi
+            os.utime(filepath, (mtime, mtime))  # (access_time, modified_time)
+        except Exception as e:
+            print(f"Errore impostando mtime per {filepath}: {e}")
+
     return True
+
 
 def do_media_decryption(filepath, api_key):
     with open(filepath, 'rb') as f:
@@ -246,7 +256,8 @@ def upload():
     if 'username' not in session: 
         return jsonify({"error": "Accesso negato"}), 403
     
-    files = request.files.getlist("file[]") # Ottieni la lista di file
+    files = request.files.getlist("file[]")  # Lista di file
+    timestamps = request.form.getlist("timestamp[]")  # Lista dei lastModified
     if not files or files[0].filename == '':
         return jsonify({"error": "Nessun file selezionato"}), 400
 
@@ -256,20 +267,24 @@ def upload():
     try:
         with get_dynamic_executor() as executor:
             futures = []
-            for file in files:
+            for i, file in enumerate(files):
                 original_filename = secure_filename(file.filename)
                 file_data = file.read()
-                # Sottomette ogni upload come un task separato al thread pool
-                futures.append(executor.submit(do_upload, file_data, api_key, user_folder, original_filename))
-            
-            # Aspetta che tutti i caricamenti siano completati
+                # Preleva timestamp corrispondente se presente
+                last_modified = timestamps[i] if i < len(timestamps) else None
+                futures.append(executor.submit(
+                    do_upload, file_data, api_key, user_folder, original_filename, last_modified
+                ))
+
+            # Attendi completamento upload
             for future in as_completed(futures):
-                future.result() # Puoi controllare i risultati se do_upload restituisse qualcosa di utile
+                future.result()
 
     except Exception as e:
         return jsonify({"error": f"Errore durante il caricamento: {str(e)}"}), 500
     
     return jsonify({"success": True, "message": f"{len(files)} file caricati con successo."})
+
 
 
 @app.route('/media/<filename>')
@@ -288,19 +303,36 @@ def media(filename):
 
 @app.route('/delete/<filename>', methods=['POST'])
 def delete(filename):
-    if 'username' not in session: return jsonify({"error": "Accesso negato"}), 403
+    if 'username' not in session: 
+        return jsonify({"error": "Accesso negato", "success": False}), 403
+        
     user_folder = os.path.join(app.config['UPLOAD_FOLDER'], session['username'])
     filepath = os.path.join(user_folder, filename)
-    if not os.path.abspath(filepath).startswith(os.path.abspath(user_folder)):
-        return jsonify({"error": "Percorso non valido"}), 400
-    if os.path.exists(filepath):
+    
+    # Verifica path sicuro e normalizzato
+    safe_user_folder = os.path.abspath(user_folder)
+    safe_filepath = os.path.abspath(filepath)
+    
+    if not safe_filepath.startswith(safe_user_folder):
+        return jsonify({"error": "Percorso non valido", "success": False}), 400
+        
+    if os.path.exists(safe_filepath):
         try:
             with get_dynamic_executor() as executor:
-                executor.submit(do_delete, filepath).result()
+                executor.submit(do_delete, safe_filepath).result()
             return jsonify({'success': True, 'filename': filename})
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)}), 500
-    return jsonify({'success': False, 'error': 'File not found'}), 404
+            
+    return jsonify({
+        'success': False, 
+        'error': 'File non trovato',
+        'debug_info': {
+            'requested': filename,
+            'resolved_path': safe_filepath,
+            'exists': os.path.exists(safe_filepath)
+        }
+    }), 404
 
 @app.route('/find_duplicates_server', methods=['POST'])
 def find_duplicates_server():

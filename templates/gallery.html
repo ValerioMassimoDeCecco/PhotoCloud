@@ -76,11 +76,11 @@
                     <div class="video-overlay"><span class="material-icons">play_circle</span></div>
                 {% endif %}
                 <div class="media-actions">
-                    <form action="/delete/{{ file }}" method="POST" class="delete-form">
-                        <button type="submit" class="btn icon danger" title="Elimina" onclick="event.stopPropagation();">
-                            <span class="material-icons">delete</span>
-                        </button>
-                    </form>
+                    <form action="/delete/{{ file }}" method="POST" class="delete-form" data-filename="{{ file }}">
+    <button type="submit" class="btn icon danger" title="Elimina" onclick="handleDelete(event, this)">
+        <span class="material-icons">delete</span>
+    </button>
+</form>
                 </div>
             </div>
             <div class="selection-overlay">
@@ -137,5 +137,39 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 });
+
+async function handleDelete(event, button) {
+    event.stopPropagation();
+    event.preventDefault();
+    
+    const form = button.closest('form');
+    const filename = form.dataset.filename;
+    const card = form.closest('.media-card-wrapper');
+
+    try {
+        const response = await fetch(form.action, {
+            method: 'POST',
+            headers: { 'Accept': 'application/json' }
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+            // Animazione di rimozione
+            card.style.opacity = '0';
+            card.style.transform = 'scale(0.8)';
+            setTimeout(() => card.remove(), 300);
+            
+            // Aggiorna contatore elementi
+            const countElement = document.getElementById('media-count');
+            countElement.textContent = `${parseInt(countElement.textContent) - 1} elementi`;
+        } else {
+            alert(`Errore: ${result.error || 'Impossibile eliminare il file'}`);
+        }
+    } catch (error) {
+        alert('Errore di comunicazione col server');
+        console.error('Delete error:', error);
+    }
+}
 </script>
 {% endblock %}
