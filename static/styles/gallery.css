@@ -61,6 +61,11 @@
     top: 50%;
     transform: translateY(-50%);
     pointer-events: none;
+    transition: transform 0.3s ease;
+}
+
+.grouping-controls:hover::after {
+    transform: translateY(-50%) rotate(180deg);
 }
 
 .btn-like-select {
@@ -76,6 +81,11 @@
     appearance: none;
     -webkit-appearance: none;
     -moz-appearance: none;
+    transition: color 0.3s ease;
+}
+
+.btn-like-select:hover {
+    color: var(--primary);
 }
 
 .btn-like-select:focus {
@@ -194,9 +204,42 @@
     gap: 8px;
 }
 
+/* Animazioni per i gruppi */
+@keyframes groupFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes groupSlideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
 .media-group {
     margin-bottom: 32px;
+    animation: groupFadeIn 0.5s ease-out forwards;
+    opacity: 0;
 }
+
+/* Delay progressivo per ogni gruppo */
+.media-group:nth-child(1) { animation-delay: 0.1s; }
+.media-group:nth-child(2) { animation-delay: 0.2s; }
+.media-group:nth-child(3) { animation-delay: 0.3s; }
+.media-group:nth-child(4) { animation-delay: 0.4s; }
+.media-group:nth-child(5) { animation-delay: 0.5s; }
+.media-group:nth-child(n+6) { animation-delay: 0.6s; }
 
 .group-title {
     font-size: 1.1rem;
@@ -205,7 +248,54 @@
     margin-bottom: 16px;
     padding-left: 8px;
     text-transform: capitalize;
+    position: relative;
+    transition: all 0.3s ease;
+    animation: groupSlideIn 0.4s ease-out;
 }
+
+.group-title::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 0;
+    background: var(--primary);
+    transition: height 0.3s ease;
+}
+
+.group-title:hover::before {
+    height: 100%;
+}
+
+/* Animazione staggered per le card all'interno dei gruppi */
+@keyframes cardFadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.media-group .media-card-wrapper {
+    animation: cardFadeIn 0.4s ease-out forwards;
+    opacity: 0;
+}
+
+/* Delay progressivo per le card in ogni gruppo */
+.media-group .media-card-wrapper:nth-child(1) { animation-delay: 0.05s; }
+.media-group .media-card-wrapper:nth-child(2) { animation-delay: 0.1s; }
+.media-group .media-card-wrapper:nth-child(3) { animation-delay: 0.15s; }
+.media-group .media-card-wrapper:nth-child(4) { animation-delay: 0.2s; }
+.media-group .media-card-wrapper:nth-child(5) { animation-delay: 0.25s; }
+.media-group .media-card-wrapper:nth-child(6) { animation-delay: 0.3s; }
+.media-group .media-card-wrapper:nth-child(7) { animation-delay: 0.35s; }
+.media-group .media-card-wrapper:nth-child(8) { animation-delay: 0.4s; }
+.media-group .media-card-wrapper:nth-child(n+9) { animation-delay: 0.45s; }
 
 /* Stili per le card dei media */
 .media-card-wrapper {
@@ -328,6 +418,17 @@
 .media-card-wrapper.selected .media-checkbox {
     opacity: 1;
     pointer-events: auto;
+}
+
+/* Classe per transizione durante il cambio di raggruppamento */
+.gallery-grid.transitioning .media-group {
+    animation: none;
+    opacity: 0;
+    transition: opacity 0.3s ease-out;
+}
+
+.gallery-grid.transitioning.show .media-group {
+    opacity: 1;
 }
 
 /* Media query per la responsività */
