@@ -109,6 +109,15 @@
 
 <script>
     document.addEventListener('DOMContentLoaded', () => {
+        // --- NUOVA MODIFICA ---
+        // Assicura che i controlli di raggruppamento siano sempre visibili,
+        // anche se la galleria è vuota.
+        const groupingControls = document.querySelector('.grouping-controls');
+        if (groupingControls) {
+            groupingControls.style.display = 'flex';
+        }
+        // --- FINE MODIFICA ---
+
         // La logica di upload è in upload.js
         // La logica di raggruppamento è in grouping.js
         // La logica di selezione è in selection.js
