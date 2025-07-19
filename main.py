@@ -1,4 +1,4 @@
-# server.py (versione aggiornata)
+# server.py (versione aggiornata - limite dimensioni rimosso)
 
 import os
 import secrets
@@ -22,7 +22,7 @@ app = Flask(__name__) # --- MODIFICA: Corretto __name__
 app.secret_key = secrets.token_hex(16)
 app.config['UPLOAD_FOLDER'] = 'user_media'
 app.config['TEMP_ZIP_FOLDER'] = 'temp_zips'
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024 # 500MB
+# RIMOSSO: app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024 # 500MB (ora non c'è limite esplicito sulle dimensioni)
 
 # Creazione delle cartelle necessarie
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
