@@ -43,6 +43,11 @@
                 <button class="btn outlined" id="find-duplicates-btn" title="Trova Duplicati">
                     <span class="material-icons">manage_search</span>
                 </button>
+
+                <a href="{{ url_for('trash_view') }}" class="btn icon" title="Cestino">
+                    <span class="material-icons">delete_outline</span>
+                </a>
+
                 <button class="btn icon" id="logout-btn" title="Esci">
                     <span class="material-icons">logout</span>
                 </button>
@@ -58,7 +63,7 @@
             </div>
         </div>
     </header>
-    
+
     {# Estrae solo i nomi dei file per la logica esistente (es. lightbox) #}
     {% set filenames = media_files | map(attribute='filename') | list %}
     <div class="gallery-grid" data-media-files='{{ filenames | tojson | safe }}'>
@@ -76,11 +81,11 @@
                     <div class="video-overlay"><span class="material-icons">play_circle</span></div>
                 {% endif %}
                 <div class="media-actions">
-                    <form action="/delete/{{ file }}" method="POST" class="delete-form" data-filename="{{ file }}">
-    <button type="submit" class="btn icon danger" title="Elimina" onclick="handleDelete(event, this)">
-        <span class="material-icons">delete</span>
-    </button>
-</form>
+                    <form action="/trash/{{ file }}" method="POST" class="delete-form" data-filename="{{ file }}">
+                        <button type="submit" class="btn icon danger" title="Sposta nel Cestino" onclick="handleDelete(event, this)">
+                            <span class="material-icons">delete</span>
+                        </button>
+                    </form>
                 </div>
             </div>
             <div class="selection-overlay">
@@ -88,12 +93,12 @@
             </div>
         </div>
         {% else %}
-        <div class="empty-state">
-            <span class="material-icons">photo_library</span>
-            <h3>Nessun file caricato</h3>
-            <p>Carica la tua prima foto o video</p>
-            <label for="file-input" class="btn primary"><span class="material-icons">add</span>Carica file</label>
-        </div>
+            <div class="empty-state">
+                <span class="material-icons">photo_library</span>
+                <h3>Nessun file caricato</h3>
+                <p>Carica la tua prima foto o video</p>
+                <label for="file-input" class="btn primary"><span class="material-icons">add</span>Carica file</label>
+            </div>
         {% endfor %}
     </div>
 </div>
@@ -105,82 +110,75 @@
 <script src="{{ url_for('static', filename='scripts/duplicates.js') }}"></script>
 <script src="{{ url_for('static', filename='scripts/selection.js') }}"></script>
 <script src="{{ url_for('static', filename='scripts/upload.js') }}"></script>
-{# Aggiunto lo script per il raggruppamento #}
-<script src="{{ url_for('static', filename='scripts/grouping.js') }}"></script> 
+<script src="{{ url_for('static', filename='scripts/grouping.js') }}"></script>
+
 <script>
-document.addEventListener('DOMContentLoaded', () => {
-    // La logica di upload è stata spostata in upload.js
-    // La logica di raggruppamento è in grouping.js
+    document.addEventListener('DOMContentLoaded', () => {
+        // La logica di upload è in upload.js
+        // La logica di raggruppamento è in grouping.js
+        // La logica di selezione è in selection.js
 
-    // Gestione logout
-    const logoutBtn = document.getElementById('logout-btn');
-    if (logoutBtn) {
-        logoutBtn.addEventListener('click', () => document.getElementById('logout-form').submit());
-    }
-    
-    // Gestione apertura lightbox
-    const galleryGrid = document.querySelector('.gallery-grid');
-    if (galleryGrid) {
-        const mediaFiles = JSON.parse(galleryGrid.dataset.mediaFiles || '[]');
-        galleryGrid.addEventListener('click', (event) => {
-            const clickedCard = event.target.closest('.clickable-media');
-            // Aggiunta condizione per non aprire la lightbox se si clicca sulla checkbox
-            if (clickedCard && !event.target.closest('.delete-form') && !event.target.matches('.media-checkbox')) {
-                const index = parseInt(clickedCard.dataset.index, 10);
-                const filename = mediaFiles[index];
-                const isVideo = /\.(mp4|mov)$/i.test(filename);
-                const url = `/media/${filename}`;
-                if (window.openLightbox) {
-                    window.openLightbox(url, isVideo, index, mediaFiles);
-                }
-            }
-        });
-    }
-
-    // Gestione click sul controllo di raggruppamento per aprire il select
-    const groupingControls = document.querySelector('.grouping-controls');
-    const groupBySelect = document.getElementById('group-by-select');
-    if (groupingControls && groupBySelect) {
-        groupingControls.addEventListener('click', (e) => {
-            if (!e.target.closest('select')) {
-                groupBySelect.click();
-            }
-        });
-    }
-});
-
-async function handleDelete(event, button) {
-    event.stopPropagation();
-    event.preventDefault();
-    
-    const form = button.closest('form');
-    const filename = form.dataset.filename;
-    const card = form.closest('.media-card-wrapper');
-
-    try {
-        const response = await fetch(form.action, {
-            method: 'POST',
-            headers: { 'Accept': 'application/json' }
-        });
-
-        const result = await response.json();
-        
-        if (result.success) {
-            // Animazione di rimozione
-            card.style.opacity = '0';
-            card.style.transform = 'scale(0.8)';
-            setTimeout(() => card.remove(), 300);
-            
-            // Aggiorna contatore elementi
-            const countElement = document.getElementById('media-count');
-            countElement.textContent = `${parseInt(countElement.textContent) - 1} elementi`;
-        } else {
-            alert(`Errore: ${result.error || 'Impossibile eliminare il file'}`);
+        // Gestione logout
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', () => document.getElementById('logout-form').submit());
         }
-    } catch (error) {
-        alert('Errore di comunicazione col server');
-        console.error('Delete error:', error);
+
+        // Gestione apertura lightbox
+        const galleryGrid = document.querySelector('.gallery-grid');
+        if (galleryGrid) {
+            const mediaFiles = JSON.parse(galleryGrid.dataset.mediaFiles || '[]');
+            galleryGrid.addEventListener('click', (event) => {
+                const clickedCard = event.target.closest('.clickable-media');
+                if (clickedCard && !event.target.closest('.delete-form') && !event.target.matches('.media-checkbox')) {
+                    const index = parseInt(clickedCard.dataset.index, 10);
+                    const filename = mediaFiles[index];
+                    const isVideo = /\.(mp4|mov)$/i.test(filename);
+                    const url = `/media/${filename}`;
+                    if (window.openLightbox) {
+                        window.openLightbox(url, isVideo, index, mediaFiles);
+                    }
+                }
+            });
+        }
+    });
+
+    async function handleDelete(event, button) {
+        event.stopPropagation();
+        event.preventDefault();
+
+        if (!confirm('Spostare questo elemento nel cestino?')) {
+            return;
+        }
+
+        const form = button.closest('form');
+        const filename = form.dataset.filename;
+        const card = form.closest('.media-card-wrapper');
+
+        try {
+            const response = await fetch(form.action, {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' }
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                // Animazione di rimozione
+                card.style.opacity = '0';
+                card.style.transform = 'scale(0.8)';
+                setTimeout(() => card.remove(), 300);
+
+                // Aggiorna contatore elementi
+                const countElement = document.getElementById('media-count');
+                let currentCount = parseInt(countElement.textContent) || 0;
+                countElement.textContent = `${currentCount - 1} elementi`;
+            } else {
+                alert(`Errore: ${result.error || 'Impossibile spostare il file nel cestino'}`);
+            }
+        } catch (error) {
+            alert('Errore di comunicazione col server');
+            console.error('Trash error:', error);
+        }
     }
-}
 </script>
 {% endblock %}

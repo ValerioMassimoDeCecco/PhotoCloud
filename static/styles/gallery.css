@@ -1,19 +1,21 @@
+/* Stili principali del contenitore della galleria */
 .gallery-container {
     display: flex;
     flex-direction: column;
     flex-grow: 1;
     background: var(--surface);
-    border-radius: var(--radius-l); /* Softer radius */
+    border-radius: var(--radius-l);
     overflow: hidden;
-    border: 1px solid var(--outline); /* Subtle border */
-    box-shadow: none; /* Removed initial shadow */
+    border: 1px solid var(--outline);
+    box-shadow: none;
 }
 
+/* Stili dell'header della galleria */
 .gallery-header {
-    background: var(--surface); /* Clean white background */
+    background: var(--surface);
     color: var(--on-surface);
     padding: 16px 24px;
-    border-bottom: 1px solid var(--outline); /* Separator line */
+    border-bottom: 1px solid var(--outline);
 }
 
 .header-content {
@@ -26,11 +28,11 @@
 
 .header-content h1 {
     font-weight: 500;
-    margin-bottom: 0; /* Adjusted alignment */
+    margin-bottom: 0;
 }
 
 .header-content p {
-    opacity: 1; /* Full opacity */
+    opacity: 1;
     margin-bottom: 0;
     color: var(--on-surface-variant);
 }
@@ -41,7 +43,7 @@
     align-items: center;
 }
 
-/* --- NUOVI Stili per i controlli di raggruppamento --- */
+/* Controlli di raggruppamento */
 .grouping-controls {
     display: flex;
     align-items: center;
@@ -61,9 +63,6 @@
     pointer-events: none;
 }
 
-/* Rimuovi colore esplicito per ereditare dal contenitore */
- /* .grouping-controls .material-icons { color: var(--on-surface-variant); } */ /* Rimosso per ereditare var(--primary) */
-
 .btn-like-select {
     background: none;
     border: none;
@@ -82,17 +81,12 @@
 .btn-like-select:focus {
     outline: none;
 }
-/* ---------------------------------------------------- */
 
+/* Contenitori per status e progress bar */
 .scan-status-container {
-    padding: 8px 24px 0; /* Add some padding */
+    padding: 8px 24px 0;
     color: var(--on-surface-variant);
     font-size: 14px;
-}
-
-.upload-form {
-    display: flex;
-    gap: 8px;
 }
 
 .progress-container {
@@ -121,9 +115,10 @@
     transition: width 0.3s ease-in-out;
 }
 
+/* Stili generici dei pulsanti */
 .btn {
-    padding: 10px 16px; /* Smaller padding */
-    border-radius: var(--radius-s); /* Google's standard button radius */
+    padding: 10px 16px;
+    border-radius: var(--radius-s);
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
@@ -142,14 +137,14 @@
 }
 
 .btn.primary:hover {
-    background: #1b66c9; /* Slightly darker blue on hover */
+    background: #1b66c9;
     color: var(--on-primary);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .btn.outlined {
     background: transparent;
-    color: var(--primary); /* Blue text for outlined buttons */
+    color: var(--primary);
     border: 1px solid var(--outline);
 }
 
@@ -185,40 +180,39 @@
     color: var(--on-error-container);
 }
 
+/* Stili per la griglia e i gruppi */
 .gallery-grid {
     padding: 8px;
     flex-grow: 1;
     background: var(--surface);
-    /* Animazione per il cambio di raggruppamento */
-    transition: opacity 0.4s ease-in-out; 
+    transition: opacity 0.4s ease-in-out;
 }
 
-/* Stili per la griglia quando non è raggruppata */
 .gallery-grid .media-group-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 8px;
 }
 
-/* --- NUOVI Stili per i gruppi --- */
 .media-group {
     margin-bottom: 32px;
 }
 
 .group-title {
-    font-size: 1.1rem; /* 18px */
+    font-size: 1.1rem;
     font-weight: 500;
     color: var(--on-surface);
     margin-bottom: 16px;
     padding-left: 8px;
     text-transform: capitalize;
 }
-/* --------------------------------- */
 
+/* Stili per le card dei media */
 .media-card-wrapper {
     position: relative;
     border-radius: var(--radius-s);
     overflow: hidden;
+    transition: transform 0.3s ease, opacity 0.3s ease;
 }
 
 .media-card {
@@ -227,7 +221,7 @@
     overflow: hidden;
     background: var(--surface-container);
     box-shadow: none;
-    transition: transform 0.2s, box-shadow 0.2s;
+    transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
     aspect-ratio: 1;
     border: 1px solid var(--outline-variant);
     cursor: pointer;
@@ -236,10 +230,11 @@
 .media-card-wrapper.selected .media-card {
     transform: scale(0.9);
     box-shadow: 0 0 0 2px var(--primary);
+    border-color: var(--primary);
 }
 
 .media-card:hover {
-    transform: none;
+    transform: none; /* Sovrascrive il transform dello stato selected */
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     border-color: var(--primary);
 }
@@ -256,6 +251,7 @@
     background: #000;
 }
 
+/* Overlay per i video */
 .video-overlay {
     position: absolute;
     top: 0;
@@ -281,6 +277,7 @@
     opacity: 1;
 }
 
+/* Azioni sulla card (es. elimina) */
 .media-actions {
     position: absolute;
     top: 8px;
@@ -289,12 +286,14 @@
     transition: opacity 0.2s;
     display: flex;
     gap: 4px;
+    z-index: 10;
 }
 
 .media-card:hover .media-actions {
     opacity: 1;
 }
 
+/* Overlay e checkbox per la selezione */
 .selection-overlay {
     position: absolute;
     top: 0;
@@ -322,6 +321,7 @@
     z-index: 5;
 }
 
+/* Stato vuoto, quando non ci sono file */
 .empty-state {
     grid-column: 1 / -1;
     display: flex;
@@ -351,18 +351,19 @@
     max-width: 400px;
 }
 
+/* Media query per la responsività */
 @media (max-width: 768px) {
     .header-content {
         flex-direction: column;
         align-items: flex-start;
     }
-    
+
     .header-actions {
         width: 100%;
         justify-content: flex-start;
-        flex-wrap: wrap; /* Allow actions to wrap on small screens */
+        flex-wrap: wrap;
     }
-    
+
     .gallery-grid .media-group-grid {
         grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
         gap: 4px;
