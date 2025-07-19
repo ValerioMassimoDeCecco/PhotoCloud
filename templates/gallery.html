@@ -94,13 +94,6 @@
             <div class="selection-overlay"></div>
             <input type="checkbox" class="media-checkbox" data-filename="{{ file }}" onclick="event.stopPropagation();">
         </div>
-        {% else %}
-            <div class="empty-state">
-                <span class="material-icons">photo_library</span>
-                <h3>Nessun file caricato</h3>
-                <p>Carica la tua prima foto o video</p>
-                <label for="file-input" class="btn primary"><span class="material-icons">add</span>Carica file</label>
-            </div>
         {% endfor %}
     </div>
 </div>
