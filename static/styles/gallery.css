@@ -46,15 +46,23 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    background-color: var(--surface-container-low);
-    padding: 4px 12px;
-    border-radius: var(--radius-s);
-    border: 1px solid var(--outline);
+    position: relative;
 }
 
-.grouping-controls .material-icons {
-    color: var(--on-surface-variant);
+.grouping-controls::after {
+    content: 'arrow_drop_down';
+    font-family: 'Material Icons';
+    font-size: 24px;
+    color: inherit;
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
 }
+
+/* Rimuovi colore esplicito per ereditare dal contenitore */
+ /* .grouping-controls .material-icons { color: var(--on-surface-variant); } */ /* Rimosso per ereditare var(--primary) */
 
 .btn-like-select {
     background: none;
@@ -62,14 +70,13 @@
     font-family: inherit;
     font-size: 14px;
     font-weight: 500;
-    color: var(--on-surface-variant);
+    color: inherit;
     cursor: pointer;
-    padding: 6px;
-    border-radius: var(--radius-s);
-}
-
-.btn-like-select:hover {
-    background-color: var(--surface-container-high);
+    padding: 0 24px 0 0;
+    border-radius: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
 }
 
 .btn-like-select:focus {

@@ -13,7 +13,7 @@
                 <p id="media-count">{{ media_files|length }} elementi</p>
             </div>
             <div class="header-actions">
-                <div class="grouping-controls">
+                <div class="grouping-controls btn outlined">
                     <span class="material-icons">sort</span>
                     <select id="group-by-select" class="btn-like-select">
                         <option value="none">Nessun gruppo</option>
@@ -133,6 +133,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (window.openLightbox) {
                     window.openLightbox(url, isVideo, index, mediaFiles);
                 }
+            }
+        });
+    }
+
+    // Gestione click sul controllo di raggruppamento per aprire il select
+    const groupingControls = document.querySelector('.grouping-controls');
+    const groupBySelect = document.getElementById('group-by-select');
+    if (groupingControls && groupBySelect) {
+        groupingControls.addEventListener('click', (e) => {
+            if (!e.target.closest('select')) {
+                groupBySelect.click();
             }
         });
     }
