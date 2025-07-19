@@ -1,15 +1,27 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // --- Elementi DOM ---
     const fileInput = document.getElementById('file-input');
-    const uploadForm = document.getElementById('upload-form');
+    const container = document.getElementById('upload-indicator-container');
+    if (!fileInput || !container) return; // Esce se gli elementi non esistono
+
+    const gem = document.getElementById('upload-gem');
+    const detailsCard = document.getElementById('upload-details-card');
+    const progressArc = document.getElementById('upload-progress-arc');
+    const icon = document.getElementById('upload-indicator-icon');
+    const percentageText = document.getElementById('upload-indicator-percentage');
     
-    const progressContainer = document.getElementById('progress-container');
-    const progressStatus = document.getElementById('progress-status');
-    const progressBar = document.getElementById('progress-bar');
+    const cardTitle = document.getElementById('upload-card-title');
+    const fileList = document.getElementById('upload-file-list');
+    const cardStatus = document.getElementById('upload-card-status');
+    const closeButton = document.getElementById('upload-close-btn');
 
-    if (!fileInput || !uploadForm || !progressContainer) {
-        return;
-    }
+    // --- Calcoli per l'anello di progresso ---
+    const radius = progressArc.r.baseVal.value;
+    const circumference = 2 * Math.PI * radius;
+    progressArc.style.strokeDasharray = `${circumference} ${circumference}`;
+    progressArc.style.strokeDashoffset = circumference;
 
+    // --- Funzioni di Utilità ---
     function formatBytes(bytes) {
         if (bytes === 0) return '0 Bytes';
         const k = 1024;
@@ -18,76 +30,143 @@ document.addEventListener('DOMContentLoaded', () => {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
+    function setProgress(percent) {
+        const offset = circumference - (percent / 100) * circumference;
+        progressArc.style.strokeDashoffset = offset;
+        percentageText.textContent = `${Math.round(percent)}%`;
+    }
+
+    function toggleExpand() {
+        container.classList.toggle('expanded');
+    }
+
+    // --- Gestione dello Stato ---
+    function showIndicator(files) {
+        // Resetta lo stato visivo
+        container.style.opacity = '1';
+        fileList.innerHTML = ''; // Pulisce la lista precedente
+        for (const file of files) {
+            const li = document.createElement('li');
+            li.className = 'upload-file-item';
+            li.innerHTML = `
+                <span class="material-icons">description</span>
+                <div class="file-info">
+                    <span class="file-name">${file.name}</span>
+                    <span class="file-status">In coda...</span>
+                </div>
+            `;
+            li.dataset.filename = file.name;
+            fileList.appendChild(li);
+        }
+        
+        icon.textContent = 'upload';
+        gem.classList.add('is-uploading');
+        setProgress(0);
+        cardTitle.textContent = 'In caricamento...';
+        progressArc.style.stroke = 'var(--primary)';
+        container.style.display = 'block';
+        setTimeout(() => container.classList.add('expanded'), 50); // Apri la card all'inizio
+    }
+
+    // --- Logica di Upload ---
     async function handleFileSelect(event) {
         const files = event.target.files;
-        if (files.length === 0) {
-            return;
-        }
+        if (files.length === 0) return;
 
-        // --- MODIFICHE CHIAVE ---
-        // 1. Crea un oggetto FormData VUOTO invece di inizializzarlo dal form.
+        showIndicator(files);
+
         const formData = new FormData();
-
-        // 2. Aggiungi manualmente SIA i file SIA i loro timestamp.
-        // Questo garantisce che entrambi i dati siano presenti nella richiesta.
         for (const file of files) {
             formData.append('file[]', file);
             formData.append('timestamp[]', file.lastModified);
         }
-        // --- FINE MODIFICHE CHIAVE ---
-
-        progressContainer.style.display = 'block';
-        progressBar.style.width = '0%';
-        progressBar.style.backgroundColor = 'var(--primary)';
-        progressStatus.textContent = 'Inizio caricamento...';
-
+        
         let lastLoaded = 0;
         let lastTime = Date.now();
-
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/upload', true);
 
         xhr.upload.onprogress = (e) => {
             if (e.lengthComputable) {
                 const percentComplete = (e.loaded / e.total) * 100;
-                progressBar.style.width = percentComplete + '%';
+                setProgress(percentComplete);
+                
                 const currentTime = Date.now();
                 const deltaTime = (currentTime - lastTime) / 1000;
                 const deltaLoaded = e.loaded - lastLoaded;
                 const speed = deltaTime > 0 ? deltaLoaded / deltaTime : 0;
-                progressStatus.textContent = `Caricamento... ${Math.round(percentComplete)}% ` +
-                                           `(${formatBytes(e.loaded)} / ${formatBytes(e.total)}) - ` +
-                                           `${formatBytes(speed)}/s`;
+                
+                cardStatus.textContent = `Caricati ${formatBytes(e.loaded)} di ${formatBytes(e.total)} (${formatBytes(speed)}/s)`;
+                
+                // Aggiorna lo stato dei file nella lista
+                fileList.querySelectorAll('.file-status').forEach(statusEl => {
+                    if (statusEl.textContent !== 'Completato') {
+                        statusEl.textContent = 'In corso...';
+                    }
+                });
+
                 lastLoaded = e.loaded;
                 lastTime = currentTime;
             }
         };
 
         xhr.onload = () => {
-            progressBar.style.width = '100%';
+            gem.classList.remove('is-uploading');
+
             if (xhr.status === 200) {
-                progressStatus.textContent = 'Caricamento completato! La pagina sarà ricaricata.';
-                setTimeout(() => window.location.reload(), 1500);
+                setProgress(100);
+                icon.textContent = 'check_circle';
+                progressArc.style.stroke = 'var(--primary)'; // o un colore verde se preferisci
+                cardTitle.textContent = 'Completato';
+                cardStatus.textContent = `Caricati ${files.length} file con successo!`;
+
+                fileList.querySelectorAll('.file-status').forEach(statusEl => {
+                    statusEl.textContent = 'Completato';
+                    statusEl.classList.add('completed');
+                });
+                
+                setTimeout(() => {
+                    container.classList.remove('expanded');
+                    container.style.opacity = '0';
+                    setTimeout(() => window.location.reload(), 500);
+                }, 2000);
+
             } else {
-                progressStatus.textContent = `Errore durante il caricamento: ${xhr.statusText}`;
-                progressBar.style.backgroundColor = 'var(--error)';
+                icon.textContent = 'error';
+                progressArc.style.stroke = 'var(--error)';
+                cardTitle.textContent = 'Errore';
                 try {
                     const response = JSON.parse(xhr.responseText);
-                    alert(`Errore: ${response.error}`);
+                    cardStatus.textContent = `Errore: ${response.error || xhr.statusText}`;
                 } catch (err) {
-                    alert(`Errore sconosciuto durante il caricamento. Codice: ${xhr.status}`);
+                    cardStatus.textContent = `Errore durante il caricamento. Codice: ${xhr.status}`;
                 }
+
+                fileList.querySelectorAll('.file-status').forEach(statusEl => {
+                    statusEl.textContent = 'Fallito';
+                    statusEl.classList.add('error');
+                });
             }
         };
 
         xhr.onerror = () => {
-            progressStatus.textContent = 'Errore di rete. Impossibile completare il caricamento.';
-            progressBar.style.backgroundColor = 'var(--error)';
-            alert('Errore di rete durante il caricamento.');
+            gem.classList.remove('is-uploading');
+            icon.textContent = 'error';
+            progressArc.style.stroke = 'var(--error)';
+            cardTitle.textContent = 'Errore di Rete';
+            cardStatus.textContent = 'Impossibile connettersi al server.';
+            
+            fileList.querySelectorAll('.file-status').forEach(statusEl => {
+                statusEl.textContent = 'Fallito';
+                statusEl.classList.add('error');
+            });
         };
 
         xhr.send(formData);
     }
 
+    // --- Event Listeners ---
     fileInput.addEventListener('change', handleFileSelect);
+    gem.addEventListener('click', toggleExpand);
+    closeButton.addEventListener('click', toggleExpand);
 });

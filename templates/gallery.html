@@ -61,12 +61,7 @@
         <div id="scan-status-container" class="scan-status-container" style="display: none;">
              <p id="scan-status"></p>
         </div>
-        <div id="progress-container" class="progress-container" style="display: none;">
-            <p id="progress-status"></p>
-            <div class="progress-bar-background">
-                <div class="progress-bar" id="progress-bar"></div>
-            </div>
-        </div>
+        <!-- VECCHIA BARRA DI PROGRESSO RIMOSSA -->
     </header>
 
     {% set filenames = media_files | map(attribute='filename') | list %}
@@ -98,6 +93,38 @@
     </div>
 </div>
 
+<!-- NUOVO INDICATORE DI UPLOAD -->
+<div id="upload-indicator-container" class="upload-indicator-container" style="display: none;">
+    <!-- Stato Chiuso (la "gemma" circolare) -->
+    <div id="upload-gem" class="upload-gem">
+        <svg class="upload-progress-ring" width="56" height="56">
+            <circle class="progress-ring-track" cx="28" cy="28" r="24"></circle>
+            <circle id="upload-progress-arc" class="progress-ring-arc" cx="28" cy="28" r="24"></circle>
+        </svg>
+        <span id="upload-indicator-icon" class="material-icons">upload</span>
+        <span id="upload-indicator-percentage">0%</span>
+    </div>
+
+    <!-- Stato Aperto (la card con i dettagli) -->
+    <div id="upload-details-card" class="upload-details-card">
+        <header class="upload-card-header">
+            <h3 id="upload-card-title">In caricamento...</h3>
+            <button id="upload-close-btn" class="btn icon" title="Chiudi">
+                <span class="material-icons">expand_more</span>
+            </button>
+        </header>
+        <div class="upload-card-body">
+            <ul id="upload-file-list" class="upload-file-list">
+                <!-- I file verranno aggiunti qui da JavaScript -->
+            </ul>
+        </div>
+        <footer class="upload-card-footer">
+            <p id="upload-card-status">Preparazione...</p>
+        </footer>
+    </div>
+</div>
+<!-- FINE NUOVO INDICATORE -->
+
 <form action="/logout" method="POST" id="logout-form" style="display:none;"></form>
 {% endblock %}
 
@@ -109,26 +136,16 @@
 
 <script>
     document.addEventListener('DOMContentLoaded', () => {
-        // --- NUOVA MODIFICA ---
-        // Assicura che i controlli di raggruppamento siano sempre visibili,
-        // anche se la galleria è vuota.
         const groupingControls = document.querySelector('.grouping-controls');
         if (groupingControls) {
             groupingControls.style.display = 'flex';
         }
-        // --- FINE MODIFICA ---
 
-        // La logica di upload è in upload.js
-        // La logica di raggruppamento è in grouping.js
-        // La logica di selezione è in selection.js
-
-        // Gestione logout
         const logoutBtn = document.getElementById('logout-btn');
         if (logoutBtn) {
             logoutBtn.addEventListener('click', () => document.getElementById('logout-form').submit());
         }
 
-        // Gestione apertura lightbox
         const galleryGrid = document.querySelector('.gallery-grid');
         if (galleryGrid) {
             const mediaFiles = JSON.parse(galleryGrid.dataset.mediaFiles || '[]');
@@ -150,15 +167,10 @@
     async function handleDelete(event, button) {
         event.stopPropagation();
         event.preventDefault();
-
-        if (!confirm('Spostare questo elemento nel cestino?')) {
-            return;
-        }
-
+        if (!confirm('Spostare questo elemento nel cestino?')) return;
+        
         const form = button.closest('form');
-        const filename = form.dataset.filename;
         const card = form.closest('.media-card-wrapper');
-
         try {
             const response = await fetch(form.action, {
                 method: 'POST',
