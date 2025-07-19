@@ -1,3 +1,5 @@
+// static/scripts/selection.js (versione corretta e completa)
+
 document.addEventListener('DOMContentLoaded', () => {
     // Riferimenti agli elementi del DOM
     const selectAllBtn = document.getElementById('select-all-btn');
@@ -7,27 +9,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const mediaCheckboxes = document.querySelectorAll('.media-checkbox');
     const hasMedia = mediaCheckboxes.length > 0;
 
-    // Elementi per la barra di avanzamento
-    const progressContainer = document.getElementById('progress-container');
-    const progressStatus = document.getElementById('progress-status');
-    const progressBar = document.getElementById('progress-bar');
-    
+    // Elementi per la barra di avanzamento del download
+    const progressContainer = document.querySelector('.scan-status-container'); // Usiamo il container esistente
+    const progressStatus = document.getElementById('scan-status');
+
     // Stato della selezione
     let selectedFiles = new Set();
     let isSelectAll = false;
 
     // Se non ci sono media, non fare nulla
-    if (!hasMedia) return;
+    if (!hasMedia) {
+        if(selectAllBtn) selectAllBtn.style.display = 'none';
+        return;
+    };
 
     // Mostra il pulsante "Seleziona Tutto" se ci sono media
-    selectAllBtn.style.display = 'inline-flex';
+    if(selectAllBtn) selectAllBtn.style.display = 'inline-flex';
 
     /**
      * Aggiorna l'interfaccia utente in base alla selezione corrente.
      */
     function updateUI() {
         const count = selectedFiles.size;
-        selectedCountSpan.textContent = count;
+        if(selectedCountSpan) selectedCountSpan.textContent = count;
 
         mediaCheckboxes.forEach(checkbox => {
             const wrapper = checkbox.closest('.media-card-wrapper');
@@ -43,32 +47,36 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         const showActionButtons = count > 0;
-        downloadSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
-        deleteSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
+        if(downloadSelectedBtn) downloadSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
+        if(deleteSelectedBtn) deleteSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
 
-        const btnText = selectAllBtn.querySelector('.btn-text');
-        if (count === mediaCheckboxes.length && mediaCheckboxes.length > 0) {
-            btnText.textContent = "Deseleziona Tutto";
-            isSelectAll = true;
-        } else {
-            btnText.textContent = "Seleziona Tutto";
-            isSelectAll = false;
+        if(selectAllBtn) {
+            const btnText = selectAllBtn.querySelector('.btn-text');
+            if (count === mediaCheckboxes.length && mediaCheckboxes.length > 0) {
+                btnText.textContent = "Deseleziona Tutto";
+                isSelectAll = true;
+            } else {
+                btnText.textContent = "Seleziona Tutto";
+                isSelectAll = false;
+            }
         }
     }
 
     /**
      * Gestisce il click sul pulsante "Seleziona Tutto / Deseleziona Tutto".
      */
-    selectAllBtn.addEventListener('click', () => {
-        if (isSelectAll) {
-            selectedFiles.clear();
-        } else {
-            mediaCheckboxes.forEach(checkbox => {
-                selectedFiles.add(checkbox.dataset.filename);
-            });
-        }
-        updateUI();
-    });
+    if(selectAllBtn) {
+        selectAllBtn.addEventListener('click', () => {
+            if (isSelectAll) {
+                selectedFiles.clear();
+            } else {
+                mediaCheckboxes.forEach(checkbox => {
+                    selectedFiles.add(checkbox.dataset.filename);
+                });
+            }
+            updateUI();
+        });
+    }
 
     /**
      * Aggiunge un listener a ogni checkbox.
@@ -93,19 +101,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const interval = setInterval(async () => {
             try {
                 const response = await fetch(`/zip-progress/${taskId}`);
+                if (!response.ok) throw new Error('Network response was not ok');
                 const data = await response.json();
 
                 if (data.status === 'processing') {
-                    progressStatus.textContent = `Sto creando l'archivio... ${data.progress}%`;
-                    progressBar.style.width = `${data.progress}%`;
+                    progressStatus.innerHTML = `Creazione archivio in corso... <div class="progress-bar-inline" style="width:${data.progress}%"></div> ${data.progress}%`;
                 } else if (data.status === 'complete') {
                     clearInterval(interval);
-                    progressStatus.textContent = "Archivio pronto per il download!";
-                    progressBar.style.width = '100%';
+                    progressStatus.textContent = "Archivio pronto! Avvio il download...";
                     
-                    const downloadUrl = `/download-zip/${data.filename}`;
+                    // Crea un link invisibile e cliccalo per avviare il download
                     const a = document.createElement('a');
-                    a.href = downloadUrl;
+                    a.href = `/download-zip/${data.filename}`;
                     a.download = data.filename;
                     document.body.appendChild(a);
                     a.click();
@@ -113,18 +120,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     setTimeout(() => {
                         progressContainer.style.display = 'none';
-                    }, 2000);
+                    }, 3000);
 
                 } else if (data.status === 'error' || data.status === 'not_found') {
                     clearInterval(interval);
                     progressStatus.textContent = `Errore: ${data.error || 'Task non trovato.'}`;
-                    progressBar.style.backgroundColor = 'var(--error)';
                     alert(`Si è verificato un errore durante la creazione dell'archivio: ${data.error}`);
                 }
             } catch (error) {
                 clearInterval(interval);
                 progressStatus.textContent = 'Errore di rete durante il controllo.';
                 console.error("Errore di polling:", error);
+                setTimeout(() => { progressContainer.style.display = 'none'; }, 3000);
             }
         }, 2000);
     }
@@ -132,87 +139,94 @@ document.addEventListener('DOMContentLoaded', () => {
     /**
      * Gestisce il click sul pulsante "Scarica Selezionati".
      */
-    downloadSelectedBtn.addEventListener('click', async () => {
-        const filesToDownload = Array.from(selectedFiles);
-        if (filesToDownload.length === 0) {
-            alert("Nessun file selezionato.");
-            return;
-        }
-
-        progressContainer.style.display = 'block';
-        progressStatus.textContent = "Sto preparando il download...";
-        progressBar.style.width = '0%';
-        progressBar.style.backgroundColor = 'var(--primary)';
-
-        try {
-            const response = await fetch('/prepare-zip', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', },
-                body: JSON.stringify({ filenames: filesToDownload }),
-            });
-
-            if (!response.ok) throw new Error("Impossibile avviare la creazione dell'archivio.");
-
-            const data = await response.json();
-            if (data.task_id) {
-                pollZipProgress(data.task_id);
-            } else {
-                throw new Error(data.error || "Risposta non valida dal server.");
+    if(downloadSelectedBtn) {
+        downloadSelectedBtn.addEventListener('click', async () => {
+            const filesToDownload = Array.from(selectedFiles);
+            if (filesToDownload.length === 0) {
+                alert("Nessun file selezionato.");
+                return;
             }
-        } catch (error) {
-            console.error("Errore durante la preparazione dello ZIP:", error);
-            progressStatus.textContent = `Errore: ${error.message}`;
-            progressBar.style.backgroundColor = 'var(--error)';
-            alert(error.message);
-        }
-    });
+            
+            progressContainer.style.display = 'block';
+            progressStatus.textContent = "Avvio della preparazione dell'archivio...";
+
+            try {
+                const response = await fetch('/prepare-zip', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filenames: filesToDownload }),
+                });
+
+                if (!response.ok) throw new Error("Impossibile avviare la creazione dell'archivio.");
+
+                const data = await response.json();
+                if (data.task_id) {
+                    pollZipProgress(data.task_id);
+                } else {
+                    throw new Error(data.error || "Risposta non valida dal server.");
+                }
+            } catch (error) {
+                console.error("Errore durante la preparazione dello ZIP:", error);
+                progressStatus.textContent = `Errore: ${error.message}`;
+                alert(error.message);
+            }
+        });
+    }
 
     /**
      * Gestisce il click sul pulsante "Sposta Selezionati nel Cestino".
      */
-    deleteSelectedBtn.addEventListener('click', async () => {
-        const filesToDelete = Array.from(selectedFiles);
-        if (filesToDelete.length === 0) {
-            alert("Nessun file selezionato.");
-            return;
-        }
+    if(deleteSelectedBtn) {
+        deleteSelectedBtn.addEventListener('click', async () => {
+            const filesToDelete = Array.from(selectedFiles);
+            if (filesToDelete.length === 0) {
+                alert("Nessun file selezionato.");
+                return;
+            }
 
-        if (!confirm(`Sei sicuro di voler spostare ${filesToDelete.length} elementi nel cestino?`)) {
-            return;
-        }
+            if (!confirm(`Sei sicuro di voler spostare ${filesToDelete.length} elementi nel cestino?`)) {
+                return;
+            }
 
-        try {
-            const response = await fetch('/trash/batch', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filenames: filesToDelete }),
-            });
-
-            const result = await response.json();
-
-            if (result.success) {
-                filesToDelete.forEach(filename => {
-                    const checkbox = document.querySelector(`.media-checkbox[data-filename="${filename}"]`);
-                    if (checkbox) {
-                        const wrapper = checkbox.closest('.media-card-wrapper');
-                        wrapper.style.opacity = '0';
-                        wrapper.style.transform = 'scale(0.8)';
-                        setTimeout(() => wrapper.remove(), 300);
-                    }
+            try {
+                // USA LA NUOVA ROTTA /trash/batch
+                const response = await fetch('/trash/batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filenames: filesToDelete }),
                 });
 
-                const countElement = document.getElementById('media-count');
-                let currentCount = parseInt(countElement.textContent) || 0;
-                countElement.textContent = `${Math.max(0, currentCount - filesToDelete.length)} elementi`;
+                const result = await response.json();
 
-                selectedFiles.clear();
-                updateUI();
-            } else {
-                alert(`Errore: ${result.error || 'Impossibile spostare i file nel cestino.'}`);
+                if (result.success) {
+                    // Rimuovi gli elementi dall'interfaccia
+                    filesToDelete.forEach(filename => {
+                        const checkbox = document.querySelector(`.media-checkbox[data-filename="${filename}"]`);
+                        if (checkbox) {
+                            const wrapper = checkbox.closest('.media-card-wrapper');
+                            wrapper.style.opacity = '0';
+                            wrapper.style.transform = 'scale(0.8)';
+                            setTimeout(() => wrapper.remove(), 300);
+                        }
+                    });
+                    
+                    // Aggiorna il conteggio totale
+                    const countElement = document.getElementById('media-count');
+                    if (countElement) {
+                        let currentCount = parseInt(countElement.textContent) || 0;
+                        countElement.textContent = `${Math.max(0, currentCount - filesToDelete.length)} elementi`;
+                    }
+
+                    // Resetta la selezione
+                    selectedFiles.clear();
+                    updateUI();
+                } else {
+                    alert(`Errore: ${result.error || 'Impossibile spostare i file nel cestino.'}`);
+                }
+            } catch (error) {
+                alert('Errore di comunicazione col server durante lo spostamento nel cestino.');
+                console.error('Batch trash error:', error);
             }
-        } catch (error) {
-            alert('Errore di comunicazione col server durante lo spostamento nel cestino.');
-            console.error('Batch trash error:', error);
-        }
-    });
+        });
+    }
 });

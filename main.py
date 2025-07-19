@@ -1,4 +1,4 @@
-# server.py (versione aggiornata - limite dimensioni rimosso)
+# server.py (versione aggiornata - limite dimensioni rimosso, con pulizia automatica del cestino dopo 30 giorni e temp_zips dopo 1 giorno)
 
 import os
 import secrets
@@ -9,7 +9,9 @@ import random
 import psutil
 import uuid
 import zipfile
-import shutil # --- NUOVO: Necessario per svuotare il cestino
+import shutil  # --- NUOVO: Necessario per svuotare il cestino
+import time  # --- NUOVO: Per gestione timestamp e sleep
+import threading  # --- NUOVO: Per thread di pulizia in background
 from flask import Flask, render_template, request, redirect, url_for, session, send_file, jsonify, send_from_directory, after_this_request
 from werkzeug.utils import secure_filename
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -18,7 +20,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-app = Flask(__name__) # --- MODIFICA: Corretto __name__
+app = Flask(__name__)  # --- MODIFICA: Corretto __name__
 app.secret_key = secrets.token_hex(16)
 app.config['UPLOAD_FOLDER'] = 'user_media'
 app.config['TEMP_ZIP_FOLDER'] = 'temp_zips'
@@ -123,13 +125,18 @@ def do_media_decryption(filepath, api_key):
 
 # --- NUOVE FUNZIONI PER IL CESTINO ---
 def do_trash_item(user_folder, filename):
-    """Sposta un file nel cestino."""
+    """Sposta un file nel cestino e aggiorna il timestamp per tracciare il tempo di permanenza."""
     source_path = os.path.join(user_folder, filename)
     trash_folder = os.path.join(user_folder, 'trash')
     destination_path = os.path.join(trash_folder, filename)
     
     os.makedirs(trash_folder, exist_ok=True)
     os.rename(source_path, destination_path)
+    
+    # --- NUOVO: Imposta timestamp corrente per tracciare quando è stato spostato nel cestino
+    current_time = time.time()
+    os.utime(destination_path, (current_time, current_time))
+    
     return True
 
 def do_restore_item(user_folder, filename):
@@ -182,6 +189,42 @@ def do_create_zip(task_id, filenames, user_folder, temp_zip_folder, api_key):
     except Exception as e:
         print(f"Errore durante la creazione dello ZIP (task {task_id}): {e}")
         ZIP_TASKS[task_id] = {'status': 'error', 'progress': 0, 'filename': None, 'error': str(e)}
+
+# --- NUOVA FUNZIONE PER PULIZIA AUTOMATICA ---
+def clean_trash_and_zips():
+    now = time.time()
+    
+    # Pulisci temp_zips (file più vecchi di 1 giorno)
+    temp_folder = app.config['TEMP_ZIP_FOLDER']
+    for f in os.listdir(temp_folder):
+        filepath = os.path.join(temp_folder, f)
+        if os.path.isfile(filepath) and os.path.getmtime(filepath) < now - 86400:  # 1 giorno in secondi
+            try:
+                os.remove(filepath)
+                print(f"Eliminato ZIP temporaneo: {filepath}")
+            except Exception as e:
+                print(f"Errore eliminando {filepath}: {e}")
+    
+    # Pulisci trash per tutti gli utenti (file più vecchi di 30 giorni)
+    upload_folder = app.config['UPLOAD_FOLDER']
+    for user in os.listdir(upload_folder):
+        user_folder = os.path.join(upload_folder, user)
+        if os.path.isdir(user_folder):
+            trash_folder = os.path.join(user_folder, 'trash')
+            if os.path.exists(trash_folder):
+                for tf in os.listdir(trash_folder):
+                    tfilepath = os.path.join(trash_folder, tf)
+                    if os.path.isfile(tfilepath) and os.path.getmtime(tfilepath) < now - 30 * 86400:  # 30 giorni in secondi
+                        try:
+                            os.remove(tfilepath)
+                            print(f"Eliminato file dal cestino di {user}: {tf}")
+                        except Exception as e:
+                            print(f"Errore eliminando {tfilepath}: {e}")
+
+def background_cleaner():
+    while True:
+        clean_trash_and_zips()
+        time.sleep(3600)  # Esegui ogni ora
 
 # --- ROTTE FLASK ---
 
@@ -383,6 +426,34 @@ def trash_view():
         
     return render_template('trash.html', trashed_files=trashed_files)
 
+@app.route('/trash/batch', methods=['POST'])
+def trash_batch():
+    if 'username' not in session: 
+        return jsonify({"error": "Accesso negato", "success": False}), 403
+
+    data = request.get_json()
+    filenames = data.get('filenames')
+    
+    if not filenames or not isinstance(filenames, list):
+        return jsonify({"error": "Nessun file valido selezionato", "success": False}), 400
+
+    user_folder = os.path.join(app.config['UPLOAD_FOLDER'], session['username'])
+    errors = []
+    
+    with get_dynamic_executor() as executor:
+        futures = {executor.submit(do_trash_item, user_folder, f): f for f in filenames}
+        for future in as_completed(futures):
+            filename = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                errors.append(f"Errore su {filename}: {str(e)}")
+    
+    if errors:
+        return jsonify({'success': False, 'error': '. '.join(errors)}), 500
+
+    return jsonify({'success': True})
+
 @app.route('/restore/<filename>', methods=['POST'])
 def restore_item(filename):
     if 'username' not in session: return jsonify({"error": "Accesso negato", "success": False}), 403
@@ -428,5 +499,7 @@ def empty_trash():
 
 # --- FINE NUOVE ROTTE ---
 
-if __name__ == '__main__': # --- MODIFICA: Corretto __name__
+if __name__ == '__main__':  # --- MODIFICA: Corretto __name__
+    # Avvia il thread di pulizia in background
+    threading.Thread(target=background_cleaner, daemon=True).start()
     app.run(host='0.0.0.0', port=5000, debug=True)

@@ -116,6 +116,7 @@
 .input-container .material-icons:last-child {
     right: 16px;
     cursor: pointer;
+    pointer-events: auto;
     transition: color 0.2s;
 }
 
