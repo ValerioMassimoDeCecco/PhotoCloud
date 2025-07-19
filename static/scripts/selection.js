@@ -2,9 +2,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Riferimenti agli elementi del DOM
     const selectAllBtn = document.getElementById('select-all-btn');
     const downloadSelectedBtn = document.getElementById('download-selected-btn');
+    const deleteSelectedBtn = document.getElementById('delete-selected-btn');
     const selectedCountSpan = document.getElementById('selected-count');
     const mediaCheckboxes = document.querySelectorAll('.media-checkbox');
-    const mediaCardWrappers = document.querySelectorAll('.media-card-wrapper');
     const hasMedia = mediaCheckboxes.length > 0;
 
     // Elementi per la barra di avanzamento
@@ -29,24 +29,25 @@ document.addEventListener('DOMContentLoaded', () => {
         const count = selectedFiles.size;
         selectedCountSpan.textContent = count;
 
-        // Aggiorna lo stato visuale di ogni card
         mediaCheckboxes.forEach(checkbox => {
             const wrapper = checkbox.closest('.media-card-wrapper');
-            if (selectedFiles.has(checkbox.dataset.filename)) {
-                wrapper.classList.add('selected');
-                checkbox.checked = true;
-            } else {
-                wrapper.classList.remove('selected');
-                checkbox.checked = false;
+            if (wrapper) {
+                if (selectedFiles.has(checkbox.dataset.filename)) {
+                    wrapper.classList.add('selected');
+                    checkbox.checked = true;
+                } else {
+                    wrapper.classList.remove('selected');
+                    checkbox.checked = false;
+                }
             }
         });
 
-        // Mostra/nascondi il pulsante di download
-        downloadSelectedBtn.style.display = count > 0 ? 'inline-flex' : 'none';
+        const showActionButtons = count > 0;
+        downloadSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
+        deleteSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
 
-        // Aggiorna il testo del pulsante "Seleziona Tutto"
         const btnText = selectAllBtn.querySelector('.btn-text');
-        if (count === mediaCheckboxes.length) {
+        if (count === mediaCheckboxes.length && mediaCheckboxes.length > 0) {
             btnText.textContent = "Deseleziona Tutto";
             isSelectAll = true;
         } else {
@@ -60,10 +61,8 @@ document.addEventListener('DOMContentLoaded', () => {
      */
     selectAllBtn.addEventListener('click', () => {
         if (isSelectAll) {
-            // Deseleziona tutto
             selectedFiles.clear();
         } else {
-            // Seleziona tutto
             mediaCheckboxes.forEach(checkbox => {
                 selectedFiles.add(checkbox.dataset.filename);
             });
@@ -104,7 +103,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     progressStatus.textContent = "Archivio pronto per il download!";
                     progressBar.style.width = '100%';
                     
-                    // Avvia il download
                     const downloadUrl = `/download-zip/${data.filename}`;
                     const a = document.createElement('a');
                     a.href = downloadUrl;
@@ -113,7 +111,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     a.click();
                     document.body.removeChild(a);
 
-                    // Nascondi la barra di avanzamento dopo un breve ritardo
                     setTimeout(() => {
                         progressContainer.style.display = 'none';
                     }, 2000);
@@ -121,7 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (data.status === 'error' || data.status === 'not_found') {
                     clearInterval(interval);
                     progressStatus.textContent = `Errore: ${data.error || 'Task non trovato.'}`;
-                     progressBar.style.backgroundColor = 'var(--error)';
+                    progressBar.style.backgroundColor = 'var(--error)';
                     alert(`Si è verificato un errore durante la creazione dell'archivio: ${data.error}`);
                 }
             } catch (error) {
@@ -129,7 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 progressStatus.textContent = 'Errore di rete durante il controllo.';
                 console.error("Errore di polling:", error);
             }
-        }, 2000); // Controlla ogni 2 secondi
+        }, 2000);
     }
 
     /**
@@ -142,7 +139,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Mostra e resetta la barra di avanzamento
         progressContainer.style.display = 'block';
         progressStatus.textContent = "Sto preparando il download...";
         progressBar.style.width = '0%';
@@ -151,29 +147,72 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch('/prepare-zip', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json', },
                 body: JSON.stringify({ filenames: filesToDownload }),
             });
 
-            if (!response.ok) {
-                throw new Error("Impossibile avviare la creazione dell'archivio.");
-            }
+            if (!response.ok) throw new Error("Impossibile avviare la creazione dell'archivio.");
 
             const data = await response.json();
             if (data.task_id) {
-                // Inizia a controllare lo stato
                 pollZipProgress(data.task_id);
             } else {
-                 throw new Error(data.error || "Risposta non valida dal server.");
+                throw new Error(data.error || "Risposta non valida dal server.");
             }
-
         } catch (error) {
             console.error("Errore durante la preparazione dello ZIP:", error);
             progressStatus.textContent = `Errore: ${error.message}`;
             progressBar.style.backgroundColor = 'var(--error)';
             alert(error.message);
+        }
+    });
+
+    /**
+     * Gestisce il click sul pulsante "Sposta Selezionati nel Cestino".
+     */
+    deleteSelectedBtn.addEventListener('click', async () => {
+        const filesToDelete = Array.from(selectedFiles);
+        if (filesToDelete.length === 0) {
+            alert("Nessun file selezionato.");
+            return;
+        }
+
+        if (!confirm(`Sei sicuro di voler spostare ${filesToDelete.length} elementi nel cestino?`)) {
+            return;
+        }
+
+        try {
+            const response = await fetch('/trash/batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filenames: filesToDelete }),
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                filesToDelete.forEach(filename => {
+                    const checkbox = document.querySelector(`.media-checkbox[data-filename="${filename}"]`);
+                    if (checkbox) {
+                        const wrapper = checkbox.closest('.media-card-wrapper');
+                        wrapper.style.opacity = '0';
+                        wrapper.style.transform = 'scale(0.8)';
+                        setTimeout(() => wrapper.remove(), 300);
+                    }
+                });
+
+                const countElement = document.getElementById('media-count');
+                let currentCount = parseInt(countElement.textContent) || 0;
+                countElement.textContent = `${Math.max(0, currentCount - filesToDelete.length)} elementi`;
+
+                selectedFiles.clear();
+                updateUI();
+            } else {
+                alert(`Errore: ${result.error || 'Impossibile spostare i file nel cestino.'}`);
+            }
+        } catch (error) {
+            alert('Errore di comunicazione col server durante lo spostamento nel cestino.');
+            console.error('Batch trash error:', error);
         }
     });
 });
