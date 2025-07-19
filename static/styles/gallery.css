@@ -234,7 +234,7 @@
 }
 
 .media-card:hover {
-    transform: none; /* Sovrascrive il transform dello stato selected */
+    transform: none; /* Sovrascrive il transform dello stato selected per un feedback hover pulito */
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     border-color: var(--primary);
 }
@@ -293,6 +293,8 @@
     opacity: 1;
 }
 
+/* ----- MODIFICA INIZIA QUI ----- */
+
 /* Overlay e checkbox per la selezione */
 .selection-overlay {
     position: absolute;
@@ -319,7 +321,20 @@
     accent-color: var(--primary);
     cursor: pointer;
     z-index: 5;
+    /* Per default la checkbox è invisibile */
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease-in-out;
 }
+
+/* Mostra la checkbox al passaggio del mouse O se l'elemento è già selezionato */
+.media-card-wrapper:hover .media-checkbox,
+.media-card-wrapper.selected .media-checkbox {
+    opacity: 1;
+    pointer-events: auto; /* Rende la checkbox cliccabile quando è visibile */
+}
+
+/* ----- MODIFICA FINISCE QUI ----- */
 
 /* Stato vuoto, quando non ci sono file */
 .empty-state {

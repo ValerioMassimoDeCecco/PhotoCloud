@@ -68,7 +68,7 @@
     {% set filenames = media_files | map(attribute='filename') | list %}
     <div class="gallery-grid" data-media-files='{{ filenames | tojson | safe }}'>
         {% for media in media_files %}
-        {# Aggiunto data-timestamp per il raggruppamento #}
+        {# NUOVA STRUTTURA CON WRAPPER E CHECKBOX #}
         <div class="media-card-wrapper" data-timestamp="{{ media.timestamp }}">
             <div class="media-card clickable-media" data-index="{{ loop.index0 }}">
                 {% set file = media.filename %}
@@ -88,9 +88,8 @@
                     </form>
                 </div>
             </div>
-            <div class="selection-overlay">
-                <input type="checkbox" class="media-checkbox" data-filename="{{ file }}" onclick="event.stopPropagation();">
-            </div>
+            <div class="selection-overlay"></div>
+            <input type="checkbox" class="media-checkbox" data-filename="{{ file }}" onclick="event.stopPropagation();">
         </div>
         {% else %}
             <div class="empty-state">
@@ -130,6 +129,7 @@
             const mediaFiles = JSON.parse(galleryGrid.dataset.mediaFiles || '[]');
             galleryGrid.addEventListener('click', (event) => {
                 const clickedCard = event.target.closest('.clickable-media');
+                // Impedisce l'apertura della lightbox se si clicca su un'azione (es. delete) o sulla checkbox
                 if (clickedCard && !event.target.closest('.delete-form') && !event.target.matches('.media-checkbox')) {
                     const index = parseInt(clickedCard.dataset.index, 10);
                     const filename = mediaFiles[index];
@@ -153,6 +153,7 @@
 
         const form = button.closest('form');
         const filename = form.dataset.filename;
+        // MODIFICA: Cerca il .media-card-wrapper per rimuovere l'elemento corretto
         const card = form.closest('.media-card-wrapper');
 
         try {
