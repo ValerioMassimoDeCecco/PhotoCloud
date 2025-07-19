@@ -19,6 +19,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import json  # <-- AGGIUNGI QUESTA RIGA
 
 app = Flask(__name__)  # --- MODIFICA: Corretto __name__
 app.secret_key = secrets.token_hex(16)
@@ -245,35 +246,98 @@ def home():
         return render_template('gallery.html', media_files=media_files_details)
     return render_template('login.html')
 
-# (Nessuna modifica a /register, /login, /logout, /upload)
+# SOSTITUISCI LA VECCHIA ROTTA /register CON QUESTA
 @app.route('/register', methods=['POST'])
 def register():
     username = request.form['username'].strip()
     key_type = request.form.get('key_type', 'generate')
     api_key = ""
-    if not username: return "Username non valido!", 400
+
+    if not username:
+        return "Username non valido!", 400
+
+    if find_user(username):
+        return "Username già esistente!", 409
+
     if key_type == 'custom':
         api_key = request.form.get('custom_key')
-        if not api_key or len(api_key) < 8: return "La chiave personalizzata deve avere almeno 8 caratteri.", 400
-    else: api_key = generate_api_key()
-    try:
-        with get_dynamic_executor() as executor:
-            future = executor.submit(do_registration, username, api_key, app.config['UPLOAD_FOLDER'])
-            final_key = future.result()
-        return render_template('key_display.html', username=username, api_key=final_key)
-    except Exception as e: return str(e), 400
+        if not api_key or len(api_key) < 8:
+            return "La chiave personalizzata deve avere almeno 8 caratteri.", 400
+    else:
+        api_key = generate_api_key()
 
+    try:
+        # 1. Esegui la registrazione (salva l'hash della chiave sul server)
+        with get_dynamic_executor() as executor:
+            final_key = executor.submit(do_registration, username, api_key, app.config['UPLOAD_FOLDER']).result()
+
+        # 2. Prepara il file di autenticazione da far scaricare all'utente
+        session_id = str(uuid.uuid4())
+        timestamp = time.time()
+        
+        # Il file contiene la CHIAVE REALE, non l'hash, per permettere la crittografia dei file
+        auth_data = {
+            "username": username,
+            "api_key": final_key,
+            "session_id": session_id,
+            "created_at": timestamp,
+            "hash_of_key": hash_key(final_key)
+        }
+
+        # 3. Crea un file JSON in memoria e invialo all'utente per il download
+        buffer = io.BytesIO()
+        buffer.write(json.dumps(auth_data, indent=2).encode('utf-8'))
+        buffer.seek(0)
+        
+        download_name = f'photocloud_auth_{secure_filename(username)}.json'
+
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=download_name,
+            mimetype='application/json'
+        )
+
+    except Exception as e:
+        return str(e), 400
+
+# SOSTITUISCI LA VECCHIA ROTTA /login CON QUESTA
 @app.route('/login', methods=['POST'])
 def login():
-    username = request.form['username'].strip()
-    api_key = request.form['api_key'].strip()
-    with get_dynamic_executor() as executor:
-        is_valid = executor.submit(do_login, username, api_key).result()
-    if is_valid:
-        session['username'] = username
-        session['api_key'] = api_key
-        return redirect(url_for('home'))
-    return "Credenziali non valide!", 401
+    if 'auth_file' not in request.files:
+        return "File di autenticazione non trovato nel form.", 400
+
+    auth_file = request.files['auth_file']
+    if auth_file.filename == '':
+        return "Nessun file selezionato.", 400
+
+    try:
+        # 1. Leggi e analizza il file JSON caricato
+        content = auth_file.read().decode('utf-8')
+        auth_data = json.loads(content)
+        
+        username = auth_data.get('username')
+        api_key = auth_data.get('api_key')
+
+        if not username or not api_key:
+            return "File di autenticazione non valido o corrotto.", 400
+
+        # 2. Verifica le credenziali confrontando l'hash della chiave con quello memorizzato
+        with get_dynamic_executor() as executor:
+            is_valid = executor.submit(do_login, username, api_key).result()
+        
+        # 3. Se valide, crea la sessione utente
+        if is_valid:
+            session['username'] = username
+            session['api_key'] = api_key # Salva la chiave reale per la crittografia dei file
+            return redirect(url_for('home'))
+        else:
+            return "Credenziali non valide! Il file potrebbe essere obsoleto o non corrispondere a un utente registrato.", 401
+
+    except json.JSONDecodeError:
+        return "Formato del file non valido. Assicurati di caricare il file JSON corretto.", 400
+    except Exception as e:
+        return f"Si è verificato un errore durante l'autenticazione: {str(e)}", 500
 
 @app.route('/logout', methods=['POST'])
 def logout():

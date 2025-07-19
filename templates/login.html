@@ -17,27 +17,25 @@
             <button id="register-tab" class="auth-tab">Registrati</button>
         </div>
         
+        <!-- MODIFICATO: Form di Login con upload file -->
         <div id="login-form" class="auth-form active">
-            <form id="actual-login-form" method="POST" action="/login">
+            <form id="actual-login-form" method="POST" action="/login" enctype="multipart/form-data">
                 <div class="form-group">
-                    <label for="login-username">Username</label>
-                    <div class="input-container">
-                        <span class="material-icons">person</span>
-                        <input type="text" id="login-username" name="username" required autocomplete="username">
+                    <label for="auth-file-input">File di Autenticazione</label>
+                    <div class="file-upload-container">
+                        <input type="file" id="auth-file-input" name="auth_file" required accept=".json, .txt">
+                        <label for="auth-file-input" class="file-upload-label">
+                            <span class="material-icons">upload_file</span>
+                            <span id="file-upload-text">Clicca per caricare il file</span>
+                        </label>
                     </div>
+                    <p class="form-hint">Carica il file <code>photocloud_auth_...json</code> che hai scaricato durante la registrazione.</p>
                 </div>
-                <div class="form-group">
-                    <label for="login-api-key">Chiave API</label>
-                    <div class="input-container">
-                        <span class="material-icons">key</span>
-                        <input type="password" id="login-api-key" name="api_key" required autocomplete="current-password">
-                        <span class="toggle-password material-icons">visibility</span>
-                    </div>
-                </div>
-                <button type="submit" class="btn primary">Accedi</button>
+                <button type="submit" class="btn primary">Accedi con File</button>
             </form>
         </div>
         
+        <!-- Form di Registrazione (invariato nella struttura, ma il backend ora forza il download) -->
         <div id="register-form" class="auth-form">
             <form id="actual-register-form" method="POST" action="/register">
                 <div class="form-group">
@@ -72,13 +70,13 @@
                     <p class="form-hint">Usa una frase o una password con almeno 8 caratteri per la massima sicurezza.</p>
                 </div>
 
-                <button type="submit" class="btn primary">Registrati</button>
+                <button type="submit" class="btn primary">Registrati e Scarica Chiave</button>
             </form>
         </div>
     </div>
     
     <div class="auth-footer">
-        <p>I tuoi file sono crittografati end-to-end</p>
+        <p>I tuoi file sono protetti con crittografia end-to-end</p>
     </div>
 </div>
 {% endblock %}
@@ -86,25 +84,7 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const customKeyGroup = document.getElementById('custom-key-group');
-    const customKeyInput = document.getElementById('register-custom-key');
-    const keyTypeRadios = document.querySelectorAll('input[name="key_type"]');
-
-    function toggleCustomKey() {
-        const selectedValue = document.querySelector('input[name="key_type"]:checked').value;
-        if (selectedValue === 'custom') {
-            customKeyGroup.style.display = 'block';
-            customKeyInput.required = true;
-        } else {
-            customKeyGroup.style.display = 'none';
-            customKeyInput.required = false;
-        }
-    }
-
-    keyTypeRadios.forEach(radio => {
-        radio.addEventListener('change', toggleCustomKey);
-    });
-
+    // Gestione Tab Login/Registrazione
     const loginTab = document.getElementById('login-tab');
     const registerTab = document.getElementById('register-tab');
     const loginForm = document.getElementById('login-form');
@@ -123,7 +103,26 @@ document.addEventListener('DOMContentLoaded', function() {
         registerForm.classList.add('active');
         loginForm.classList.remove('active');
     });
+    
+    // Gestione opzioni chiave personalizzata nel form di registrazione
+    const customKeyGroup = document.getElementById('custom-key-group');
+    const customKeyInput = document.getElementById('register-custom-key');
+    const keyTypeRadios = document.querySelectorAll('input[name="key_type"]');
 
+    function toggleCustomKey() {
+        const selectedValue = document.querySelector('input[name="key_type"]:checked').value;
+        if (selectedValue === 'custom') {
+            customKeyGroup.style.display = 'block';
+            customKeyInput.required = true;
+        } else {
+            customKeyGroup.style.display = 'none';
+            customKeyInput.required = false;
+        }
+    }
+    keyTypeRadios.forEach(radio => radio.addEventListener('change', toggleCustomKey));
+    toggleCustomKey();
+
+    // Gestione visibilità password
     document.querySelectorAll('.toggle-password').forEach(icon => {
         icon.addEventListener('click', () => {
             const input = icon.previousElementSibling;
@@ -133,7 +132,19 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    toggleCustomKey();
+    // NUOVO: Gestione input file per login
+    const authFileInput = document.getElementById('auth-file-input');
+    const fileUploadText = document.getElementById('file-upload-text');
+
+    authFileInput.addEventListener('change', function() {
+        if (this.files && this.files.length > 0) {
+            fileUploadText.textContent = this.files[0].name;
+            fileUploadText.previousElementSibling.textContent = 'check_circle'; // cambia icona
+        } else {
+            fileUploadText.textContent = 'Clicca per caricare il file';
+            fileUploadText.previousElementSibling.textContent = 'upload_file';
+        }
+    });
 
     // Sfondo casuale
     const backgrounds = ['wp1.jpg', 'wp2.jpg', 'wp3.jpg'];
