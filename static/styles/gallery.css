@@ -1,3 +1,58 @@
+/* =================================================== */
+/* === VARIABILI CSS E STILI GLOBALI           === */
+/* =================================================== */
+
+:root {
+    /* --- Colori Tema Chiaro (Default) --- */
+    --primary: #1976d2;
+    --on-primary: #ffffff;
+    --primary-container: #e3f2fd;
+    --on-primary-container: #0d47a1;
+
+    --surface: #fdfdfe; /* Sfondo principale leggermente off-white */
+    --on-surface: #1c1b1f; /* Testo principale scuro */
+    --surface-container: #ffffff; /* Sfondo per le card, bianco puro */
+    --surface-container-high: #f1f3f4; /* Sfondo per elementi in rilievo */
+
+    --on-surface-variant: #444746; /* Testo secondario/sottotitoli */
+    --outline: #d1d1d1; /* Bordi chiari */
+    --outline-variant: #e0e0e0; /* Bordi più tenui per le card */
+    
+    --error: #d32f2f;
+    --on-error: #ffffff;
+    --error-container: #fdecea;
+    --on-error-container: #b71c1c;
+
+    /* Sfondo per hover su bottoni icona */
+    --btn-hover-bg: rgba(0, 0, 0, 0.05);
+
+    /* --- Raggi di curvatura --- */
+    --radius-s: 8px;
+    --radius-m: 12px;
+    --radius-l: 16px;
+}
+
+/* --- Transizione fluida per il cambio di tema --- */
+/* Rende il passaggio tra light e dark mode molto più gradevole. */
+body,
+.gallery-container,
+.gallery-header,
+.media-card,
+.btn,
+.upload-gem,
+.upload-details-card,
+.group-title,
+.grouping-controls,
+.upload-card-header,
+.upload-card-footer {
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+
+/* =================================================== */
+/* === STILI PRINCIPALI                          === */
+/* =================================================== */
+
 /* Stili principali del contenitore della galleria */
 .gallery-container {
     display: flex;
@@ -92,12 +147,16 @@
     outline: none;
 }
 
-/* Contenitori per status e progress bar */
+/* Contenitori per status */
 .scan-status-container {
     padding: 8px 24px 0;
     color: var(--on-surface-variant);
     font-size: 14px;
 }
+
+/* =================================================== */
+/* === COMPONENTI UI (Bottoni, Card, ecc.)       === */
+/* =================================================== */
 
 /* Stili generici dei pulsanti */
 .btn {
@@ -106,7 +165,7 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: background-color 0.2s, box-shadow 0.2s;
+    transition: background-color 0.2s, box-shadow 0.2s, color 0.2s;
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -121,7 +180,7 @@
 }
 
 .btn.primary:hover {
-    background: #1b66c9;
+    background: #1565c0; /* Un blu leggermente più scuro per l'hover */
     color: var(--on-primary);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
@@ -135,6 +194,7 @@
 .btn.outlined:hover {
     background: var(--primary-container);
     border-color: var(--primary-container);
+    color: var(--on-primary-container);
 }
 
 .btn.icon {
@@ -151,7 +211,7 @@
 }
 
 .btn.icon:hover {
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--btn-hover-bg);
 }
 
 .btn.danger {
@@ -178,42 +238,11 @@
     gap: 8px;
 }
 
-/* Animazioni per i gruppi */
-@keyframes groupFadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes groupSlideIn {
-    from {
-        opacity: 0;
-        transform: translateX(-20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateX(0);
-    }
-}
-
 .media-group {
     margin-bottom: 32px;
     animation: groupFadeIn 0.5s ease-out forwards;
     opacity: 0;
 }
-
-/* Delay progressivo per ogni gruppo */
-.media-group:nth-child(1) { animation-delay: 0.1s; }
-.media-group:nth-child(2) { animation-delay: 0.2s; }
-.media-group:nth-child(3) { animation-delay: 0.3s; }
-.media-group:nth-child(4) { animation-delay: 0.4s; }
-.media-group:nth-child(5) { animation-delay: 0.5s; }
-.media-group:nth-child(n+6) { animation-delay: 0.6s; }
 
 .group-title {
     font-size: 1.1rem;
@@ -242,34 +271,6 @@
 .group-title:hover::before {
     height: 100%;
 }
-
-/* Animazione staggered per le card all'interno dei gruppi */
-@keyframes cardFadeIn {
-    from {
-        opacity: 0;
-        transform: scale(0.9);
-    }
-    to {
-        opacity: 1;
-        transform: scale(1);
-    }
-}
-
-.media-group .media-card-wrapper {
-    animation: cardFadeIn 0.4s ease-out forwards;
-    opacity: 0;
-}
-
-/* Delay progressivo per le card in ogni gruppo */
-.media-group .media-card-wrapper:nth-child(1) { animation-delay: 0.05s; }
-.media-group .media-card-wrapper:nth-child(2) { animation-delay: 0.1s; }
-.media-group .media-card-wrapper:nth-child(3) { animation-delay: 0.15s; }
-.media-group .media-card-wrapper:nth-child(4) { animation-delay: 0.2s; }
-.media-group .media-card-wrapper:nth-child(5) { animation-delay: 0.25s; }
-.media-group .media-card-wrapper:nth-child(6) { animation-delay: 0.3s; }
-.media-group .media-card-wrapper:nth-child(7) { animation-delay: 0.35s; }
-.media-group .media-card-wrapper:nth-child(8) { animation-delay: 0.4s; }
-.media-group .media-card-wrapper:nth-child(n+9) { animation-delay: 0.45s; }
 
 /* Stili per le card dei media */
 .media-card-wrapper {
@@ -405,31 +406,9 @@
     opacity: 1;
 }
 
-/* Media query per la responsività */
-@media (max-width: 768px) {
-    .header-content {
-        flex-direction: column;
-        align-items: flex-start;
-    }
-
-    .header-actions {
-        width: 100%;
-        justify-content: flex-start;
-        flex-wrap: wrap;
-    }
-
-    .gallery-grid .media-group-grid {
-        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-        gap: 4px;
-    }
-
-    .gallery-grid {
-        padding: 4px;
-    }
-}
-
-
-/* --- NUOVI STILI PER L'INDICATORE DI UPLOAD --- */
+/* =================================================== */
+/* === INDICATORE DI UPLOAD                      === */
+/* =================================================== */
 
 .upload-indicator-container {
     position: fixed;
@@ -440,7 +419,7 @@
     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* --- Stato Chiuso (Gemma) --- */
+/* Stato Chiuso (Gemma) */
 .upload-gem {
     width: 56px;
     height: 56px;
@@ -465,7 +444,6 @@
     transform: scale(0.8);
 }
 
-/* Icona e Percentuale nella Gemma */
 .upload-gem .material-icons {
     font-size: 24px;
     color: var(--on-surface-variant);
@@ -478,38 +456,33 @@
     font-size: 12px;
     font-weight: 500;
     color: var(--on-surface-variant);
-    opacity: 0; /* Mostrato solo durante il caricamento */
+    opacity: 0;
     transition: opacity 0.3s ease;
 }
 
 .upload-gem.is-uploading #upload-indicator-icon { opacity: 0; }
 .upload-gem.is-uploading #upload-indicator-percentage { opacity: 1; }
 
-/* Anello di Progresso SVG */
 .upload-progress-ring {
     position: absolute;
     top: 0;
     left: 0;
-    transform: rotate(-90deg); /* Fa partire il progresso dall'alto */
+    transform: rotate(-90deg);
 }
 
-.progress-ring-track,
-.progress-ring-arc {
+.progress-ring-track, .progress-ring-arc {
     fill: none;
     stroke-width: 4;
 }
 
-.progress-ring-track {
-    stroke: var(--surface-container);
-}
-
+.progress-ring-track { stroke: var(--surface-container); }
 .progress-ring-arc {
     stroke: var(--primary);
     stroke-linecap: round;
     transition: stroke-dashoffset 0.3s ease, stroke 0.3s ease;
 }
 
-/* --- Stato Aperto (Card) --- */
+/* Stato Aperto (Card) */
 .upload-details-card {
     position: absolute;
     bottom: 0;
@@ -534,7 +507,6 @@
     pointer-events: auto;
 }
 
-/* Header della Card */
 .upload-card-header {
     display: flex;
     justify-content: space-between;
@@ -550,15 +522,9 @@
     font-weight: 500;
 }
 
-#upload-close-btn {
-    transition: transform 0.3s ease;
-}
-.upload-indicator-container.expanded #upload-close-btn {
-    transform: rotate(180deg);
-}
+#upload-close-btn { transition: transform 0.3s ease; }
+.upload-indicator-container.expanded #upload-close-btn { transform: rotate(180deg); }
 
-
-/* Corpo della Card (lista file) */
 .upload-card-body {
     flex-grow: 1;
     overflow-y: auto;
@@ -583,11 +549,7 @@
     flex-shrink: 0;
 }
 
-.file-info {
-    flex-grow: 1;
-    overflow: hidden;
-}
-
+.file-info { flex-grow: 1; overflow: hidden; }
 .file-name {
     display: block;
     white-space: nowrap;
@@ -606,8 +568,6 @@
 .file-status.completed { color: var(--primary); }
 .file-status.error { color: var(--error); }
 
-
-/* Footer della Card */
 .upload-card-footer {
     padding: 12px 16px;
     border-top: 1px solid var(--outline-variant);
@@ -615,4 +575,194 @@
     color: var(--on-surface-variant);
     text-align: center;
     flex-shrink: 0;
+}
+
+/* =================================================== */
+/* === ANIMAZIONI                                === */
+/* =================================================== */
+
+/* Animazioni per i gruppi */
+@keyframes groupFadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes groupSlideIn {
+    from { opacity: 0; transform: translateX(-20px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+/* Delay progressivo per ogni gruppo */
+.media-group:nth-child(1) { animation-delay: 0.1s; }
+.media-group:nth-child(2) { animation-delay: 0.2s; }
+.media-group:nth-child(3) { animation-delay: 0.3s; }
+.media-group:nth-child(4) { animation-delay: 0.4s; }
+.media-group:nth-child(5) { animation-delay: 0.5s; }
+.media-group:nth-child(n+6) { animation-delay: 0.6s; }
+
+/* Animazione staggered per le card all'interno dei gruppi */
+@keyframes cardFadeIn {
+    from { opacity: 0; transform: scale(0.9); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.media-group .media-card-wrapper {
+    animation: cardFadeIn 0.4s ease-out forwards;
+    opacity: 0;
+}
+
+/* Delay progressivo per le card in ogni gruppo */
+.media-group .media-card-wrapper:nth-child(1) { animation-delay: 0.05s; }
+.media-group .media-card-wrapper:nth-child(2) { animation-delay: 0.1s; }
+.media-group .media-card-wrapper:nth-child(3) { animation-delay: 0.15s; }
+.media-group .media-card-wrapper:nth-child(4) { animation-delay: 0.2s; }
+.media-group .media-card-wrapper:nth-child(5) { animation-delay: 0.25s; }
+.media-group .media-card-wrapper:nth-child(6) { animation-delay: 0.3s; }
+.media-group .media-card-wrapper:nth-child(7) { animation-delay: 0.35s; }
+.media-group .media-card-wrapper:nth-child(8) { animation-delay: 0.4s; }
+.media-group .media-card-wrapper:nth-child(n+9) { animation-delay: 0.45s; }
+
+/* =================================================== */
+/* === RESPONSIVITÀ (MEDIA QUERIES)              === */
+/* =================================================== */
+
+@media (max-width: 768px) {
+    .header-content {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .header-actions {
+        width: 100%;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .gallery-grid .media-group-grid {
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 4px;
+    }
+
+    .gallery-grid {
+        padding: 4px;
+    }
+}
+
+/* =================================================== */
+/* === AGGIUNTE PER DARK MODE                    === */
+/* =================================================== */
+
+/* Stile per il pulsante di cambio tema: l'icona ruota */
+#theme-toggle-btn .material-icons {
+    transition: transform 0.4s ease, color 0.3s ease;
+}
+
+body.dark-mode #theme-toggle-btn .material-icons {
+    transform: rotate(-180deg);
+}
+
+/* Stili specifici per Dark Mode */
+/* Quando il <body> ha la classe 'dark-mode', queste variabili vengono sovrascritte,
+   cambiando l'aspetto di tutta l'applicazione in modo efficiente. */
+body.dark-mode {
+    /* --- Colori Tema Scuro --- */
+    --primary: #8ab4f8; /* Un blu più luminoso per contrastare sul buio */
+    --on-primary: #002d6e;
+    --primary-container: #004a77;
+    --on-primary-container: #d3e4ff;
+
+    --surface: #1c1b1f; /* Sfondo principale scuro */
+    --on-surface: #e6e1e5; /* Testo principale chiaro */
+    --surface-container: #252428; /* Sfondo per le card, leggermente più chiaro */
+    --surface-container-high: #302f33; /* Sfondo per elementi in rilievo (es. gemma upload) */
+
+    --on-surface-variant: #cac4d0; /* Testo secondario chiaro */
+    --outline: #49454f; /* Bordi scuri */
+    --outline-variant: #3a383d; /* Bordi delle card, più tenui */
+    
+    --error: #f2b8b5;
+    --on-error: #601410;
+    --error-container: #8c1d18;
+    --on-error-container: #f9dedc;
+
+    /* Sfondo per hover su bottoni icona in dark mode */
+    --btn-hover-bg: rgba(255, 255, 255, 0.08);
+}
+
+/* Sovrascrittura degli stili hover per i bottoni in dark mode per un miglior contrasto */
+body.dark-mode .btn.primary:hover {
+    background: #a3c5f9; /* Leggermente più chiaro al passaggio del mouse */
+    color: #001e48;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+body.dark-mode .btn.outlined:hover {
+    background-color: rgba(138, 180, 248, 0.12); /* Sfondo traslucido con colore primario */
+    border-color: transparent;
+    color: var(--primary);
+}
+
+body.dark-mode .media-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    border-color: var(--primary);
+}
+
+/* =================================================== */
+/* === AGGIUNTE PER L'INTERFACCIA DI SCANSIONE   === */
+/* =================================================== */
+
+.scan-status-container {
+    padding: 12px 24px 8px; /* Aumentato il padding per più spazio */
+    background-color: var(--surface-container); /* Diamo uno sfondo per distinguerlo */
+    border-radius: var(--radius-m);
+    margin-top: 16px;
+    border: 1px solid var(--outline-variant);
+}
+
+#scan-progress-details {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+#scan-main-status {
+    margin: 0;
+    font-weight: 500;
+    color: var(--on-surface);
+}
+
+/* Stile della barra di progresso */
+#scan-progress-bar {
+    width: 100%;
+    height: 8px;
+    appearance: none;
+    -webkit-appearance: none;
+    border: none;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+/* Sfondo della barra */
+#scan-progress-bar::-webkit-progress-bar {
+    background-color: var(--surface-container-high);
+}
+#scan-progress-bar::-moz-progress-bar {
+    background-color: var(--surface-container-high);
+}
+
+/* Colore del progresso */
+#scan-progress-bar::-webkit-progress-value {
+    background-color: var(--primary);
+    transition: width 0.2s ease-in-out;
+}
+#scan-progress-bar::-moz-progress-bar {
+    background-color: var(--primary);
+    transition: width 0.2s ease-in-out;
+}
+
+.scan-counters {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--on-surface-variant);
 }
