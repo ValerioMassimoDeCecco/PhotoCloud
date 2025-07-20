@@ -366,25 +366,40 @@ def upload():
     except Exception as e: return jsonify({"error": f"Errore durante il caricamento: {str(e)}"}), 500
     return jsonify({"success": True, "message": f"{len(files)} file caricati con successo."})
 
-# --- MODIFICA: La rotta media ora deve poter leggere anche dal cestino ---
 @app.route('/media/<filename>')
 def media(filename):
     if 'username' not in session: return "Accesso negato", 403
     
     user_folder = os.path.join(app.config['UPLOAD_FOLDER'], session['username'])
-    # --- NUOVO: Controlla se il file è richiesto dal cestino
     from_trash = request.args.get('from_trash') == 'true'
+    
     if from_trash:
         base_path = os.path.join(user_folder, 'trash')
     else:
         base_path = user_folder
 
-    filepath = os.path.join(base_path, filename)
-    if not os.path.exists(filepath): return "File non trovato", 404
+    # --- MITIGATION FOR PATH TRAVERSAL ---
+    
+    # 1. Get the absolute, canonical path of the intended base directory.
+    safe_base_path = os.path.abspath(base_path)
+    
+    # 2. Construct the requested file path and get its absolute, canonical path.
+    filepath = os.path.join(safe_base_path, filename)
+    safe_filepath = os.path.abspath(filepath)
+
+    # 3. Check if the requested file's path starts with the base directory's path.
+    #    This ensures the file is *within* the allowed directory.
+    if not safe_filepath.startswith(safe_base_path):
+        return "Accesso non autorizzato.", 403
+        
+    # --- END MITIGATION ---
+
+    if not os.path.exists(safe_filepath): return "File non trovato", 404
 
     try:
+        # Use the validated path from now on
         with get_dynamic_executor() as executor:
-            decrypted_data = executor.submit(do_media_decryption, filepath, session['api_key']).result()
+            decrypted_data = executor.submit(do_media_decryption, safe_filepath, session['api_key']).result()
     except Exception as e:
         return f"Errore durante la decrittografia: {str(e)}", 500
     
