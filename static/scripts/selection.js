@@ -1,7 +1,7 @@
-// static/scripts/selection.js (versione corretta e completa)
+// static/scripts/selection.js (Versione con controlli di esistenza degli elementi UI)
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Riferimenti agli elementi del DOM
+    // --- Riferimenti agli elementi del DOM ---
     const selectAllBtn = document.getElementById('select-all-btn');
     const downloadSelectedBtn = document.getElementById('download-selected-btn');
     const deleteSelectedBtn = document.getElementById('delete-selected-btn');
@@ -10,49 +10,46 @@ document.addEventListener('DOMContentLoaded', () => {
     const hasMedia = mediaCheckboxes.length > 0;
 
     // Elementi per la barra di avanzamento del download
-    const progressContainer = document.querySelector('.scan-status-container'); // Usiamo il container esistente
+    const progressContainer = document.querySelector('.scan-status-container');
     const progressStatus = document.getElementById('scan-status');
 
-    // Stato della selezione
+    // --- Stato della selezione ---
     let selectedFiles = new Set();
     let isSelectAll = false;
 
-    // Se non ci sono media, non fare nulla
-    if (!hasMedia) {
-        if(selectAllBtn) selectAllBtn.style.display = 'none';
+    // --- Inizializzazione ---
+    if (!hasMedia && !window.location.pathname.includes('/trash')) {
+        if (selectAllBtn) selectAllBtn.style.display = 'none';
         return;
-    };
+    }
 
-    // Mostra il pulsante "Seleziona Tutto" se ci sono media
-    if(selectAllBtn) selectAllBtn.style.display = 'inline-flex';
+    if (selectAllBtn) selectAllBtn.style.display = 'inline-flex';
+
+    // --- Funzioni ---
 
     /**
-     * Aggiorna l'interfaccia utente in base alla selezione corrente.
+     * Aggiorna l'interfaccia utente (UI) in base ai file selezionati.
      */
     function updateUI() {
         const count = selectedFiles.size;
-        if(selectedCountSpan) selectedCountSpan.textContent = count;
+        if (selectedCountSpan) selectedCountSpan.textContent = count;
 
         mediaCheckboxes.forEach(checkbox => {
             const wrapper = checkbox.closest('.media-card-wrapper');
             if (wrapper) {
-                if (selectedFiles.has(checkbox.dataset.filename)) {
-                    wrapper.classList.add('selected');
-                    checkbox.checked = true;
-                } else {
-                    wrapper.classList.remove('selected');
-                    checkbox.checked = false;
-                }
+                const isSelected = selectedFiles.has(checkbox.dataset.filename);
+                wrapper.classList.toggle('selected', isSelected);
+                checkbox.checked = isSelected;
             }
         });
 
         const showActionButtons = count > 0;
-        if(downloadSelectedBtn) downloadSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
-        if(deleteSelectedBtn) deleteSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
+        if (downloadSelectedBtn) downloadSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
+        if (deleteSelectedBtn) deleteSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
 
-        if(selectAllBtn) {
+        if (selectAllBtn) {
             const btnText = selectAllBtn.querySelector('.btn-text');
-            if (count === mediaCheckboxes.length && mediaCheckboxes.length > 0) {
+            if (count > 0 && count === mediaCheckboxes.length) {
                 btnText.textContent = "Deseleziona Tutto";
                 isSelectAll = true;
             } else {
@@ -63,9 +60,82 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /**
-     * Gestisce il click sul pulsante "Seleziona Tutto / Deseleziona Tutto".
+     * Avvia il download di un file creando un link temporaneo.
      */
-    if(selectAllBtn) {
+    function triggerDownload(url, filename) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        console.log(`Download avviato per: ${filename}`);
+    }
+
+    /**
+     * Interroga il server per ottenere lo stato di avanzamento della creazione dello ZIP.
+     */
+    function pollZipProgress(taskId) {
+        console.log(`Avvio polling per il task ID: ${taskId}`);
+        const interval = setInterval(async () => {
+            try {
+                const response = await fetch(`/zip-progress/${taskId}`);
+                if (!response.ok) {
+                    throw new Error(`Errore di rete: ${response.status} ${response.statusText}`);
+                }
+                const data = await response.json();
+                console.log('Stato ricevuto:', data);
+
+                // **INIZIO BLOCCO CORRETTO**
+                // Aggiunti controlli per verificare se gli elementi progressStatus e progressContainer esistono
+                switch (data.status) {
+                    case 'processing':
+                        if (progressStatus) {
+                            progressStatus.innerHTML = `Creazione archivio in corso... <div class="progress-bar-inline" style="width:${data.progress}%"></div> ${data.progress}%`;
+                        }
+                        break;
+                    case 'complete':
+                        clearInterval(interval);
+                        if (progressStatus) {
+                            progressStatus.textContent = "Archivio pronto! Download in avvio...";
+                        }
+                        triggerDownload(`/download-zip/${data.filename}`, data.filename);
+                        
+                        setTimeout(() => {
+                            if (progressContainer) progressContainer.style.display = 'none';
+                        }, 5000);
+                        break;
+                    case 'error':
+                    case 'not_found':
+                        clearInterval(interval);
+                        const errorMessage = data.error || 'Task non trovato o fallito.';
+                        if (progressStatus) {
+                            progressStatus.textContent = `Errore: ${errorMessage}`;
+                        }
+                        alert(`Si è verificato un errore durante la creazione dell'archivio: ${errorMessage}`);
+                        setTimeout(() => { if (progressContainer) progressContainer.style.display = 'none'; }, 5000);
+                        break;
+                    default:
+                        console.warn(`Stato del task non riconosciuto: ${data.status}`);
+                        break;
+                }
+            } catch (error) {
+                clearInterval(interval);
+                if (progressStatus) {
+                    progressStatus.textContent = 'Errore di comunicazione durante il controllo.';
+                }
+                console.error("Errore durante il polling:", error);
+                alert("Impossibile contattare il server per verificare lo stato dell'archivio.");
+                setTimeout(() => { if (progressContainer) progressContainer.style.display = 'none'; }, 3000);
+            }
+            // **FINE BLOCCO CORRETTO**
+        }, 2000);
+    }
+
+    // --- Gestori di Eventi ---
+
+    if (selectAllBtn) {
         selectAllBtn.addEventListener('click', () => {
             if (isSelectAll) {
                 selectedFiles.clear();
@@ -78,9 +148,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    /**
-     * Aggiunge un listener a ogni checkbox.
-     */
     mediaCheckboxes.forEach(checkbox => {
         checkbox.addEventListener('change', () => {
             const filename = checkbox.dataset.filename;
@@ -93,62 +160,18 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    /**
-     * Funzione per interrogare lo stato di avanzamento dello ZIP.
-     * @param {string} taskId - L'ID del task da controllare.
-     */
-    function pollZipProgress(taskId) {
-        const interval = setInterval(async () => {
-            try {
-                const response = await fetch(`/zip-progress/${taskId}`);
-                if (!response.ok) throw new Error('Network response was not ok');
-                const data = await response.json();
-
-                if (data.status === 'processing') {
-                    progressStatus.innerHTML = `Creazione archivio in corso... <div class="progress-bar-inline" style="width:${data.progress}%"></div> ${data.progress}%`;
-                } else if (data.status === 'complete') {
-                    clearInterval(interval);
-                    progressStatus.textContent = "Archivio pronto! Avvio il download...";
-                    
-                    // Crea un link invisibile e cliccalo per avviare il download
-                    const a = document.createElement('a');
-                    a.href = `/download-zip/${data.filename}`;
-                    a.download = data.filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-
-                    setTimeout(() => {
-                        progressContainer.style.display = 'none';
-                    }, 3000);
-
-                } else if (data.status === 'error' || data.status === 'not_found') {
-                    clearInterval(interval);
-                    progressStatus.textContent = `Errore: ${data.error || 'Task non trovato.'}`;
-                    alert(`Si è verificato un errore durante la creazione dell'archivio: ${data.error}`);
-                }
-            } catch (error) {
-                clearInterval(interval);
-                progressStatus.textContent = 'Errore di rete durante il controllo.';
-                console.error("Errore di polling:", error);
-                setTimeout(() => { progressContainer.style.display = 'none'; }, 3000);
-            }
-        }, 2000);
-    }
-
-    /**
-     * Gestisce il click sul pulsante "Scarica Selezionati".
-     */
-    if(downloadSelectedBtn) {
+    if (downloadSelectedBtn) {
         downloadSelectedBtn.addEventListener('click', async () => {
             const filesToDownload = Array.from(selectedFiles);
             if (filesToDownload.length === 0) {
-                alert("Nessun file selezionato.");
+                alert("Nessun file selezionato per il download.");
                 return;
             }
-            
-            progressContainer.style.display = 'block';
-            progressStatus.textContent = "Avvio della preparazione dell'archivio...";
+
+            console.log("Richiesta di download per i file:", filesToDownload);
+
+            if (progressContainer) progressContainer.style.display = 'block';
+            if (progressStatus) progressStatus.textContent = "Avvio della preparazione dell'archivio...";
 
             try {
                 const response = await fetch('/prepare-zip', {
@@ -157,30 +180,29 @@ document.addEventListener('DOMContentLoaded', () => {
                     body: JSON.stringify({ filenames: filesToDownload }),
                 });
 
-                if (!response.ok) throw new Error("Impossibile avviare la creazione dell'archivio.");
+                if (!response.ok) {
+                    throw new Error("Il server non ha potuto avviare la creazione dell'archivio.");
+                }
 
                 const data = await response.json();
                 if (data.task_id) {
                     pollZipProgress(data.task_id);
                 } else {
-                    throw new Error(data.error || "Risposta non valida dal server.");
+                    throw new Error(data.error || "Risposta non valida dal server dopo la richiesta di ZIP.");
                 }
             } catch (error) {
                 console.error("Errore durante la preparazione dello ZIP:", error);
-                progressStatus.textContent = `Errore: ${error.message}`;
+                if (progressStatus) progressStatus.textContent = `Errore: ${error.message}`;
                 alert(error.message);
             }
         });
     }
 
-    /**
-     * Gestisce il click sul pulsante "Sposta Selezionati nel Cestino".
-     */
-    if(deleteSelectedBtn) {
+    if (deleteSelectedBtn) {
         deleteSelectedBtn.addEventListener('click', async () => {
             const filesToDelete = Array.from(selectedFiles);
             if (filesToDelete.length === 0) {
-                alert("Nessun file selezionato.");
+                alert("Nessun file selezionato da eliminare.");
                 return;
             }
 
@@ -188,8 +210,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            console.log("Richiesta di eliminazione per i file:", filesToDelete);
+
             try {
-                // USA LA NUOVA ROTTA /trash/batch
                 const response = await fetch('/trash/batch', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -199,34 +222,37 @@ document.addEventListener('DOMContentLoaded', () => {
                 const result = await response.json();
 
                 if (result.success) {
-                    // Rimuovi gli elementi dall'interfaccia
                     filesToDelete.forEach(filename => {
                         const checkbox = document.querySelector(`.media-checkbox[data-filename="${filename}"]`);
                         if (checkbox) {
                             const wrapper = checkbox.closest('.media-card-wrapper');
-                            wrapper.style.opacity = '0';
-                            wrapper.style.transform = 'scale(0.8)';
-                            setTimeout(() => wrapper.remove(), 300);
+                            if (wrapper) {
+                                wrapper.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+                                wrapper.style.opacity = '0';
+                                wrapper.style.transform = 'scale(0.8)';
+                                setTimeout(() => wrapper.remove(), 300);
+                            }
                         }
                     });
                     
-                    // Aggiorna il conteggio totale
                     const countElement = document.getElementById('media-count');
                     if (countElement) {
-                        let currentCount = parseInt(countElement.textContent) || 0;
+                        const currentCount = parseInt(countElement.textContent) || 0;
                         countElement.textContent = `${Math.max(0, currentCount - filesToDelete.length)} elementi`;
                     }
 
-                    // Resetta la selezione
                     selectedFiles.clear();
                     updateUI();
+
                 } else {
-                    alert(`Errore: ${result.error || 'Impossibile spostare i file nel cestino.'}`);
+                    alert(`Errore: ${result.error || "Impossibile completare l'operazione."}`);
                 }
             } catch (error) {
-                alert('Errore di comunicazione col server durante lo spostamento nel cestino.');
-                console.error('Batch trash error:', error);
+                console.error('Errore durante lo spostamento nel cestino:', error);
+                alert('Errore di comunicazione con il server.');
             }
         });
     }
+    
+    updateUI();
 });
