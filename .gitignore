@@ -1,0 +1,11 @@
+# Ignora tutto dentro user_media/
+user_media/
+
+# Ignora esattamente il file users.txt
+users.txt
+
+# Ignora tutto dentro flask_session/
+flask_session/
+
+# Ignora tutto dentro temp_zips/
+temp_zips/
