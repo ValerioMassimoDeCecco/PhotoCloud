@@ -1,0 +1,79 @@
+<!-- templates/login_wait.html -->
+{% extends "base.html" %}
+
+{% block content %}
+<div class="login-wait-container">
+    <div class="login-wait-card">
+        <div class="login-wait-header">
+            <span class="material-icons">lock</span>
+            <h1>Verifica in Corso</h1>
+        </div>
+        
+        <div class="login-wait-content">
+            <p>Abbiamo inviato una richiesta di approvazione ai tuoi browser fidati.</p>
+            <p>Per completare l'accesso, approva la richiesta da un browser già autenticato.</p>
+            
+            <div class="login-wait-progress">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <p class="progress-text" id="progress-text">In attesa di approvazione...</p>
+            </div>
+            
+            <div class="login-wait-actions">
+                <button class="btn outlined" id="cancel-btn">Annulla</button>
+                <a href="/help" class="btn link">Problemi con l'accesso?</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const requestId = '{{ request_id }}';
+    let checkInterval;
+    
+    function checkLoginStatus() {
+        fetch(`/api/2fa/status/${requestId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'approved') {
+                    clearInterval(checkInterval);
+                    window.location.href = '/'; // Redirect alla home
+                } else if (data.status === 'denied' || data.status === 'expired') {
+                    clearInterval(checkInterval);
+                    showError('Accesso negato. Riprova.');
+                }
+                // Aggiorna la barra di progresso
+                updateProgressBar(data.expires_at);
+            });
+    }
+    
+    function updateProgressBar(expiresAt) {
+        const now = Date.now() / 1000;
+        const total = 600; // 10 minuti in secondi
+        const remaining = expiresAt - now;
+        const percentage = (remaining / total) * 100;
+        
+        document.getElementById('progress-fill').style.width = `${percentage}%`;
+        
+        if (remaining < 60) {
+            document.getElementById('progress-text').textContent = 
+                `Tempo rimanente: ${Math.round(remaining)} secondi`;
+        } else {
+            document.getElementById('progress-text').textContent = 
+                `Tempo rimanente: ${Math.round(remaining / 60)} minuti`;
+        }
+    }
+    
+    document.addEventListener('DOMContentLoaded', function() {
+        checkInterval = setInterval(checkLoginStatus, 2000);
+        
+        document.getElementById('cancel-btn').addEventListener('click', function() {
+            clearInterval(checkInterval);
+            window.location.href = '/login';
+        });
+    });
+</script>
+{% endblock %}

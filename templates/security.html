@@ -1,0 +1,62 @@
+<!-- templates/security.html -->
+{% extends "base.html" %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='styles/security.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="security-container">
+    <header class="security-header">
+        <h1>Impostazioni di Sicurezza</h1>
+        <p>Gestisci i browser fidati e le sessioni attive</p>
+    </header>
+
+    <div class="security-content">
+        <div class="trusted-browsers-section">
+            <h2>Browser Fidati</h2>
+            <div class="browsers-list" id="trusted-browsers-list">
+                <!-- I browser fidati verranno caricati qui via JavaScript -->
+            </div>
+        </div>
+
+        <div class="active-sessions-section">
+            <h2>Sessioni Attive</h2>
+            <div class="sessions-list" id="active-sessions-list">
+                <!-- Le sessioni attive verranno caricati qui via JavaScript -->
+            </div>
+        </div>
+
+        <div class="pending-requests-section">
+            <h2>Richieste di Accesso in Sospeso</h2>
+            <div class="requests-list" id="pending-requests-list">
+                <!-- Le richieste in sospeso verranno caricati qui via JavaScript -->
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='scripts/security.js') }}"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script>
+    const socket = io();
+    
+    socket.on('connect', function() {
+        console.log('Connected to security dashboard');
+    });
+    
+    socket.on('new_login_request', function(data) {
+        // Aggiungi la nuova richiesta alla lista
+        addPendingRequest(data);
+    });
+    
+    // Carica i dati iniziali
+    document.addEventListener('DOMContentLoaded', function() {
+        loadTrustedBrowsers();
+        loadActiveSessions();
+        loadPendingRequests();
+    });
+</script>
+{% endblock %}
