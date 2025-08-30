@@ -56,13 +56,10 @@
                     <span class="material-icons">delete_outline</span>
                 </a>
 
-                <!-- ============================================= -->
-                <!-- === NUOVO PULSANTE PER IL CAMBIO DI TEMA === -->
-                <!-- ============================================= -->
+                <!-- Pulsante per il cambio di tema -->
                 <button class="btn icon" id="theme-toggle-btn" title="Passa a tema scuro">
                     <span class="material-icons">light_mode</span>
                 </button>
-                <!-- ============================================= -->
 
                 <button class="btn icon" id="logout-btn" title="Esci">
                     <span class="material-icons">logout</span>
@@ -70,19 +67,19 @@
             </div>
         </div>
         <div id="scan-status-container" class="scan-status-container" style="display: none;">
-    <div id="scan-progress-details">
-        <p id="scan-main-status">Inizio scansione...</p>
-        
-        <!-- Barra di progresso nativa -->
-        <progress id="scan-progress-bar" value="0" max="100"></progress>
-        
-        <!-- Contatori per i dettagli -->
-        <div class="scan-counters">
-            <span id="scan-progress-text">File: 0 / ?</span>
-            <span id="scan-duplicates-found">Duplicati trovati: 0</span>
+            <div id="scan-progress-details">
+                <p id="scan-main-status">Inizio scansione...</p>
+                
+                <!-- Barra di progresso nativa -->
+                <progress id="scan-progress-bar" value="0" max="100"></progress>
+                
+                <!-- Contatori per i dettagli -->
+                <div class="scan-counters">
+                    <span id="scan-progress-text">File: 0 / ?</span>
+                    <span id="scan-duplicates-found">Duplicati trovati: 0</span>
+                </div>
+            </div>
         </div>
-    </div>
-</div>
     </header>
 
     {# Griglia della galleria. I nomi dei file vengono passati a JS #}
@@ -158,10 +155,7 @@
 <script src="{{ url_for('static', filename='scripts/upload.js') }}"></script>
 <script src="{{ url_for('static', filename='scripts/grouping.js') }}"></script>
 
-
-<!-- ==================================================== -->
-<!-- === NUOVO SCRIPT PER LA GESTIONE DEL TEMA DARK/LIGHT === -->
-<!-- ==================================================== -->
+<!-- Script per la gestione del tema dark/light -->
 <script>
     document.addEventListener('DOMContentLoaded', () => {
         const themeToggleBtn = document.getElementById('theme-toggle-btn');
@@ -200,7 +194,6 @@
         themeToggleBtn.addEventListener('click', toggleTheme);
     });
 </script>
-
 
 {# Script inline per la logica specifica della pagina #}
 <script>
@@ -243,11 +236,16 @@
         
         const form = button.closest('form');
         const cardWrapper = form.closest('.media-card-wrapper');
+        
         try {
             const response = await fetch(form.action, {
                 method: 'POST',
-                headers: { 'Accept': 'application/json' }
+                headers: { 
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
             });
+            
             const result = await response.json();
 
             if (result.success) {

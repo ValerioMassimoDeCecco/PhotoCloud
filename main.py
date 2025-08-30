@@ -494,6 +494,39 @@ def check_file_in_trash(user_folder, filename):
         return None
     return safe_filepath if os.path.exists(safe_filepath) else None
 
+# Aggiungi questa route dopo @app.route('/trash/batch', methods=['POST']) 
+# e prima di @app.route('/restore/<filename>', methods=['POST'])
+
+@app.route('/trash/<filename>', methods=['POST'])
+def trash_file(filename):
+    """Route per cestinare un singolo file."""
+    if 'username' not in session:
+        return jsonify({"error": "Accesso negato", "success": False}), 403
+    
+    user_folder = os.path.join(app.config['UPLOAD_FOLDER'], session['username'])
+    
+    # Sicurezza: verifica che il file sia nella cartella dell'utente
+    safe_user_folder = os.path.abspath(user_folder)
+    safe_filepath = os.path.abspath(os.path.join(safe_user_folder, filename))
+    
+    if not safe_filepath.startswith(safe_user_folder):
+        app.logger.warning(f"Tentativo di Path Traversal da {session['username']} per cestinare '{filename}'")
+        return jsonify({"error": "Accesso non autorizzato", "success": False}), 403
+    
+    if not os.path.exists(safe_filepath):
+        app.logger.warning(f"Tentativo di cestinare file non esistente '{filename}' da {session['username']}")
+        return jsonify({"error": "File non trovato", "success": False}), 404
+    
+    try:
+        with get_dynamic_executor() as executor:
+            executor.submit(do_trash_item, user_folder, filename).result()
+        
+        app.logger.info(f"File '{filename}' cestinato con successo per l'utente {session['username']}")
+        return jsonify({'success': True, 'message': f'File {filename} spostato nel cestino'})
+    except Exception as e:
+        app.logger.error(f"Errore durante lo spostamento nel cestino del file '{filename}' per {session['username']}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/restore/<filename>', methods=['POST'])
 def restore_item(filename):
     if 'username' not in session: return jsonify({"error": "Accesso negato"}), 403
