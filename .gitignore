@@ -2,7 +2,7 @@
 user_media/
 
 # Ignora esattamente il file users.txt
-./users.txt
+users.txt
 
 # Ignora tutto dentro flask_session/
 flask_session/

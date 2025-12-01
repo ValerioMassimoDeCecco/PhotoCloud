@@ -1,4 +1,4 @@
-# server.py - File completo con tutte le funzionalità
+# server.py - Versione semplificata (No 2FA, No WebSocket)
 
 import os
 import secrets
@@ -13,38 +13,23 @@ import shutil
 import time
 import threading
 import logging
-from datetime import datetime, timedelta
+import json
+from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, session, send_file, jsonify, send_from_directory, after_this_request
-from flask_socketio import SocketIO, emit, join_room, leave_room
 from werkzeug.utils import secure_filename
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import json
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(16)
 app.config['UPLOAD_FOLDER'] = 'user_media'
 app.config['TEMP_ZIP_FOLDER'] = 'temp_zips'
 
-# Inizializzazione WebSocket per 2FA
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
-
 # Configurazione del logging
 logging.basicConfig(level=logging.INFO)
-
-# --- Protezione da Brute Force ---
-LOGIN_ATTEMPTS = {}  # {username: [tentativi, timestamp_ultimo_tentativo]}
-MAX_LOGIN_ATTEMPTS = 5
-LOCKOUT_TIME = 300  # 5 minuti
-
-# --- Strutture dati per 2FA ---
-TRUSTED_BROWSERS = {}  # {username: {browser_id: browser_info}}
-PENDING_LOGINS = {}    # {request_id: login_request_data}
-ACTIVE_SESSIONS = {}   # {session_id: session_data}
-BROWSER_CACHE = {}     # Cache per dati browser
 
 # Creazione delle cartelle necessarie all'avvio
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -67,40 +52,6 @@ def get_dynamic_executor() -> ThreadPoolExecutor:
     else:
         max_workers = os.cpu_count()
     return ThreadPoolExecutor(max_workers=max_workers)
-
-# --- FUNZIONI 2FA ---
-
-def get_browser_fingerprint(request):
-    """Ottiene un fingerprint del browser per il 2FA."""
-    user_agent = request.headers.get('User-Agent', 'Unknown')
-    return {
-        'user_agent': user_agent,
-        'ip': request.remote_addr,
-        'platform': request.user_agent.platform if request.user_agent else 'Unknown',
-        'browser': request.user_agent.browser if request.user_agent else 'Unknown',
-        'version': request.user_agent.version if request.user_agent else 'Unknown',
-        'first_seen': time.time(),
-        'last_used': time.time()
-    }
-
-def is_trusted_browser(username, browser_id):
-    """Verifica se un browser è fidato per un utente."""
-    if username not in TRUSTED_BROWSERS:
-        return False
-    if browser_id not in TRUSTED_BROWSERS[username]:
-        return False
-    # Aggiorna ultimo utilizzo
-    TRUSTED_BROWSERS[username][browser_id]['last_used'] = time.time()
-    return True
-
-def clean_expired_2fa_requests():
-    """Pulisce le richieste 2FA scadute."""
-    current_time = time.time()
-    expired = [rid for rid, req in PENDING_LOGINS.items() 
-               if req['expires_at'] < current_time]
-    for rid in expired:
-        del PENDING_LOGINS[rid]
-        app.logger.info(f"Rimossa richiesta 2FA scaduta: {rid}")
 
 # --- FUNZIONI DI CRITTOGRAFIA E UTENTI ---
 
@@ -290,9 +241,6 @@ def clean_trash_and_zips():
                 except Exception as e:
                     app.logger.error(f"Pulizia: Errore eliminando {filepath}: {e}")
     
-    # Pulisci richieste 2FA scadute
-    clean_expired_2fa_requests()
-    
     # Pulisci cestini utenti (file più vecchi di 30 giorni)
     upload_folder = app.config['UPLOAD_FOLDER']
     if os.path.exists(upload_folder):
@@ -316,64 +264,6 @@ def background_cleaner():
         app.logger.info("Esecuzione pulizia periodica...")
         clean_trash_and_zips()
         time.sleep(3600)
-
-# --- WEBSOCKET HANDLERS PER 2FA ---
-
-@socketio.on('connect')
-def handle_connect():
-    """Gestisce connessione WebSocket."""
-    if 'username' in session:
-        join_room(session['username'])
-        emit('connected', {'status': 'success', 'username': session['username']})
-        app.logger.info(f"WebSocket: {session['username']} connesso")
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    """Gestisce disconnessione WebSocket."""
-    if 'username' in session:
-        leave_room(session['username'])
-        app.logger.info(f"WebSocket: {session['username']} disconnesso")
-
-@socketio.on('join_dashboard')
-def handle_join_dashboard(data):
-    """Gestisce join alla dashboard per ricevere notifiche 2FA."""
-    if 'username' in session:
-        join_room(session['username'])
-        
-        # Invia richieste pendenti
-        pending = [req for req in PENDING_LOGINS.values() 
-                  if req['username'] == session['username'] and 
-                  req['status'] == 'pending']
-        
-        emit('dashboard_joined', {
-            'status': 'success',
-            'pending_requests': pending
-        })
-
-@socketio.on('join_request')
-def handle_join_request(data):
-    """Il browser in attesa si unisce alla room della sua richiesta."""
-    request_id = data.get('request_id')
-    
-    if request_id and request_id in PENDING_LOGINS:
-        login_request = PENDING_LOGINS[request_id]
-        
-        # Verifica che sia l'utente corretto
-        if session.get('pending_username') == login_request['username']:
-            join_room(request_id)
-            emit('request_joined', {
-                'status': 'success',
-                'request_id': request_id
-            })
-            app.logger.info(f"Browser unito alla room di attesa: {request_id}")
-
-@socketio.on('leave_request')
-def handle_leave_request(data):
-    """Il browser lascia la room della richiesta."""
-    request_id = data.get('request_id')
-    if request_id:
-        leave_room(request_id)
-        app.logger.info(f"Browser ha lasciato la room: {request_id}")
 
 # --- ROTTE FLASK ---
 
@@ -442,103 +332,22 @@ def login():
         if not username or not api_key: 
             return "File di autenticazione non valido.", 400
 
-        # Logica anti-brute force
-        current_time = time.time()
-        if username in LOGIN_ATTEMPTS:
-            attempts, last_attempt_time = LOGIN_ATTEMPTS[username]
-            if attempts >= MAX_LOGIN_ATTEMPTS and current_time - last_attempt_time < LOCKOUT_TIME:
-                remaining = int(LOCKOUT_TIME - (current_time - last_attempt_time))
-                return f"Troppi tentativi. Riprova tra {remaining // 60}m {remaining % 60}s.", 429
-            if current_time - last_attempt_time >= LOCKOUT_TIME:
-                LOGIN_ATTEMPTS.pop(username, None)
-
-        # Verifica credenziali
+        # Verifica credenziali standard
         with get_dynamic_executor() as executor:
             is_valid = executor.submit(do_login, username, api_key).result()
         
         if is_valid:
-            LOGIN_ATTEMPTS.pop(username, None)
-            
-            # Ottieni fingerprint del browser
-            browser_info = get_browser_fingerprint(request)
-            browser_id = hashlib.sha256(json.dumps(browser_info, sort_keys=True).encode()).hexdigest()
-            
-            if is_trusted_browser(username, browser_id):
-                # Browser fidato, login diretto
-                session['username'] = username
-                session['api_key'] = api_key
-                session['browser_id'] = browser_id
-                app.logger.info(f"Login riuscito (browser fidato) per: {username}")
-                return redirect(url_for('home'))
-            else:
-                # Browser non fidato, richiedi approvazione 2FA
-                session['pending_username'] = username
-                session['pending_api_key'] = api_key
-                session['browser_info'] = browser_info
-                session['browser_id'] = browser_id
-                
-                # Crea richiesta 2FA
-                request_id = str(uuid.uuid4())
-                expiration = time.time() + 600  # 10 minuti
-                
-                PENDING_LOGINS[request_id] = {
-                    'username': username,
-                    'browser_info': browser_info,
-                    'browser_id': browser_id,
-                    'created_at': time.time(),
-                    'expires_at': expiration,
-                    'status': 'pending',
-                    'ip_address': request.remote_addr
-                }
-                
-                # Notifica tutti i browser fidati dell'utente
-                socketio.emit('new_login_request', {
-                    'request_id': request_id,
-                    'username': username,
-                    'browser_info': browser_info,
-                    'ip_address': request.remote_addr,
-                    'time': datetime.now().isoformat()
-                }, room=username)
-                
-                app.logger.info(f"2FA richiesto per {username}, request_id: {request_id}")
-                
-                # Redirect alla pagina di attesa
-                return redirect(url_for('login_wait', request_id=request_id))
+            session['username'] = username
+            session['api_key'] = api_key
+            app.logger.info(f"Login riuscito per: {username}")
+            return redirect(url_for('home'))
         else:
-            # Credenziali non valide
-            if username not in LOGIN_ATTEMPTS:
-                LOGIN_ATTEMPTS[username] = [1, current_time]
-            else:
-                LOGIN_ATTEMPTS[username][0] += 1
-                LOGIN_ATTEMPTS[username][1] = current_time
             app.logger.warning(f"Login fallito per: {username}")
             return "Credenziali non valide.", 401
             
     except Exception as e:
         app.logger.error(f"Errore login: {e}")
         return "Errore interno durante il login.", 500
-
-@app.route('/login_wait')
-def login_wait():
-    """Pagina di attesa per approvazione 2FA."""
-    request_id = request.args.get('request_id')
-    
-    if not request_id or request_id not in PENDING_LOGINS:
-        return redirect(url_for('home'))
-    
-    login_request = PENDING_LOGINS[request_id]
-    
-    # Verifica che sia l'utente corretto
-    if session.get('pending_username') != login_request['username']:
-        return redirect(url_for('home'))
-    
-    # Calcola tempo rimanente
-    time_remaining = int(login_request['expires_at'] - time.time())
-    
-    return render_template('login_wait.html', 
-                         request_id=request_id,
-                         time_remaining=time_remaining,
-                         browser_info=login_request['browser_info'])
 
 @app.route('/logout', methods=['POST'])
 def logout():
@@ -802,294 +611,10 @@ def find_duplicates_server():
     duplicates = [files for files in hashes.values() if len(files) > 1]
     return jsonify({"duplicates": duplicates})
 
-# --- ROTTE API 2FA ---
-
-@app.route('/api/2fa/initiate', methods=['POST'])
-def initiate_2fa():
-    """Inizia processo 2FA."""
-    if 'username' not in session:
-        return jsonify({"error": "Not logged in"}), 401
-    
-    username = session['username']
-    browser_info = get_browser_fingerprint(request)
-    browser_id = session.get('browser_id', hashlib.sha256(
-        json.dumps(browser_info, sort_keys=True).encode()).hexdigest())
-    
-    # Se già fidato
-    if is_trusted_browser(username, browser_id):
-        session.pop('needs_2fa', None)
-        return jsonify({"status": "already_trusted"})
-    
-    # Crea richiesta pendente
-    request_id = str(uuid.uuid4())
-    expiration = time.time() + 600  # 10 minuti
-    
-    PENDING_LOGINS[request_id] = {
-        'username': username,
-        'browser_info': browser_info,
-        'browser_id': browser_id,
-        'created_at': time.time(),
-        'expires_at': expiration,
-        'status': 'pending'
-    }
-    
-    # Notifica browser fidati
-    socketio.emit('new_login_request', {
-        'request_id': request_id,
-        'username': username,
-        'browser_info': browser_info,
-        'time': datetime.now().isoformat()
-    }, room=username)
-    
-    app.logger.info(f"2FA richiesto per {username}, request_id: {request_id}")
-    
-    return jsonify({
-        "status": "pending",
-        "request_id": request_id,
-        "expires_at": expiration
-    })
-
-@app.route('/api/2fa/check-and-complete/<request_id>', methods=['GET'])
-def check_and_complete_2fa(request_id):
-    """Controlla lo stato del 2FA e completa il login se approvato."""
-    if request_id not in PENDING_LOGINS:
-        return jsonify({"error": "Invalid request ID"}), 404
-    
-    login_request = PENDING_LOGINS[request_id]
-    
-    # Verifica che sia l'utente corretto
-    if session.get('pending_username') != login_request['username']:
-        return jsonify({"error": "Unauthorized"}), 403
-    
-    # Verifica scadenza
-    if login_request['expires_at'] < time.time():
-        login_request['status'] = 'expired'
-        # Pulisci sessione pendente
-        session.pop('pending_username', None)
-        session.pop('pending_api_key', None)
-        session.pop('browser_info', None)
-        return jsonify({
-            "status": "expired",
-            "redirect": url_for('home')
-        })
-    
-    # Se approvato, completa il login
-    if login_request['status'] == 'approved':
-        session['username'] = session.pop('pending_username')
-        session['api_key'] = session.pop('pending_api_key')
-        
-        # Se era stato richiesto di fidarsi del browser
-        if login_request.get('trust_browser', False):
-            browser_id = login_request['browser_id']
-            username = session['username']
-            if username not in TRUSTED_BROWSERS:
-                TRUSTED_BROWSERS[username] = {}
-            TRUSTED_BROWSERS[username][browser_id] = login_request['browser_info']
-            app.logger.info(f"Browser aggiunto ai fidati per {username}")
-        
-        # Pulisci la richiesta
-        del PENDING_LOGINS[request_id]
-        
-        app.logger.info(f"Login completato con 2FA per {session['username']}")
-        
-        return jsonify({
-            "status": "approved",
-            "redirect": url_for('home')
-        })
-    
-    # Se rifiutato
-    if login_request['status'] == 'rejected':
-        # Pulisci sessione pendente
-        session.pop('pending_username', None)
-        session.pop('pending_api_key', None)
-        session.pop('browser_info', None)
-        
-        # Pulisci la richiesta
-        del PENDING_LOGINS[request_id]
-        
-        return jsonify({
-            "status": "rejected",
-            "redirect": url_for('home'),
-            "message": "Accesso rifiutato dall'amministratore"
-        })
-    
-    # Ancora in attesa
-    return jsonify({
-        "status": "pending",
-        "expires_at": login_request['expires_at']
-    })
-
-@app.route('/api/2fa/approve', methods=['POST'])
-def approve_login():
-    """Approva richiesta 2FA."""
-    if 'username' not in session:
-        return jsonify({"error": "Not logged in"}), 401
-    
-    data = request.get_json()
-    request_id = data.get('request_id')
-    
-    if request_id not in PENDING_LOGINS:
-        return jsonify({"error": "Invalid request ID"}), 404
-    
-    login_request = PENDING_LOGINS[request_id]
-    
-    # Verifica permessi
-    if session['username'] != login_request['username']:
-        return jsonify({"error": "Unauthorized"}), 403
-    
-    # Controlla se già processato
-    if login_request['status'] != 'pending':
-        return jsonify({"error": "Request already processed"}), 400
-    
-    # Approva la richiesta
-    login_request['status'] = 'approved'
-    login_request['approved_at'] = time.time()
-    login_request['approved_by'] = session.get('browser_id', 'unknown')
-    login_request['trust_browser'] = data.get('trust_browser', False)
-    
-    # Notifica il browser in attesa
-    socketio.emit('login_approved', {
-        'request_id': request_id,
-        'trust_browser': login_request['trust_browser']
-    }, room=request_id)
-    
-    app.logger.info(f"Login approvato per richiesta {request_id} (trust: {login_request['trust_browser']})")
-    
-    return jsonify({
-        "status": "approved",
-        "message": "Login approvato con successo"
-    })
-
-@app.route('/api/2fa/reject', methods=['POST'])
-def reject_login():
-    """Rifiuta richiesta 2FA."""
-    if 'username' not in session:
-        return jsonify({"error": "Not logged in"}), 401
-    
-    data = request.get_json()
-    request_id = data.get('request_id')
-    
-    if request_id not in PENDING_LOGINS:
-        return jsonify({"error": "Invalid request ID"}), 404
-    
-    login_request = PENDING_LOGINS[request_id]
-    
-    if session['username'] != login_request['username']:
-        return jsonify({"error": "Unauthorized"}), 403
-    
-    login_request['status'] = 'rejected'
-    login_request['rejected_at'] = time.time()
-    
-    # Notifica browser
-    socketio.emit('login_rejected', {
-        'request_id': request_id
-    }, room=request_id)
-    
-    app.logger.warning(f"2FA rifiutato per richiesta {request_id}")
-    
-    return jsonify({"status": "rejected"})
-
-@app.route('/api/2fa/status/<request_id>', methods=['GET'])
-def check_2fa_status(request_id):
-    """Controlla stato richiesta 2FA."""
-    if request_id not in PENDING_LOGINS:
-        return jsonify({"error": "Invalid request ID"}), 404
-    
-    login_request = PENDING_LOGINS[request_id]
-    
-    # Verifica scadenza
-    if login_request['expires_at'] < time.time():
-        login_request['status'] = 'expired'
-    
-    return jsonify({
-        "status": login_request['status'],
-        "expires_at": login_request['expires_at']
-    })
-
-@app.route('/api/2fa/cancel', methods=['POST'])
-def cancel_2fa():
-    """Annulla una richiesta 2FA in corso."""
-    data = request.get_json()
-    request_id = data.get('request_id')
-    
-    if request_id in PENDING_LOGINS:
-        login_request = PENDING_LOGINS[request_id]
-        
-        # Verifica che sia l'utente corretto
-        if (session.get('pending_username') == login_request['username'] or 
-            session.get('username') == login_request['username']):
-            
-            login_request['status'] = 'cancelled'
-            
-            # Notifica eventuali listener
-            socketio.emit('login_cancelled', {
-                'request_id': request_id
-            }, room=login_request['username'])
-            
-            # Pulisci sessione pendente
-            session.pop('pending_username', None)
-            session.pop('pending_api_key', None)
-            session.pop('browser_info', None)
-            
-            # Rimuovi la richiesta dopo un breve delay
-            def cleanup():
-                time.sleep(2)
-                if request_id in PENDING_LOGINS:
-                    del PENDING_LOGINS[request_id]
-            
-            threading.Thread(target=cleanup, daemon=True).start()
-            
-            app.logger.info(f"Richiesta 2FA {request_id} annullata")
-            
-            return jsonify({"status": "cancelled"})
-    
-    return jsonify({"error": "Request not found"}), 404
-
-@app.route('/api/2fa/trusted-browsers', methods=['GET'])
-def get_trusted_browsers():
-    """Ottiene lista browser fidati."""
-    if 'username' not in session:
-        return jsonify({"error": "Not logged in"}), 401
-    
-    username = session['username']
-    browsers = []
-    
-    if username in TRUSTED_BROWSERS:
-        for browser_id, info in TRUSTED_BROWSERS[username].items():
-            browsers.append({
-                'id': browser_id[:8] + '...',
-                'browser': info.get('browser', 'Unknown'),
-                'platform': info.get('platform', 'Unknown'),
-                'last_used': info.get('last_used', 0),
-                'first_seen': info.get('first_seen', 0)
-            })
-    
-    return jsonify({"browsers": browsers})
-
-@app.route('/api/2fa/remove-browser', methods=['POST'])
-def remove_trusted_browser():
-    """Rimuove un browser dai fidati."""
-    if 'username' not in session:
-        return jsonify({"error": "Not logged in"}), 401
-    
-    data = request.get_json()
-    browser_id_prefix = data.get('browser_id')
-    
-    username = session['username']
-    if username in TRUSTED_BROWSERS:
-        # Trova browser con prefisso corrispondente
-        for bid in list(TRUSTED_BROWSERS[username].keys()):
-            if bid.startswith(browser_id_prefix.replace('...', '')):
-                del TRUSTED_BROWSERS[username][bid]
-                app.logger.info(f"Rimosso browser {browser_id_prefix} per {username}")
-                return jsonify({"status": "removed"})
-    
-    return jsonify({"error": "Browser not found"}), 404
-
 if __name__ == '__main__':
     # Avvia thread di pulizia
     cleaner_thread = threading.Thread(target=background_cleaner, daemon=True)
     cleaner_thread.start()
     
-    # Avvia server con WebSocket
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    # Avvia server Flask standard (senza SocketIO)
+    app.run(host='0.0.0.0', port=5000, debug=True)
