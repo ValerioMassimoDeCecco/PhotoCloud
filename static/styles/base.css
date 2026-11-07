@@ -38,12 +38,33 @@
     --surface-container: #f1f3f4;
     --surface-container-high: #e8eaed;
     --surface-container-highest: #dadce0;
-    
+
     --radius-xs: 4px;
     --radius-s: 8px;
     --radius-m: 12px;
     --radius-l: 16px;
     --radius-xl: 24px;
+
+    /* === Colore d'accento personalizzabile (token semantici) === */
+    --accent: #1a73e8;
+    --accent-rgb: 26, 115, 232;
+    --on-accent: #ffffff;
+    --accent-container: #d2e3fc;
+    --on-accent-container: #0b429b;
+    --accent-hover: #1565c0;
+
+    /* Alias: i componenti esistenti che usano --primary seguono
+       automaticamente il colore d'accento scelto dall'utente. */
+    --primary: var(--accent);
+    --on-primary: var(--on-accent);
+    --primary-container: var(--accent-container);
+    --on-primary-container: var(--on-accent-container);
+
+    /* === Liquid glass: usato con misura, solo sulle superfici scelte === */
+    --glass-bg: rgba(255, 255, 255, 0.72);
+    --glass-border: rgba(255, 255, 255, 0.55);
+    --glass-highlight: rgba(255, 255, 255, 0.7);
+    --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
 }
 
 * {
@@ -231,10 +252,20 @@ p {
 /* ===================================== */
 
 body.dark-mode {
-    --primary: #8ab4f8;
-    --on-primary: #002d6e;
-    --primary-container: #004a77;
-    --on-primary-container: #d3e4ff;
+    /* Tono di default dell'accento ottimizzato per lo sfondo scuro.
+       Una scelta utente persiste in localStorage e viene applicata inline
+       su body, quindi prevale su questi valori in entrambe le modalità. */
+    --accent: #8ab4f8;
+    --accent-rgb: 138, 180, 248;
+    --on-accent: #0b2540;
+    --accent-container: #004a77;
+    --on-accent-container: #d3e4ff;
+    --accent-hover: #a3c5f9;
+
+    --glass-bg: rgba(28, 27, 31, 0.75);
+    --glass-border: rgba(255, 255, 255, 0.14);
+    --glass-highlight: rgba(255, 255, 255, 0.16);
+    --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
 
     --secondary: #bdc1c6;
     --on-secondary: #202124;
@@ -269,4 +300,347 @@ body.dark-mode {
     --surface-container: #201f23;
     --surface-container-high: #2b292d;
     --surface-container-highest: #363438;
+}
+
+/* =================================================== */
+/* === STATI D'INTERAZIONE (focus, link, disabled) === */
+/* =================================================== */
+
+/* Anello di focus visibile e coerente con l'accento su tutti i controlli */
+button:focus-visible,
+.btn:focus-visible,
+.role-checkbox:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* Link testuali: accento, mai sottolineatura invadente */
+a {
+    color: var(--accent);
+    text-decoration: none;
+}
+a:hover {
+    opacity: 0.85;
+}
+
+/* Stati disabilitati: mai il solo colore a comunicarlo */
+.btn:disabled,
+button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    filter: grayscale(0.4);
+}
+
+/* =================================================== */
+/* === MATERIALI "LIQUID GLASS" (usati con misura)   === */
+/* =================================================== */
+
+/* Superficie traslucida: blur controllato, bordo sottile, ombra leggera.
+   Usata solo su superfici scelte (intestazione galleria, card di accesso,
+   pannello impostazioni), mai su ogni card della griglia. */
+.glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    -webkit-backdrop-filter: blur(16px) saturate(105%);
+    backdrop-filter: blur(16px) saturate(105%);
+}
+
+/* Fallback quando backdrop-filter non è supportato: superficie solida
+   che riprende i token del tema, senza perdere leggibilità né gerarchia. */
+@supports not (backdrop-filter: blur(16px)) and not (-webkit-backdrop-filter: blur(16px)) {
+    .glass {
+        background: var(--surface);
+        border-color: var(--outline);
+        box-shadow: none;
+    }
+}
+
+/* =================================================== */
+/* === PANELLO IMPOSTAZIONI TEMA                     === */
+/* =================================================== */
+
+.theme-settings {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 600;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    outline: none;
+}
+
+.theme-settings.open {
+    display: grid;
+    place-items: center;
+}
+
+.theme-settings-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+    z-index: -1;
+}
+
+.theme-settings-panel {
+    width: 100%;
+    max-width: 440px;
+    max-height: 92vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    z-index: 1;
+}
+
+.theme-settings-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 20px 24px 0;
+}
+
+.theme-settings-header .material-icons {
+    font-size: 28px;
+    color: var(--accent);
+}
+
+.theme-settings-header h2 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 500;
+    letter-spacing: -0.2px;
+    color: var(--on-surface);
+}
+
+.theme-settings-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1px solid var(--glass-border);
+    background: var(--glass-bg);
+    color: var(--on-surface);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+}
+
+.theme-settings-body {
+    padding: 16px 24px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.theme-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.theme-section h3 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--on-surface-variant);
+}
+
+.theme-hint {
+    margin: 0;
+    font-size: 13px;
+    color: var(--on-surface-variant);
+}
+
+/* Comando a segmenti (aspetto) */
+.segmented {
+    display: flex;
+    border: 1px solid var(--outline);
+    border-radius: var(--radius-s);
+    background: var(--surface-container-low);
+}
+
+.segmented .segment {
+    flex: 1;
+    padding: 10px 8px;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--on-surface-variant);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    text-transform: capitalize;
+}
+
+.segmented .segment:first-child { border-radius: var(--radius-s) 0 0 var(--radius-s); }
+.segmented .segment:last-child  { border-radius: 0 var(--radius-s) var(--radius-s) 0; }
+
+.segmented .segment.pressed {
+    color: var(--on-accent-container);
+    background: var(--accent-container);
+}
+
+/* Palette colori d'accento */
+.accent-palette {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+
+.accent-swatch {
+    position: relative;
+    border-radius: var(--radius-s);
+    border: 2px solid transparent;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 4px;
+}
+
+.accent-swatch .color-dot {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7) inset;
+}
+
+.accent-swatch .accent-name {
+    margin-top: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--on-surface-variant);
+    line-height: 1.4;
+}
+
+.accent-swatch .accent-check {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 16px;
+    display: none;
+    color: var(--on-accent-container);
+}
+
+.accent-swatch.pressed {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.accent-swatch.pressed .accent-check { display: block; }
+.accent-swatch.pressed .accent-name { color: var(--on-surface); font-weight: 600; }
+
+/* Controllo colore personalizzato */
+.accent-custom {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.accent-custom label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--on-surface);
+}
+
+.input-hex {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.input-hex input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 14px;
+    border: 1px solid var(--outline);
+    border-radius: var(--radius-s);
+    background: var(--surface-container-low);
+    color: var(--on-surface);
+    font-size: 14px;
+    font-family: inherit;
+}
+
+.input-hex input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+    background: var(--surface);
+}
+
+.input-hex input[type="color"] {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: var(--radius-s);
+    background: none;
+    cursor: pointer;
+}
+
+.input-hex .btn.icon {
+    padding: 0;
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    border: 1px solid var(--outline);
+    background: var(--surface-container-low);
+    color: var(--on-surface-variant);
+}
+
+.accent-error {
+    margin: 0;
+    font-size: 12px;
+    color: var(--error);
+}
+
+.theme-settings-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 16px 24px 24px;
+    border-top: 1px solid var(--outline-variant);
+}
+
+/* =================================================== */
+/* === RIDOTTO MOVIMENTO (prefers-reduced-motion)    === */
+/* =================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+    .media-group,
+    .media-card-wrapper {
+        animation: none !important;
+        opacity: 1 !important;
+    }
+
+    .btn,
+    .media-card,
+    .glass,
+    .upload-gem,
+    .upload-details-card,
+    .theme-settings-panel,
+    .nav-btn,
+    .close-btn,
+    .theme-settings-close,
+    .segmented .segment,
+    .accent-swatch {
+        transition: none !important;
+    }
+
+    .theme-settings-panel {
+        opacity: 1;
+        transform: none;
+    }
 }

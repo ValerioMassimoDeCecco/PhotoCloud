@@ -39,6 +39,56 @@
     </div>
     
     <script src="{{ url_for('static', filename='scripts/lightbox.js') }}"></script>
+    <script src="{{ url_for('static', filename='scripts/theme.js') }}"></script>
     {% block scripts %}{% endblock %}
+
+    <!-- Pannello impostazioni tema: aspetto e colore d'accento (liquid glass).
+         Aperto dal pulsante "Impostazioni tema" nella galleria. -->
+    <div class="theme-settings" id="theme-settings" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Impostazioni tema">
+        <button class="theme-settings-close" type="button" aria-label="Chiudi impostazioni tema">
+            <span class="material-icons">close</span>
+        </button>
+        <div class="theme-settings-backdrop"></div>
+        <div class="theme-settings-panel glass" role="document">
+            <div class="theme-settings-header">
+                <span class="material-icons">palette</span>
+                <h2>Impostazioni tema</h2>
+            </div>
+            <div class="theme-settings-body">
+                <section class="theme-section">
+                    <h3>Aspetto</h3>
+                    <div class="segmented" role="radiogroup" aria-label="Tema dell'applicazione">
+                        <button type="button" class="segment" data-theme="light">Chiaro</button>
+                        <button type="button" class="segment" data-theme="dark">Scuro</button>
+                        <button type="button" class="segment" data-theme="system">Sistema</button>
+                    </div>
+                    <p class="theme-hint">La scelta viene ricordata e applicata a tutta l'app.</p>
+                </section>
+
+                <section class="theme-section">
+                    <h3>Colore d'accento</h3>
+                    <p class="theme-hint">Usato per pulsanti principali, selezione, stati attivi e focus.</p>
+                    <div class="accent-palette" role="radiogroup" aria-label="Palette colori accento">
+                        <!-- I colori predefiniti vengono generati da theme.js -->
+                    </div>
+                    <div class="accent-custom">
+                        <label for="accent-hex">Colore personalizzato (HEX)</label>
+                        <div class="input-hex">
+                            <input type="text" id="accent-hex" maxlength="7" placeholder="#1a73e8">
+                            <input type="color" id="accent-color-picker" value="#1a73e8">
+                            <button type="button" class="btn icon" id="accent-apply" title="Applica colore">
+                                <span class="material-icons">check</span>
+                            </button>
+                        </div>
+                        <p class="accent-error" id="accent-error" role="alert"></p>
+                        <button type="button" class="btn outlined" id="accent-reset">Ripristina predefinito</button>
+                    </div>
+                </section>
+            </div>
+            <div class="theme-settings-footer">
+                <button type="button" class="btn" id="theme-settings-close-btn">Chiudi</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

@@ -56,9 +56,14 @@
                     <span class="material-icons">delete_outline</span>
                 </a>
 
-                <!-- Pulsante per il cambio di tema -->
-                <button class="btn icon" id="theme-toggle-btn" title="Passa a tema scuro">
+                <!-- Pulsante per il cambio rapido di tema (chiaro/scuro/sistema) -->
+                <button class="btn icon" id="theme-toggle-btn" title="Tema chiaro attivo">
                     <span class="material-icons">light_mode</span>
+                </button>
+
+                <!-- Pannello impostazioni tema (aspetto e colore d'accento) -->
+                <button class="btn icon" id="theme-settings-btn" title="Impostazioni tema">
+                    <span class="material-icons">palette</span>
                 </button>
 
                 <button class="btn icon" id="logout-btn" title="Esci">
@@ -155,46 +160,6 @@
 <script src="{{ url_for('static', filename='scripts/upload.js') }}"></script>
 <script src="{{ url_for('static', filename='scripts/grouping.js') }}"></script>
 
-<!-- Script per la gestione del tema dark/light -->
-<script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const themeToggleBtn = document.getElementById('theme-toggle-btn');
-        if (!themeToggleBtn) return;
-
-        const body = document.body;
-        const icon = themeToggleBtn.querySelector('.material-icons');
-
-        // Funzione per applicare un tema specifico (dark/light)
-        const applyTheme = (theme) => {
-            if (theme === 'dark') {
-                body.classList.add('dark-mode');
-                icon.textContent = 'dark_mode'; // Icona luna
-                themeToggleBtn.title = 'Passa a tema chiaro';
-            } else {
-                body.classList.remove('dark-mode');
-                icon.textContent = 'light_mode'; // Icona sole
-                themeToggleBtn.title = 'Passa a tema scuro';
-            }
-        };
-
-        // Funzione per cambiare tema e salvarlo nel localStorage
-        const toggleTheme = () => {
-            const newTheme = body.classList.contains('dark-mode') ? 'light' : 'dark';
-            localStorage.setItem('theme', newTheme);
-            applyTheme(newTheme);
-        };
-
-        // Al caricamento, applica il tema salvato o quello preferito dal sistema
-        const savedTheme = localStorage.getItem('theme');
-        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        
-        applyTheme(savedTheme || (prefersDark ? 'dark' : 'light'));
-
-        // Aggiungi l'evento click al pulsante
-        themeToggleBtn.addEventListener('click', toggleTheme);
-    });
-</script>
-
 {# Script inline per la logica specifica della pagina #}
 <script>
     document.addEventListener('DOMContentLoaded', () => {
@@ -250,16 +215,20 @@
 
             if (result.success) {
                 // Animazione di rimozione
-                cardWrapper.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
-                cardWrapper.style.opacity = '0';
-                cardWrapper.style.transform = 'scale(0.8)';
-                setTimeout(() => {
+                if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
                     cardWrapper.remove();
-                    // Aggiorna il conteggio totale
-                    const countElement = document.getElementById('media-count');
-                    let currentCount = parseInt(countElement.textContent) || 0;
-                    countElement.textContent = `${Math.max(0, currentCount - 1)} elementi`;
-                }, 300);
+                } else {
+                    cardWrapper.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+                    cardWrapper.style.opacity = '0';
+                    cardWrapper.style.transform = 'scale(0.8)';
+                    setTimeout(() => {
+                        cardWrapper.remove();
+                        // Aggiorna il conteggio totale
+                        const countElement = document.getElementById('media-count');
+                        let currentCount = parseInt(countElement.textContent) || 0;
+                        countElement.textContent = `${Math.max(0, currentCount - 1)} elementi`;
+                    }, 300);
+                }
             } else {
                 alert(`Errore: ${result.error || 'Impossibile spostare il file nel cestino'}`);
             }

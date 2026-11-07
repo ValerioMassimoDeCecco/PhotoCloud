@@ -17,6 +17,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let selectedFiles = new Set();
     let isSelectAll = false;
 
+    // Rispetta la preferenza di ridotto movimento del sistema
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
     // --- Inizializzazione ---
     if (!hasMedia && !window.location.pathname.includes('/trash')) {
         if (selectAllBtn) selectAllBtn.style.display = 'none';
@@ -227,10 +230,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (checkbox) {
                             const wrapper = checkbox.closest('.media-card-wrapper');
                             if (wrapper) {
-                                wrapper.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
-                                wrapper.style.opacity = '0';
-                                wrapper.style.transform = 'scale(0.8)';
-                                setTimeout(() => wrapper.remove(), 300);
+                                if (prefersReducedMotion) {
+                                    wrapper.remove();
+                                } else {
+                                    wrapper.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+                                    wrapper.style.opacity = '0';
+                                    wrapper.style.transform = 'scale(0.8)';
+                                    setTimeout(() => wrapper.remove(), 300);
+                                }
                             }
                         }
                     });
