@@ -326,7 +326,10 @@ def login():
         return "Nessun file selezionato.", 400
 
     try:
-        auth_data = json.load(auth_file)
+        try:
+            auth_data = json.load(auth_file)
+        except Exception:
+            return "File di autenticazione non valido.", 400
         username = auth_data.get('username')
         api_key = auth_data.get('api_key')
         if not username or not api_key: 
@@ -456,20 +459,21 @@ def download_zip(filename):
         app.logger.warning(f"Richiesta di download per ZIP non esistente '{filename}'")
         return "File non trovato", 404
 
-    @after_this_request
-    def remove_file(response):
-        """Rimuove il file ZIP temporaneo dopo che la richiesta è stata completata."""
+    try:
+        with open(filepath, 'rb') as f:
+            zip_bytes = f.read()
         try:
             os.remove(filepath)
-            task_id = os.path.splitext(filename)[0]
-            if task_id in ZIP_TASKS:
-                del ZIP_TASKS[task_id]
-            app.logger.info(f"Rimosso file ZIP temporaneo: {filepath}")
-        except Exception as e:
-            app.logger.error(f"Errore durante l'eliminazione del file ZIP {filename}: {e}")
-        return response
-        
-    return send_from_directory(directory, filename, as_attachment=True)
+        except Exception as rm_err:
+            app.logger.warning(f"Impossibile rimuovere subito ZIP {filename}: {rm_err}")
+        task_id = os.path.splitext(filename)[0]
+        if task_id in ZIP_TASKS:
+            del ZIP_TASKS[task_id]
+        app.logger.info(f"Inviato e rimosso file ZIP temporaneo: {filepath}")
+        return send_file(io.BytesIO(zip_bytes), mimetype='application/zip', as_attachment=True, download_name=filename)
+    except Exception as e:
+        app.logger.error(f"Errore durante il download del file ZIP {filename}: {e}")
+        return "Errore durante il download del file", 500
 
 # --- ROTTE CESTINO ---
 
@@ -524,14 +528,26 @@ def trash_batch():
     if 'username' not in session: 
         return jsonify({"error": "Accesso negato", "success": False}), 403
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "Dati non validi", "success": False}), 400
     filenames = data.get('filenames')
     if not isinstance(filenames, list): 
         return jsonify({"error": "Input non valido", "success": False}), 400
 
     user_folder = os.path.join(app.config['UPLOAD_FOLDER'], session['username'])
+    safe_user_folder = os.path.abspath(user_folder)
+    
+    valid_filenames = []
     errors = []
+    for f in filenames:
+        safe_path = os.path.abspath(os.path.join(safe_user_folder, f))
+        if safe_path.startswith(safe_user_folder) and os.path.exists(safe_path):
+            valid_filenames.append(f)
+        else:
+            errors.append(f"File '{f}' non trovato o non valido")
+
     with get_dynamic_executor() as executor:
-        futures = {executor.submit(do_trash_item, user_folder, f): f for f in filenames}
+        futures = {executor.submit(do_trash_item, user_folder, f): f for f in valid_filenames}
         for future in as_completed(futures):
             try: 
                 future.result()
@@ -539,8 +555,8 @@ def trash_batch():
                 errors.append(f"Errore su {futures[future]}: {e}")
     
     if errors:
-        app.logger.error(f"Errori durante il batch trash per {session['username']}: {errors}")
-        return jsonify({'success': False, 'error': '. '.join(errors)}), 500
+        app.logger.warning(f"Errori o file non trovati durante il batch trash per {session['username']}: {errors}")
+        return jsonify({'success': len(valid_filenames) > 0, 'error': '. '.join(errors)}), (500 if not valid_filenames else 207)
     return jsonify({'success': True})
 
 @app.route('/restore/<filename>', methods=['POST'])
@@ -592,6 +608,8 @@ def find_duplicates_server():
     if 'username' not in session: 
         return jsonify({"error": "Accesso negato"}), 403
     user_folder = os.path.join(app.config['UPLOAD_FOLDER'], session['username'])
+    if not os.path.exists(user_folder):
+        return jsonify({"duplicates": []})
     media_files = [os.path.join(user_folder, f) for f in os.listdir(user_folder) 
                   if os.path.isfile(os.path.join(user_folder, f)) and 
                   f.lower().endswith(('.jpg', '.jpeg', '.png', '.mp4', '.mov'))]

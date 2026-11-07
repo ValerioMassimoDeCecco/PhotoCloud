@@ -9,3 +9,7 @@ flask_session/
 
 # Ignora tutto dentro temp_zips/
 temp_zips/
+
+# Python cache
+__pycache__/
+*.pyc

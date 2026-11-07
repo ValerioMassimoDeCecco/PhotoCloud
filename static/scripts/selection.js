@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Elementi per la barra di avanzamento del download
     const progressContainer = document.querySelector('.scan-status-container');
-    const progressStatus = document.getElementById('scan-status');
+    const progressStatus = document.getElementById('scan-main-status');
 
     // --- Stato della selezione ---
     let selectedFiles = new Set();

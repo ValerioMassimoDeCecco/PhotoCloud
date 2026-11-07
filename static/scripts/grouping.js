@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentGroupingIndex = groupingLevels.indexOf(groupBySelect.value);
 
     // Memorizza gli elementi originali per evitare di interrogare il DOM ogni volta
-    const allMediaElements = Array.from(galleryGrid.querySelectorAll('.media-card-wrapper'));
+    let allMediaElements = Array.from(galleryGrid.querySelectorAll('.media-card-wrapper'));
 
     /**
      * Riorganizza e visualizza i media nella griglia in base al livello di raggruppamento.
@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Attendi la fine dell'animazione per modificare il DOM
         setTimeout(() => {
+            allMediaElements = allMediaElements.filter(el => el.isConnected);
             galleryGrid.innerHTML = ''; // Svuota la griglia
             
             if (level === 'none') {

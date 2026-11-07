@@ -22,7 +22,7 @@
             
             <div class="login-wait-actions">
                 <button class="btn outlined" id="cancel-btn">Annulla</button>
-                <a href="/help" class="btn link">Problemi con l'accesso?</a>
+                <a href="/" class="btn link">Torna al Login</a>
             </div>
         </div>
     </div>
@@ -35,45 +35,60 @@
     let checkInterval;
     
     function checkLoginStatus() {
-        fetch(`/api/2fa/status/${requestId}`)
+        fetch(`/api/2fa/check-and-complete/${requestId}`)
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'approved') {
                     clearInterval(checkInterval);
-                    window.location.href = '/'; // Redirect alla home
-                } else if (data.status === 'denied' || data.status === 'expired') {
+                    window.location.href = data.redirect || '/';
+                } else if (data.status === 'rejected' || data.status === 'expired') {
                     clearInterval(checkInterval);
-                    showError('Accesso negato. Riprova.');
+                    alert(data.message || 'Accesso non autorizzato o scaduto. Riprova.');
+                    window.location.href = '/';
                 }
                 // Aggiorna la barra di progresso
-                updateProgressBar(data.expires_at);
-            });
+                if (data.expires_at) {
+                    updateProgressBar(data.expires_at);
+                }
+            })
+            .catch(err => console.error('Errore durante la verifica 2FA:', err));
     }
     
     function updateProgressBar(expiresAt) {
         const now = Date.now() / 1000;
         const total = 600; // 10 minuti in secondi
         const remaining = expiresAt - now;
-        const percentage = (remaining / total) * 100;
+        const percentage = Math.max(0, Math.min(100, (remaining / total) * 100));
         
-        document.getElementById('progress-fill').style.width = `${percentage}%`;
+        const fillEl = document.getElementById('progress-fill');
+        const textEl = document.getElementById('progress-text');
+        if (fillEl) fillEl.style.width = `${percentage}%`;
         
-        if (remaining < 60) {
-            document.getElementById('progress-text').textContent = 
-                `Tempo rimanente: ${Math.round(remaining)} secondi`;
-        } else {
-            document.getElementById('progress-text').textContent = 
-                `Tempo rimanente: ${Math.round(remaining / 60)} minuti`;
+        if (textEl) {
+            if (remaining < 60) {
+                textEl.textContent = `Tempo rimanente: ${Math.round(remaining)} secondi`;
+            } else {
+                textEl.textContent = `Tempo rimanente: ${Math.round(remaining / 60)} minuti`;
+            }
         }
     }
     
     document.addEventListener('DOMContentLoaded', function() {
         checkInterval = setInterval(checkLoginStatus, 2000);
         
-        document.getElementById('cancel-btn').addEventListener('click', function() {
-            clearInterval(checkInterval);
-            window.location.href = '/login';
-        });
+        const cancelBtn = document.getElementById('cancel-btn');
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', function() {
+                clearInterval(checkInterval);
+                fetch('/api/2fa/cancel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ request_id: requestId })
+                }).finally(() => {
+                    window.location.href = '/';
+                });
+            });
+        }
     });
 </script>
 {% endblock %}
