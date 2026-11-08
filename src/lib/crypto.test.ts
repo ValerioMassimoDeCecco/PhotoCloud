@@ -82,6 +82,11 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   const workflowPath = path.resolve(process.cwd(), '.github/workflows/android-release.yml');
   assert.ok(fs.existsSync(workflowPath));
   const workflowYaml = fs.readFileSync(workflowPath, 'utf-8');
+  assert.ok(
+    workflowYaml.includes(
+      "packages: 'cmdline-tools;latest platform-tools platforms;android-35 build-tools;35.0.0'"
+    )
+  );
   assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
   assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
   assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));

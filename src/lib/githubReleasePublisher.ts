@@ -259,6 +259,7 @@ export async function triggerGitHubActionsBuild(options?: {
     'android-app/app/build.gradle.kts',
     'android-app/app/proguard-rules.pro',
     'android-app/app/src/main/AndroidManifest.xml',
+    'android-app/app/src/main/res/values/strings.xml',
     'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt',
   ];

@@ -32,6 +32,12 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'cmdline-tools;latest platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
 
       - name: Setup Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
@@ -54,7 +60,12 @@ jobs:
         working-directory: ./android-app
         run: |
           gradle assembleRelease --no-daemon --stacktrace
-          cp app/build/outputs/apk/release/app-release.apk ../photocloud-release-v1.0.0-signed.apk
+          APK_OUT=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK_OUT" ]; then
+            echo "Errore: nessun file APK trovato in app/build/outputs/apk/release"
+            exit 1
+          fi
+          cp "$APK_OUT" ../photocloud-release-v1.0.0-signed.apk
           sha256sum ../photocloud-release-v1.0.0-signed.apk > ../photocloud-release-v1.0.0-signed.apk.sha256
 
       - name: Upload Signed APK as GitHub Actions Artifact
