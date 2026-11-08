@@ -16,7 +16,7 @@ async function main() {
   console.log('[2/3] Avvio compilazione remota tramite GitHub Actions (.github/workflows/android-release.yml)...');
   const actionsStatus = await triggerGitHubActionsBuild({
     githubToken: process.env.GITHUB_TOKEN,
-    releaseTag: process.env.RELEASE_TAG || 'v1.0.1',
+    releaseTag: process.env.RELEASE_TAG || 'v1.0.2',
   });
   console.log(`✅ GitHub Actions: ${actionsStatus.message}`);
   if (actionsStatus.htmlUrl) {
@@ -28,7 +28,7 @@ async function main() {
     apkPath,
     sha256,
     githubToken: process.env.GITHUB_TOKEN,
-    tagName: process.env.RELEASE_TAG || 'v1.0.1',
+    tagName: process.env.RELEASE_TAG || 'v1.0.2',
   });
   console.log(`✅ Stato Release: ${status.message}`);
   if (status.htmlUrl) {

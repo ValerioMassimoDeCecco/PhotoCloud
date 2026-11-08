@@ -1,58 +1,112 @@
 package com.valerio.photocloud
 
-import android.annotation.SuppressLint
-import android.app.DownloadManager
-import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.MediaStore
-import android.view.View
-import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
-import android.webkit.URLUtil
-import android.webkit.ValueCallback
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.widget.MediaController
 import android.widget.Toast
+import android.widget.VideoView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.ManageSearch
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayCircleFilled
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RestoreFromTrash
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import java.io.File
-import java.io.FileOutputStream
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+enum class GroupingMode(val label: String) {
+    NONE("Tutti"),
+    DAY("Giorno"),
+    MONTH("Mese"),
+    YEAR("Anno")
+}
+
+enum class VaultTab {
+    GALLERY,
+    TRASH
+}
 
 /**
- * PhotoCloud Native Android Client v1.0.1
- * - 120Hz High Refresh Rate display mode & hardware-accelerated WebView
- * - Material You (Material 3 Dynamic Color) minimalist shell
- * - Fixed Lightbox photo preview (resolving object/string filenames & DOM image sources)
- * - Material You 120Hz Floating Bar post-login interface
- * - Native registration key download (POST /register -> MediaStore.Downloads)
+ * PhotoCloud 100% Native Android Client v1.0.2
+ * - Pure Jetpack Compose Material You (MD3 Dynamic Color) UI — NO WebView
+ * - 120Hz High Refresh Rate display mode & spring physics
+ * - Bottom Floating Bar (Material You Pill Bar)
+ * - Instant Fullscreen 120Hz Lightbox with HorizontalPager + Pinch-to-Zoom using shared Bitmap cache
  */
 class MainActivity : ComponentActivity() {
-    private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
-    private var lastSavedKeyMessage by mutableStateOf<String?>(null)
-    private var isLoginScreen by mutableStateOf(true)
 
     private fun enableHighRefreshRate120Hz() {
         try {
@@ -65,8 +119,7 @@ class MainActivity : ComponentActivity() {
                 } else {
                     windowManager.defaultDisplay
                 }
-                val modes = display?.supportedModes
-                val bestMode = modes?.maxByOrNull { it.refreshRate }
+                val bestMode = display?.supportedModes?.maxByOrNull { it.refreshRate }
                 if (bestMode != null) {
                     params.preferredDisplayModeId = bestMode.modeId
                 }
@@ -76,509 +129,1582 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    inner class AndroidBridge(private val context: Context) {
-        @JavascriptInterface
-        fun saveDownloadedFile(filename: String, content: String, mimeType: String?) {
-            val safeName = filename.ifBlank { "photocloud_auth_key.json" }
-            val resolvedMime = if (mimeType.isNullOrBlank()) "application/json" else mimeType
-            val bytes = content.toByteArray(Charsets.UTF_8)
-
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    val values = ContentValues().apply {
-                        put(MediaStore.Downloads.DISPLAY_NAME, safeName)
-                        put(MediaStore.Downloads.MIME_TYPE, resolvedMime)
-                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                        put(MediaStore.Downloads.IS_PENDING, 1)
-                    }
-                    val resolver = context.contentResolver
-                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                        ?: throw IllegalStateException("Impossibile creare il file in Download")
-
-                    resolver.openOutputStream(uri)?.use { out ->
-                        out.write(bytes)
-                        out.flush()
-                    }
-
-                    values.clear()
-                    values.put(MediaStore.Downloads.IS_PENDING, 0)
-                    resolver.update(uri, values, null, null)
-                } else {
-                    @Suppress("DEPRECATION")
-                    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                    if (!downloadsDir.exists()) {
-                        downloadsDir.mkdirs()
-                    }
-                    val outFile = File(downloadsDir, safeName)
-                    FileOutputStream(outFile).use { out ->
-                        out.write(bytes)
-                        out.flush()
-                    }
-                }
-
-                runOnUiThread {
-                    lastSavedKeyMessage = "Il file chiave \"$safeName\" è stato salvato nella cartella Download del dispositivo. Ora puoi caricarlo nella scheda Accedi."
-                    Toast.makeText(
-                        context,
-                        "Chiave salvata in Download: $safeName",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    Toast.makeText(
-                        context,
-                        "Errore salvataggio chiave: ${e.localizedMessage}",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        }
-
-        @JavascriptInterface
-        fun setAuthScreenState(onLogin: Boolean) {
-            runOnUiThread {
-                isLoginScreen = onLogin
-            }
-        }
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableHighRefreshRate120Hz()
 
         val prefs = getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE)
-        val savedUrl = prefs.getString("server_url", BuildConfig.DEFAULT_SERVER_URL) ?: BuildConfig.DEFAULT_SERVER_URL
+        val initialServerUrl = prefs.getString("server_url", BuildConfig.DEFAULT_SERVER_URL)
+            ?: BuildConfig.DEFAULT_SERVER_URL
+
+        val apiClient = PhotoCloudApiClient(applicationContext, initialServerUrl)
 
         setContent {
-            val ctx = LocalContext.current
-            val darkTheme = isSystemInDarkTheme()
+            val context = LocalContext.current
+            val systemDark = isSystemInDarkTheme()
+            var isDarkTheme by remember {
+                mutableStateOf(prefs.getBoolean("dark_mode", systemDark))
+            }
+
             val colorScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (darkTheme) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
+                if (isDarkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
             } else {
-                if (darkTheme) darkColorScheme() else lightColorScheme()
+                if (isDarkTheme) darkColorScheme() else lightColorScheme()
             }
 
             MaterialTheme(colorScheme = colorScheme) {
-                var serverUrl by remember { mutableStateOf(savedUrl) }
-                var showServerDialog by remember { mutableStateOf(false) }
-                var tempUrlInput by remember { mutableStateOf(serverUrl) }
-                var webViewInstance by remember { mutableStateOf<WebView?>(null) }
-
-                val filePickerLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.GetMultipleContents()
-                ) { uris ->
-                    fileUploadCallback?.onReceiveValue(uris.toTypedArray())
-                    fileUploadCallback = null
-                }
-
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        AndroidView(
-                            modifier = Modifier.fillMaxSize(),
-                            factory = { viewCtx ->
-                                WebView(viewCtx).apply {
-                                    setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                                    isVerticalScrollBarEnabled = false
-                                    isHorizontalScrollBarEnabled = false
-                                    CookieManager.getInstance().setAcceptCookie(true)
-                                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    settings.allowFileAccess = true
-                                    settings.allowContentAccess = true
-                                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    PhotoCloudNativeApp(
+                        apiClient = apiClient,
+                        initialServerUrl = initialServerUrl,
+                        isDarkTheme = isDarkTheme,
+                        onToggleTheme = {
+                            val next = !isDarkTheme
+                            isDarkTheme = next
+                            prefs.edit().putBoolean("dark_mode", next).apply()
+                        },
+                        onSaveServerUrl = { newUrl ->
+                            val cleaned = newUrl.trim().removeSuffix("/")
+                            apiClient.baseUrl = cleaned
+                            prefs.edit().putString("server_url", cleaned).apply()
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
 
-                                    addJavascriptInterface(AndroidBridge(viewCtx), "AndroidApp")
+@Composable
+fun PhotoCloudNativeApp(
+    apiClient: PhotoCloudApiClient,
+    initialServerUrl: String,
+    isDarkTheme: Boolean,
+    onToggleTheme: () -> Unit,
+    onSaveServerUrl: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-                                    setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-                                        try {
-                                            if (url.startsWith("http://") || url.startsWith("https://")) {
-                                                val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
-                                                val request = DownloadManager.Request(Uri.parse(url)).apply {
-                                                    setMimeType(mimeType)
-                                                    val cookie = CookieManager.getInstance().getCookie(url)
-                                                    if (!cookie.isNullOrBlank()) {
-                                                        addRequestHeader("Cookie", cookie)
-                                                    }
-                                                    if (!userAgent.isNullOrBlank()) {
-                                                        addRequestHeader("User-Agent", userAgent)
-                                                    }
-                                                    setDescription("Download file da PhotoCloud...")
-                                                    setTitle(fileName)
-                                                    setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
-                                                }
-                                                val dm = viewCtx.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-                                                dm.enqueue(request)
-                                                Toast.makeText(viewCtx, "Download avviato: $fileName", Toast.LENGTH_LONG).show()
-                                            }
-                                        } catch (e: Exception) {
-                                            Toast.makeText(
-                                                viewCtx,
-                                                "Errore durante il download: ${e.localizedMessage}",
-                                                Toast.LENGTH_LONG
-                                            ).show()
-                                        }
-                                    }
+    var serverUrl by remember { mutableStateOf(initialServerUrl) }
+    var showServerDialog by remember { mutableStateOf(false) }
+    var tempServerInput by remember { mutableStateOf(serverUrl) }
 
-                                    webViewClient = object : WebViewClient() {
-                                        override fun shouldOverrideUrlLoading(
-                                            view: WebView?,
-                                            request: WebResourceRequest?
-                                        ): Boolean = false
+    var isCheckingSession by remember { mutableStateOf(true) }
+    var isAuthenticated by remember { mutableStateOf(false) }
+    var galleryItems by remember { mutableStateOf<List<MediaItemModel>>(emptyList()) }
+    var trashItems by remember { mutableStateOf<List<MediaItemModel>>(emptyList()) }
+    var infoDialogMessage by remember { mutableStateOf<String?>(null) }
 
-                                        override fun onPageFinished(view: WebView?, url: String?) {
-                                            super.onPageFinished(view, url)
-                                            val jsEnhancer = """
-                                                (function() {
-                                                    // 1. Detect login vs post-login gallery/trash state
-                                                    var isAuthPage = !!document.querySelector('.auth-container');
-                                                    if (window.AndroidApp && window.AndroidApp.setAuthScreenState) {
-                                                        window.AndroidApp.setAuthScreenState(isAuthPage);
-                                                    }
+    fun refreshVault() {
+        scope.launch {
+            val gallery = apiClient.fetchGalleryIfAuthenticated()
+            if (gallery != null) {
+                isAuthenticated = true
+                galleryItems = gallery
+                trashItems = apiClient.fetchTrashItems()
+            } else {
+                isAuthenticated = false
+            }
+            isCheckingSession = false
+        }
+    }
 
-                                                    // 2. Intercept POST /register so the JSON key downloads via MediaStore.Downloads
-                                                    var regForm = document.getElementById('actual-register-form');
-                                                    if (regForm && !regForm.dataset.androidRegisterHooked) {
-                                                        regForm.dataset.androidRegisterHooked = 'true';
-                                                        regForm.addEventListener('submit', async function(e) {
-                                                            e.preventDefault();
-                                                            e.stopImmediatePropagation();
-                                                            try {
-                                                                var formData = new FormData(regForm);
-                                                                var actionUrl = regForm.getAttribute('action') || '/register';
-                                                                var response = await fetch(actionUrl, {
-                                                                    method: 'POST',
-                                                                    body: formData
-                                                                });
-                                                                var bodyText = await response.text();
-                                                                if (!response.ok) {
-                                                                    alert(bodyText || 'Errore durante la registrazione.');
-                                                                    return;
-                                                                }
-                                                                var disp = response.headers.get('Content-Disposition') || '';
-                                                                var match = disp.match(/filename="?([^";]+)"?/i);
-                                                                var uInput = document.getElementById('register-username');
-                                                                var rawUser = uInput ? uInput.value.trim() : 'user';
-                                                                var safeUser = rawUser.replace(/[^a-zA-Z0-9_-]/g, '_') || 'user';
-                                                                var filename = (match && match[1]) ? match[1] : ('photocloud_auth_' + safeUser + '.json');
-                                                                if (window.AndroidApp && window.AndroidApp.saveDownloadedFile) {
-                                                                    window.AndroidApp.saveDownloadedFile(filename, bodyText, 'application/json');
-                                                                }
-                                                                regForm.reset();
-                                                                var loginTab = document.getElementById('login-tab');
-                                                                if (loginTab) loginTab.click();
-                                                            } catch (err) {
-                                                                alert('Errore durante la registrazione: ' + err);
-                                                            }
-                                                        }, true);
-                                                    }
+    LaunchedEffect(serverUrl) {
+        isCheckingSession = true
+        refreshVault()
+    }
 
-                                                    // 3. Fix Lightbox photo display & swipe navigation on any PhotoCloud server version
-                                                    function resolveUrl(item) {
-                                                        if (!item) return '';
-                                                        var raw = '';
-                                                        if (typeof item === 'string') raw = item;
-                                                        else if (typeof item === 'object') raw = item.filename || item.url || item.src || '';
-                                                        raw = String(raw).trim();
-                                                        if (!raw || raw === '[object Object]') return '';
-                                                        if (raw.indexOf('/media/') === 0 || raw.indexOf('http') === 0) return raw.split('#')[0];
-                                                        return '/media/' + encodeURIComponent(raw);
-                                                    }
+    if (isCheckingSession) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(strokeWidth = 3.dp)
+        }
+    } else if (!isAuthenticated) {
+        NativeAuthScreen(
+            apiClient = apiClient,
+            serverUrl = serverUrl,
+            onOpenServerConfig = {
+                tempServerInput = serverUrl
+                showServerDialog = true
+            },
+            onLoginSuccess = {
+                refreshVault()
+            },
+            onShowInfo = { msg ->
+                infoDialogMessage = msg
+            }
+        )
+    } else {
+        NativeVaultScreen(
+            apiClient = apiClient,
+            galleryItems = galleryItems,
+            trashItems = trashItems,
+            isDarkTheme = isDarkTheme,
+            onToggleTheme = onToggleTheme,
+            onRefresh = { refreshVault() },
+            onOpenServerConfig = {
+                tempServerInput = serverUrl
+                showServerDialog = true
+            },
+            onLogout = {
+                scope.launch {
+                    apiClient.logout()
+                    isAuthenticated = false
+                    galleryItems = emptyList()
+                    trashItems = emptyList()
+                }
+            },
+            onShowInfo = { msg ->
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
 
-                                                    function collectCardsUrls() {
-                                                        var cards = Array.from(document.querySelectorAll('.clickable-media, .media-card'));
-                                                        return cards.map(function(c) {
-                                                            var df = c.getAttribute('data-filename');
-                                                            if (df) return '/media/' + encodeURIComponent(df);
-                                                            var img = c.querySelector('img');
-                                                            if (img && img.getAttribute('src')) return img.getAttribute('src');
-                                                            var vsrc = c.querySelector('video source');
-                                                            if (vsrc && vsrc.getAttribute('src')) return vsrc.getAttribute('src').split('#')[0];
-                                                            return '';
-                                                        }).filter(Boolean);
-                                                    }
+    if (showServerDialog) {
+        AlertDialog(
+            onDismissRequest = { showServerDialog = false },
+            shape = RoundedCornerShape(28.dp),
+            title = { Text("Server PhotoCloud Locale", fontWeight = FontWeight.SemiBold) },
+            text = {
+                OutlinedTextField(
+                    value = tempServerInput,
+                    onValueChange = { tempServerInput = it },
+                    label = { Text("Indirizzo (es. http://192.168.1.100:5000)") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val cleaned = tempServerInput.trim().removeSuffix("/")
+                        if (cleaned.isNotBlank()) {
+                            serverUrl = cleaned
+                            onSaveServerUrl(cleaned)
+                        }
+                        showServerDialog = false
+                    }
+                ) {
+                    Text("Salva e Connetti")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showServerDialog = false }) {
+                    Text("Annulla")
+                }
+            }
+        )
+    }
 
-                                                    window.__m3LightboxList = [];
-                                                    window.__m3LightboxIdx = 0;
+    if (infoDialogMessage != null) {
+        AlertDialog(
+            onDismissRequest = { infoDialogMessage = null },
+            shape = RoundedCornerShape(28.dp),
+            title = { Text("PhotoCloud", fontWeight = FontWeight.SemiBold) },
+            text = { Text(infoDialogMessage ?: "") },
+            confirmButton = {
+                FilledTonalButton(onClick = { infoDialogMessage = null }) {
+                    Text("OK")
+                }
+            }
+        )
+    }
+}
 
-                                                    function renderLightboxAt(idx) {
-                                                        var lb = document.getElementById('lightbox');
-                                                        var lbImg = document.getElementById('lightbox-img');
-                                                        var lbVid = document.getElementById('lightbox-video');
-                                                        var lbVidSrc = lbVid ? lbVid.querySelector('source') : null;
-                                                        var lbCounter = document.getElementById('lightbox-counter');
-                                                        if (!lb || !window.__m3LightboxList.length) return;
+@Composable
+fun NativeAuthScreen(
+    apiClient: PhotoCloudApiClient,
+    serverUrl: String,
+    onOpenServerConfig: () -> Unit,
+    onLoginSuccess: () -> Unit,
+    onShowInfo: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-                                                        var mediaUrl = resolveUrl(window.__m3LightboxList[idx]);
-                                                        if (!mediaUrl) return;
-                                                        var clean = mediaUrl.split('?')[0].split('#')[0];
-                                                        var isVid = /\.(mp4|mov|webm|mkv|avi)$/i.test(clean);
+    var isRegisterTab by remember { mutableStateOf(false) }
+    var isBusy by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
-                                                        if (lbCounter) {
-                                                            lbCounter.textContent = (idx + 1) + ' / ' + window.__m3LightboxList.length;
-                                                        }
-                                                        if (lbVid) lbVid.pause();
+    // Login state
+    var selectedFileName by remember { mutableStateOf<String?>(null) }
+    var selectedFileBytes by remember { mutableStateOf<ByteArray?>(null) }
 
-                                                        if (isVid && lbVid) {
-                                                            if (lbImg) lbImg.style.display = 'none';
-                                                            lbVid.style.display = 'block';
-                                                            if (lbVidSrc) lbVidSrc.setAttribute('src', mediaUrl);
-                                                            else lbVid.setAttribute('src', mediaUrl);
-                                                            lbVid.load();
-                                                            lbVid.play().catch(function(){});
-                                                        } else if (lbImg) {
-                                                            if (lbVid) lbVid.style.display = 'none';
-                                                            lbImg.style.display = 'block';
-                                                            lbImg.style.maxWidth = '96vw';
-                                                            lbImg.style.maxHeight = '84dvh';
-                                                            lbImg.style.width = 'auto';
-                                                            lbImg.style.height = 'auto';
-                                                            lbImg.style.objectFit = 'contain';
-                                                            lbImg.setAttribute('src', mediaUrl);
-                                                        }
-                                                    }
+    // Register state
+    var username by remember { mutableStateOf("") }
+    var useCustomKey by remember { mutableStateOf(false) }
+    var customKey by remember { mutableStateOf("") }
+    var showCustomPassword by remember { mutableStateOf(false) }
 
-                                                    window.openLightbox = function(url, isVideo, index, allMedia) {
-                                                        var lb = document.getElementById('lightbox');
-                                                        if (!lb) return;
-                                                        var domUrls = collectCardsUrls();
-                                                        var parsedList = Array.isArray(allMedia) ? allMedia.map(resolveUrl).filter(Boolean) : [];
-                                                        window.__m3LightboxList = parsedList.length ? parsedList : domUrls;
+    val authFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (bytes != null) {
+                    selectedFileBytes = bytes
+                    selectedFileName = uri.lastPathSegment?.substringAfterLast('/') ?: "photocloud_auth.json"
+                    errorMessage = null
+                }
+            } catch (e: Exception) {
+                errorMessage = "Impossibile leggere il file selezionato"
+            }
+        }
+    }
 
-                                                        var target = resolveUrl(url);
-                                                        if (!target && typeof index === 'number' && domUrls[index]) {
-                                                            target = domUrls[index];
-                                                        }
-                                                        var found = target ? window.__m3LightboxList.findIndex(function(u) {
-                                                            return decodeURIComponent(u) === decodeURIComponent(target);
-                                                        }) : -1;
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(20.dp)
+    ) {
+        // Server chip top right
+        Surface(
+            onClick = onOpenServerConfig,
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.align(Alignment.TopEnd)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Dns,
+                    contentDescription = "Server",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = serverUrl.replace("http://", "").replace("https://", ""),
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
 
-                                                        if (found !== -1) {
-                                                            window.__m3LightboxIdx = found;
-                                                        } else if (typeof index === 'number' && index >= 0 && index < window.__m3LightboxList.length) {
-                                                            window.__m3LightboxIdx = index;
-                                                        } else if (target) {
-                                                            window.__m3LightboxList = [target].concat(window.__m3LightboxList);
-                                                            window.__m3LightboxIdx = 0;
-                                                        } else {
-                                                            window.__m3LightboxIdx = 0;
-                                                        }
+        Column(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .widthIn(max = 420.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Surface(
+                shape = RoundedCornerShape(32.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                tonalElevation = 2.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(28.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "PhotoCloud",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Archivio foto e video crittografato",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-                                                        lb.style.display = 'flex';
-                                                        lb.classList.add('active');
-                                                        renderLightboxAt(window.__m3LightboxIdx);
-                                                    };
+                    Spacer(Modifier.height(24.dp))
 
-                                                    window.navigateMedia = function(direction, event) {
-                                                        if (event) event.stopPropagation();
-                                                        if (!window.__m3LightboxList.length) return;
-                                                        window.__m3LightboxIdx += direction;
-                                                        if (window.__m3LightboxIdx >= window.__m3LightboxList.length) window.__m3LightboxIdx = 0;
-                                                        if (window.__m3LightboxIdx < 0) window.__m3LightboxIdx = window.__m3LightboxList.length - 1;
-                                                        renderLightboxAt(window.__m3LightboxIdx);
-                                                    };
-
-                                                    window.closeLightbox = function() {
-                                                        var lb = document.getElementById('lightbox');
-                                                        var lbImg = document.getElementById('lightbox-img');
-                                                        var lbVid = document.getElementById('lightbox-video');
-                                                        if (!lb) return;
-                                                        lb.classList.remove('active');
-                                                        lb.style.display = 'none';
-                                                        if (lbVid) { lbVid.pause(); lbVid.style.display = 'none'; }
-                                                        if (lbImg) { lbImg.style.display = 'none'; }
-                                                    };
-
-                                                    // Capture-phase click handler on galleryGrid so clicking any photo ALWAYS opens Lightbox with its real src
-                                                    var galleryGrid = document.querySelector('.gallery-grid');
-                                                    if (galleryGrid && !galleryGrid.dataset.m3LightboxHooked) {
-                                                        galleryGrid.dataset.m3LightboxHooked = 'true';
-                                                        galleryGrid.addEventListener('click', function(ev) {
-                                                            var card = ev.target.closest('.clickable-media, .media-card');
-                                                            if (!card) return;
-                                                            if (ev.target.closest('.delete-form') || ev.target.closest('.media-actions') || ev.target.matches('.media-checkbox')) {
-                                                                return;
-                                                            }
-                                                            ev.stopPropagation();
-                                                            var allCards = Array.from(galleryGrid.querySelectorAll('.clickable-media, .media-card'));
-                                                            var allUrls = collectCardsUrls();
-                                                            var idx = Math.max(0, allCards.indexOf(card));
-                                                            var imgEl = card.querySelector('img');
-                                                            var vidSrcEl = card.querySelector('video source');
-                                                            var directUrl = (imgEl && imgEl.getAttribute('src'))
-                                                                ? imgEl.getAttribute('src')
-                                                                : (vidSrcEl && vidSrcEl.getAttribute('src') ? vidSrcEl.getAttribute('src').split('#')[0] : allUrls[idx]);
-                                                            if (directUrl) {
-                                                                var isVid = /\.(mp4|mov|webm|mkv|avi)$/i.test(directUrl.split('?')[0]);
-                                                                window.openLightbox(directUrl, isVid, idx, allUrls);
-                                                            }
-                                                        }, true);
-                                                    }
-
-                                                    // 4. Upgrade older server gallery/trash DOM to Material You 120Hz Floating Bar if not already present
-                                                    if (!isAuthPage && !document.querySelector('.m3-floating-bar') && document.querySelector('.gallery-container')) {
-                                                        var styleEl = document.createElement('style');
-                                                        styleEl.textContent = `
-                                                            body { padding: 0 !important; background: #0e0e11 !important; color: #e3e2e6 !important; font-family: system-ui, -apple-system, sans-serif !important; }
-                                                            .container { max-width: 100% !important; padding: 0 !important; }
-                                                            .gallery-container { border: none !important; border-radius: 0 !important; background: #0e0e11 !important; min-height: 100dvh !important; padding-bottom: 110px !important; }
-                                                            .gallery-header { position: sticky !important; top: 0 !important; z-index: 100 !important; background: rgba(14,14,17,0.84) !important; backdrop-filter: blur(20px) saturate(160%) !important; padding: 14px 16px !important; border-bottom: 1px solid rgba(255,255,255,0.08) !important; }
-                                                            .header-content { flex-direction: row !important; justify-content: space-between !important; align-items: center !important; }
-                                                            .header-content h1 { font-size: 20px !important; font-weight: 600 !important; letter-spacing: -0.02em !important; color: #e3e2e6 !important; }
-                                                            #media-count { font-size: 12px !important; color: #c4c6d0 !important; margin: 0 !important; }
-                                                            .gallery-grid { padding: 6px !important; background: transparent !important; }
-                                                            .gallery-grid .media-group-grid { display: grid !important; grid-template-columns: repeat(3, 1fr) !important; gap: 3px !important; }
-                                                            .media-card-wrapper, .media-card { border-radius: 10px !important; border: none !important; background: #1c1c22 !important; }
-                                                            .media-card:active { transform: scale(0.96) !important; }
-                                                            .header-actions {
-                                                                position: fixed !important;
-                                                                bottom: max(16px, env(safe-area-inset-bottom, 16px)) !important;
-                                                                left: 50% !important;
-                                                                transform: translateX(-50%) !important;
-                                                                width: auto !important;
-                                                                max-width: calc(100vw - 24px) !important;
-                                                                height: 62px !important;
-                                                                padding: 0 10px !important;
-                                                                border-radius: 9999px !important;
-                                                                background: rgba(28, 28, 34, 0.88) !important;
-                                                                backdrop-filter: blur(28px) saturate(190%) !important;
-                                                                border: 1px solid rgba(255, 255, 255, 0.1) !important;
-                                                                box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55) !important;
-                                                                z-index: 950 !important;
-                                                                display: flex !important;
-                                                                flex-wrap: nowrap !important;
-                                                                align-items: center !important;
-                                                                gap: 6px !important;
-                                                            }
-                                                            .header-actions .btn, .header-actions a.btn {
-                                                                border-radius: 9999px !important;
-                                                                height: 44px !important;
-                                                                min-width: 44px !important;
-                                                                padding: 0 12px !important;
-                                                                border: none !important;
-                                                                background: transparent !important;
-                                                                color: #c4c6d0 !important;
-                                                            }
-                                                            .header-actions #upload-label {
-                                                                background: #0842a0 !important;
-                                                                color: #d3e3fd !important;
-                                                                padding: 0 16px !important;
-                                                                font-weight: 600 !important;
-                                                            }
-                                                            .grouping-controls {
-                                                                background: #25262e !important;
-                                                                border-radius: 9999px !important;
-                                                                height: 38px !important;
-                                                                padding: 0 12px !important;
-                                                                border: none !important;
-                                                            }
-                                                            .grouping-controls::after { display: none !important; }
-                                                        `;
-                                                        document.head.appendChild(styleEl);
-                                                    }
-                                                })();
-                                            """.trimIndent()
-                                            view?.evaluateJavascript(jsEnhancer, null)
-                                        }
-                                    }
-
-                                    webChromeClient = object : WebChromeClient() {
-                                        override fun onShowFileChooser(
-                                            webView: WebView?,
-                                            filePathCallback: ValueCallback<Array<Uri>>?,
-                                            fileChooserParams: FileChooserParams?
-                                        ): Boolean {
-                                            fileUploadCallback?.onReceiveValue(null)
-                                            fileUploadCallback = filePathCallback
-                                            filePickerLauncher.launch("*/*")
-                                            return true
-                                        }
-                                    }
-                                    loadUrl(serverUrl)
-                                    webViewInstance = this
-                                }
-                            }
-                        )
-
-                        // Minimalist floating Server Endpoint button shown only on the Login/Register screen
-                        if (isLoginScreen) {
-                            FilledTonalIconButton(
+                    // Segmented Tab Switcher
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    ) {
+                        Row(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+                            Surface(
                                 onClick = {
-                                    tempUrlInput = serverUrl
-                                    showServerDialog = true
+                                    isRegisterTab = false
+                                    errorMessage = null
                                 },
                                 shape = CircleShape,
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .statusBarsPadding()
-                                    .padding(14.dp)
-                                    .size(44.dp)
+                                color = if (!isRegisterTab) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                modifier = Modifier.weight(1f).fillMaxHeight()
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = "Accedi",
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (!isRegisterTab) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Surface(
+                                onClick = {
+                                    isRegisterTab = true
+                                    errorMessage = null
+                                },
+                                shape = CircleShape,
+                                color = if (isRegisterTab) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                modifier = Modifier.weight(1f).fillMaxHeight()
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = "Registrati",
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (isRegisterTab) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(24.dp))
+
+                    if (errorMessage != null) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                        ) {
+                            Text(
+                                text = errorMessage ?: "",
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                    }
+
+                    if (!isRegisterTab) {
+                        // LOGIN FORM
+                        Surface(
+                            onClick = { authFileLauncher.launch(arrayOf("*/*")) },
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(110.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxSize().padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Dns,
-                                    contentDescription = "Configura Server Locale"
+                                    imageVector = if (selectedFileBytes != null) Icons.Default.CheckCircle else Icons.Default.UploadFile,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(32.dp)
                                 )
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = selectedFileName ?: "Tocca per scegliere il file chiave (.json)",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(20.dp))
+
+                        Button(
+                            onClick = {
+                                val bytes = selectedFileBytes
+                                if (bytes == null) {
+                                    errorMessage = "Seleziona prima il file photocloud_auth_...json"
+                                    return@Button
+                                }
+                                isBusy = true
+                                errorMessage = null
+                                scope.launch {
+                                    val (ok, err) = apiClient.loginWithAuthBytes(bytes)
+                                    isBusy = false
+                                    if (ok) {
+                                        onLoginSuccess()
+                                    } else {
+                                        errorMessage = err
+                                    }
+                                }
+                            },
+                            enabled = !isBusy,
+                            shape = CircleShape,
+                            modifier = Modifier.fillMaxWidth().height(52.dp)
+                        ) {
+                            if (isBusy) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(22.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                            } else {
+                                Text("Accedi con File Chiave", fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    } else {
+                        // REGISTER FORM
+                        OutlinedTextField(
+                            value = username,
+                            onValueChange = { username = it },
+                            label = { Text("Username") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(Modifier.height(14.dp))
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { useCustomKey = !useCustomKey }
+                                .padding(vertical = 6.dp)
+                        ) {
+                            Checkbox(
+                                checked = useCustomKey,
+                                onCheckedChange = { useCustomKey = it }
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "Usa una chiave personalizzata",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+
+                        if (useCustomKey) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = customKey,
+                                onValueChange = { customKey = it },
+                                label = { Text("Chiave personalizzata (min 8 caratteri)") },
+                                singleLine = true,
+                                visualTransformation = if (showCustomPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                                trailingIcon = {
+                                    IconButton(onClick = { showCustomPassword = !showCustomPassword }) {
+                                        Icon(
+                                            imageVector = if (showCustomPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                            contentDescription = null
+                                        )
+                                    }
+                                },
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        Spacer(Modifier.height(20.dp))
+
+                        Button(
+                            onClick = {
+                                if (username.isBlank()) {
+                                    errorMessage = "Inserisci un username valido"
+                                    return@Button
+                                }
+                                if (useCustomKey && customKey.length < 8) {
+                                    errorMessage = "La chiave personalizzata deve avere almeno 8 caratteri"
+                                    return@Button
+                                }
+                                isBusy = true
+                                errorMessage = null
+                                scope.launch {
+                                    val res = apiClient.registerUser(
+                                        username = username,
+                                        keyType = if (useCustomKey) "custom" else "generate",
+                                        customKey = customKey
+                                    )
+                                    if (!res.success) {
+                                        isBusy = false
+                                        errorMessage = res.errorMessage
+                                        return@launch
+                                    }
+
+                                    val keyBytes = res.jsonContent.toByteArray(Charsets.UTF_8)
+                                    val saved = PhotoCloudApiClient.saveBytesToDownloads(
+                                        context = context,
+                                        filename = res.filename,
+                                        bytes = keyBytes,
+                                        mimeType = "application/json"
+                                    )
+
+                                    // Also pre-populate login bytes and log in immediately
+                                    selectedFileBytes = keyBytes
+                                    selectedFileName = res.filename
+                                    val (loggedIn, _) = apiClient.loginWithAuthBytes(keyBytes)
+                                    isBusy = false
+
+                                    val saveNote = if (saved) {
+                                        "Chiave salvata nella cartella Download: ${res.filename}"
+                                    } else {
+                                        "Account creato (${res.filename})"
+                                    }
+                                    Toast.makeText(context, saveNote, Toast.LENGTH_LONG).show()
+
+                                    if (loggedIn) {
+                                        onLoginSuccess()
+                                    } else {
+                                        isRegisterTab = false
+                                        onShowInfo(saveNote)
+                                    }
+                                }
+                            },
+                            enabled = !isBusy,
+                            shape = CircleShape,
+                            modifier = Modifier.fillMaxWidth().height(52.dp)
+                        ) {
+                            if (isBusy) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(22.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                            } else {
+                                Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Registrati e Scarica Chiave", fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
 
-                if (lastSavedKeyMessage != null) {
-                    AlertDialog(
-                        onDismissRequest = { lastSavedKeyMessage = null },
-                        shape = RoundedCornerShape(28.dp),
-                        title = { Text("Chiave Salvata in Download") },
-                        text = { Text(lastSavedKeyMessage ?: "") },
-                        confirmButton = {
-                            FilledTonalButton(onClick = { lastSavedKeyMessage = null }) {
-                                Text("Perfetto")
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun NativeVaultScreen(
+    apiClient: PhotoCloudApiClient,
+    galleryItems: List<MediaItemModel>,
+    trashItems: List<MediaItemModel>,
+    isDarkTheme: Boolean,
+    onToggleTheme: () -> Unit,
+    onRefresh: () -> Unit,
+    onOpenServerConfig: () -> Unit,
+    onLogout: () -> Unit,
+    onShowInfo: (String) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+
+    var currentTab by remember { mutableStateOf(VaultTab.GALLERY) }
+    var groupingMode by remember { mutableStateOf(GroupingMode.MONTH) }
+    var showGroupingMenu by remember { mutableStateOf(false) }
+
+    var selectedFilenames by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var lightboxInitialIndex by remember { mutableStateOf<Int?>(null) }
+
+    var isUploading by remember { mutableStateOf(false) }
+    var uploadProgressText by remember { mutableStateOf("") }
+
+    var isScanningDuplicates by remember { mutableStateOf(false) }
+    var duplicateGroups by remember { mutableStateOf<List<List<String>>?>(null) }
+
+    val activeItems = if (currentTab == VaultTab.GALLERY) galleryItems else trashItems
+    val isFromTrash = currentTab == VaultTab.TRASH
+
+    val uploadLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            isUploading = true
+            uploadProgressText = "Caricamento 0 / ${uris.size}..."
+            scope.launch {
+                val (ok, msg) = apiClient.uploadMediaUris(uris) { done, total ->
+                    uploadProgressText = "Caricamento $done / $total..."
+                }
+                isUploading = false
+                onShowInfo(msg)
+                if (ok) {
+                    onRefresh()
+                }
+            }
+        }
+    }
+
+    // Group items for display
+    val groupedSections = remember(activeItems, groupingMode, currentTab) {
+        if (currentTab == VaultTab.TRASH || groupingMode == GroupingMode.NONE) {
+            listOf("" to activeItems)
+        } else {
+            val fmt = when (groupingMode) {
+                GroupingMode.DAY -> SimpleDateFormat("dd MMMM yyyy", Locale.ITALIAN)
+                GroupingMode.MONTH -> SimpleDateFormat("MMMM yyyy", Locale.ITALIAN)
+                GroupingMode.YEAR -> SimpleDateFormat("yyyy", Locale.ITALIAN)
+                GroupingMode.NONE -> SimpleDateFormat("yyyy", Locale.ITALIAN)
+            }
+            activeItems.groupBy { item ->
+                val label = fmt.format(Date((item.timestamp * 1000).toLong()))
+                label.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ITALIAN) else it.toString() }
+            }.toList()
+        }
+    }
+
+    BackHandler(enabled = lightboxInitialIndex != null || selectedFilenames.isNotEmpty() || currentTab == VaultTab.TRASH) {
+        when {
+            lightboxInitialIndex != null -> lightboxInitialIndex = null
+            selectedFilenames.isNotEmpty() -> selectedFilenames = emptySet()
+            currentTab == VaultTab.TRASH -> currentTab = VaultTab.GALLERY
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Minimalist Material You Top Header
+            Surface(
+                color = MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .statusBarsPadding()
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(
+                            text = if (currentTab == VaultTab.GALLERY) "Archivio" else "Cestino",
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                letterSpacing = (-0.5).sp
+                            ),
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = "${activeItems.size} elementi",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (currentTab == VaultTab.GALLERY && activeItems.isNotEmpty()) {
+                            // Grouping selector pill
+                            Box {
+                                Surface(
+                                    onClick = { showGroupingMenu = true },
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh
+                                ) {
+                                    Text(
+                                        text = groupingMode.label,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = showGroupingMenu,
+                                    onDismissRequest = { showGroupingMenu = false }
+                                ) {
+                                    GroupingMode.entries.forEach { mode ->
+                                        DropdownMenuItem(
+                                            text = { Text(mode.label) },
+                                            onClick = {
+                                                groupingMode = mode
+                                                showGroupingMenu = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Select All toggle
+                            IconButton(
+                                onClick = {
+                                    selectedFilenames = if (selectedFilenames.size == activeItems.size) {
+                                        emptySet()
+                                    } else {
+                                        activeItems.map { it.filename }.toSet()
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DoneAll,
+                                    contentDescription = "Seleziona tutto",
+                                    tint = if (selectedFilenames.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
-                    )
-                }
 
-                if (showServerDialog) {
-                    AlertDialog(
-                        onDismissRequest = { showServerDialog = false },
-                        shape = RoundedCornerShape(28.dp),
-                        title = { Text("Server PhotoCloud") },
-                        text = {
-                            OutlinedTextField(
-                                value = tempUrlInput,
-                                onValueChange = { tempUrlInput = it },
-                                label = { Text("Indirizzo (es. http://192.168.1.100:5000)") },
-                                singleLine = true,
-                                shape = RoundedCornerShape(16.dp),
-                                modifier = Modifier.fillMaxWidth()
+                        if (currentTab == VaultTab.TRASH && trashItems.isNotEmpty()) {
+                            FilledTonalButton(
+                                onClick = {
+                                    scope.launch {
+                                        if (apiClient.emptyTrash()) {
+                                            onShowInfo("Cestino svuotato")
+                                            onRefresh()
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                ),
+                                shape = CircleShape,
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Svuota", style = MaterialTheme.typography.labelLarge)
+                            }
+                        }
+
+                        IconButton(onClick = onRefresh) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Aggiorna",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+                }
+            }
+
+            if (isUploading || isScanningDuplicates) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = if (isUploading) uploadProgressText else "Scansione duplicati in corso...",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+            }
+
+            // Main 120Hz Photo Grid
+            if (activeItems.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = 110.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = if (currentTab == VaultTab.GALLERY) Icons.Default.PhotoLibrary else Icons.Default.DeleteOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                            modifier = Modifier.size(52.dp)
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = if (currentTab == VaultTab.GALLERY) "Il tuo archivio è vuoto" else "Il cestino è vuoto",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = if (currentTab == VaultTab.GALLERY) "Tocca + Carica nella barra in basso" else "Gli elementi eliminati appariranno qui",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    contentPadding = PaddingValues(
+                        start = 6.dp,
+                        end = 6.dp,
+                        top = 6.dp,
+                        bottom = 136.dp
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    groupedSections.forEach { (sectionTitle, sectionItems) ->
+                        if (sectionTitle.isNotBlank()) {
+                            item(
+                                key = "header_$sectionTitle",
+                                span = { GridItemSpan(maxLineSpan) }
+                            ) {
+                                Text(
+                                    text = sectionTitle,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 8.dp, top = 14.dp, bottom = 6.dp)
+                                )
+                            }
+                        }
+
+                        items(
+                            items = sectionItems,
+                            key = { it.filename }
+                        ) { mediaItem ->
+                            val isSelected = selectedFilenames.contains(mediaItem.filename)
+                            MediaGridTile(
+                                apiClient = apiClient,
+                                item = mediaItem,
+                                fromTrash = isFromTrash,
+                                isSelected = isSelected,
+                                inSelectionMode = selectedFilenames.isNotEmpty(),
+                                onClick = {
+                                    if (selectedFilenames.isNotEmpty() && currentTab == VaultTab.GALLERY) {
+                                        selectedFilenames = if (isSelected) {
+                                            selectedFilenames - mediaItem.filename
+                                        } else {
+                                            selectedFilenames + mediaItem.filename
+                                        }
+                                    } else {
+                                        val globalIndex = activeItems.indexOfFirst { it.filename == mediaItem.filename }
+                                        if (globalIndex >= 0) {
+                                            lightboxInitialIndex = globalIndex
+                                        }
+                                    }
+                                },
+                                onLongClick = {
+                                    if (currentTab == VaultTab.GALLERY) {
+                                        selectedFilenames = if (isSelected) {
+                                            selectedFilenames - mediaItem.filename
+                                        } else {
+                                            selectedFilenames + mediaItem.filename
+                                        }
+                                    }
+                                },
+                                onRestore = if (isFromTrash) {
+                                    {
+                                        scope.launch {
+                                            if (apiClient.restoreFromTrash(mediaItem.filename)) {
+                                                onShowInfo("Elemento ripristinato")
+                                                onRefresh()
+                                            }
+                                        }
+                                    }
+                                } else null,
+                                onDeletePermanent = if (isFromTrash) {
+                                    {
+                                        scope.launch {
+                                            if (apiClient.deletePermanent(mediaItem.filename)) {
+                                                onShowInfo("Eliminato definitivamente")
+                                                onRefresh()
+                                            }
+                                        }
+                                    }
+                                } else null
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // =========================================================================
+        // === MATERIAL YOU BOTTOM FLOATING BAR (Anchored at Alignment.BottomCenter)
+        // =========================================================================
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 14.dp)
+        ) {
+            // Contextual Selection Floating Bar (when 1+ photos are selected)
+            AnimatedVisibility(
+                visible = selectedFilenames.isNotEmpty() && currentTab == VaultTab.GALLERY,
+                enter = slideInVertically { it } + fadeIn(),
+                exit = slideOutVertically { it } + fadeOut()
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    tonalElevation = 8.dp,
+                    shadowElevation = 12.dp,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                val toDownload = selectedFilenames.toList()
+                                onShowInfo("Preparazione ZIP (${toDownload.size} file)...")
+                                scope.launch {
+                                    val (_, msg) = apiClient.downloadZipToDevice(toDownload)
+                                    onShowInfo(msg)
+                                    selectedFilenames = emptySet()
+                                }
+                            },
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Scarica (${selectedFilenames.size})")
+                        }
+
+                        Button(
+                            onClick = {
+                                val toTrash = selectedFilenames.toList()
+                                scope.launch {
+                                    if (apiClient.moveBatchToTrash(toTrash)) {
+                                        onShowInfo("${toTrash.size} elementi spostati nel cestino")
+                                        selectedFilenames = emptySet()
+                                        onRefresh()
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer
+                            ),
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Cestina")
+                        }
+
+                        IconButton(
+                            onClick = { selectedFilenames = emptySet() },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Deseleziona")
+                        }
+                    }
+                }
+            }
+
+            // Primary Material You Bottom Floating Pill Bar
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
+                tonalElevation = 6.dp,
+                shadowElevation = 16.dp,
+                modifier = Modifier
+                    .height(64.dp)
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                        shape = CircleShape
+                    )
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp)
+                ) {
+                    // 1. Gallery Tab Pill
+                    Surface(
+                        onClick = {
+                            currentTab = VaultTab.GALLERY
+                            selectedFilenames = emptySet()
                         },
-                        confirmButton = {
-                            Button(onClick = {
-                                val cleaned = tempUrlInput.trim().removeSuffix("/")
-                                serverUrl = cleaned
-                                prefs.edit().putString("server_url", cleaned).apply()
-                                webViewInstance?.loadUrl(cleaned)
-                                showServerDialog = false
-                            }) {
-                                Text("Connetti")
+                        shape = CircleShape,
+                        color = if (currentTab == VaultTab.GALLERY) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                        modifier = Modifier.height(46.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 14.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PhotoLibrary,
+                                contentDescription = "Foto",
+                                tint = if (currentTab == VaultTab.GALLERY) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(21.dp)
+                            )
+                            if (currentTab == VaultTab.GALLERY) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "Foto",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                        }
+                    }
+
+                    // 2. Primary Tonal Upload Pill (+ Carica)
+                    Surface(
+                        onClick = { uploadLauncher.launch("*/*") },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.height(46.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Carica",
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "Carica",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+
+                    // 3. Find Duplicates
+                    IconButton(
+                        onClick = {
+                            isScanningDuplicates = true
+                            scope.launch {
+                                val groups = apiClient.findDuplicates()
+                                isScanningDuplicates = false
+                                if (groups.isEmpty()) {
+                                    onShowInfo("Nessun duplicato trovato")
+                                } else {
+                                    duplicateGroups = groups
+                                }
                             }
                         },
-                        dismissButton = {
-                            TextButton(onClick = { showServerDialog = false }) {
-                                Text("Annulla")
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ManageSearch,
+                            contentDescription = "Trova Duplicati",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    // 4. Trash Tab Pill
+                    Surface(
+                        onClick = {
+                            currentTab = VaultTab.TRASH
+                            selectedFilenames = emptySet()
+                        },
+                        shape = CircleShape,
+                        color = if (currentTab == VaultTab.TRASH) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                        modifier = Modifier.height(46.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (currentTab == VaultTab.TRASH) Icons.Default.Delete else Icons.Default.DeleteOutline,
+                                contentDescription = "Cestino",
+                                tint = if (currentTab == VaultTab.TRASH) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(21.dp)
+                            )
+                            if (currentTab == VaultTab.TRASH) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "Cestino",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                        }
+                    }
+
+                    // 5. Theme Toggle
+                    IconButton(
+                        onClick = onToggleTheme,
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isDarkTheme) Icons.Default.DarkMode else Icons.Default.LightMode,
+                            contentDescription = "Tema",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    // 6. Server Config
+                    IconButton(
+                        onClick = onOpenServerConfig,
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Dns,
+                            contentDescription = "Server",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    // 7. Logout
+                    IconButton(
+                        onClick = onLogout,
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Logout,
+                            contentDescription = "Esci",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        // =========================================================================
+        // === NATIVE FULLSCREEN 120HZ LIGHTBOX MODAL
+        // =========================================================================
+        val openIdx = lightboxInitialIndex
+        if (openIdx != null && activeItems.isNotEmpty()) {
+            NativeLightboxModal(
+                apiClient = apiClient,
+                items = activeItems,
+                initialIndex = openIdx.coerceIn(0, activeItems.lastIndex),
+                fromTrash = isFromTrash,
+                onClose = { lightboxInitialIndex = null },
+                onMoveToTrash = { filename ->
+                    scope.launch {
+                        if (apiClient.moveToTrash(filename)) {
+                            onShowInfo("Spostato nel cestino")
+                            lightboxInitialIndex = null
+                            onRefresh()
+                        }
+                    }
+                },
+                onRestore = { filename ->
+                    scope.launch {
+                        if (apiClient.restoreFromTrash(filename)) {
+                            onShowInfo("Elemento ripristinato")
+                            lightboxInitialIndex = null
+                            onRefresh()
+                        }
+                    }
+                },
+                onDownload = { filename ->
+                    scope.launch {
+                        val (_, msg) = apiClient.saveSingleMediaToDownloads(filename, isFromTrash)
+                        onShowInfo(msg)
+                    }
+                }
+            )
+        }
+
+        // Duplicates Confirmation Dialog
+        val dupGroups = duplicateGroups
+        if (dupGroups != null) {
+            val filesToTrash = remember(dupGroups) {
+                dupGroups.flatMap { group -> group.sorted().drop(1) }
+            }
+            AlertDialog(
+                onDismissRequest = { duplicateGroups = null },
+                shape = RoundedCornerShape(28.dp),
+                title = { Text("Duplicati Trovati (${dupGroups.size} gruppi)") },
+                text = {
+                    Text("Trovate ${filesToTrash.size} copie duplicate. Vuoi spostare i duplicati nel cestino mantenendo una copia originale per ciascun gruppo?")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            duplicateGroups = null
+                            scope.launch {
+                                if (apiClient.moveBatchToTrash(filesToTrash)) {
+                                    onShowInfo("${filesToTrash.size} duplicati spostati nel cestino")
+                                    onRefresh()
+                                }
+                            }
+                        }
+                    ) {
+                        Text("Sposta nel Cestino")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { duplicateGroups = null }) {
+                        Text("Annulla")
+                    }
+                }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun MediaGridTile(
+    apiClient: PhotoCloudApiClient,
+    item: MediaItemModel,
+    fromTrash: Boolean,
+    isSelected: Boolean,
+    inSelectionMode: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onRestore: (() -> Unit)? = null,
+    onDeletePermanent: (() -> Unit)? = null
+) {
+    var bitmap by remember(item.filename, fromTrash) {
+        mutableStateOf(apiClient.getCachedBitmap(item.filename, fromTrash))
+    }
+    var loadFailed by remember(item.filename) { mutableStateOf(false) }
+
+    LaunchedEffect(item.filename, fromTrash) {
+        if (bitmap == null && !item.isVideo) {
+            val loaded = apiClient.loadMediaBitmap(item.filename, fromTrash)
+            if (loaded != null) {
+                bitmap = loaded
+            } else {
+                loadFailed = true
+            }
+        }
+    }
+
+    val scale by animateFloatAsState(
+        targetValue = if (isSelected) 0.88f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "tileScale"
+    )
+
+    Box(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(if (isSelected) 18.dp else 10.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .scale(scale)
+                .clip(RoundedCornerShape(if (isSelected) 18.dp else 10.dp))
+        ) {
+            val currentBmp = bitmap
+            if (currentBmp != null) {
+                Image(
+                    bitmap = currentBmp.asImageBitmap(),
+                    contentDescription = item.filename,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else if (item.isVideo) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayCircleFilled,
+                        contentDescription = "Video",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+            } else if (!loadFailed) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.PhotoLibrary,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                }
+            }
+        }
+
+        // Selection Badge
+        if (inSelectionMode || isSelected) {
+            Surface(
+                shape = CircleShape,
+                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.35f),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp)
+                    .size(24.dp)
+            ) {
+                if (isSelected) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Trash Item Quick Actions
+        if (onRestore != null && onDeletePermanent != null) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+            ) {
+                Surface(
+                    onClick = onRestore,
+                    shape = CircleShape,
+                    color = Color.Black.copy(alpha = 0.65f),
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.RestoreFromTrash,
+                            contentDescription = "Ripristina",
+                            tint = Color.White,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+                Surface(
+                    onClick = onDeletePermanent,
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f),
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteForever,
+                            contentDescription = "Elimina definitivamente",
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun NativeLightboxModal(
+    apiClient: PhotoCloudApiClient,
+    items: List<MediaItemModel>,
+    initialIndex: Int,
+    fromTrash: Boolean,
+    onClose: () -> Unit,
+    onMoveToTrash: (String) -> Unit,
+    onRestore: (String) -> Unit,
+    onDownload: (String) -> Unit
+) {
+    val pagerState = rememberPagerState(
+        initialPage = initialIndex,
+        pageCount = { items.size }
+    )
+    val currentItem = items.getOrNull(pagerState.currentPage) ?: items.first()
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF08080A))
+    ) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize()
+        ) { pageIndex ->
+            val media = items[pageIndex]
+            var bmp by remember(media.filename, fromTrash) {
+                mutableStateOf(apiClient.getCachedBitmap(media.filename, fromTrash))
+            }
+            var isLoading by remember(media.filename) { mutableStateOf(bmp == null && !media.isVideo) }
+
+            LaunchedEffect(media.filename, fromTrash) {
+                if (bmp == null && !media.isVideo) {
+                    isLoading = true
+                    bmp = apiClient.loadMediaBitmap(media.filename, fromTrash)
+                    isLoading = false
+                }
+            }
+
+            var zoomScale by remember(pageIndex) { mutableFloatStateOf(1f) }
+            var offsetX by remember(pageIndex) { mutableFloatStateOf(0f) }
+            var offsetY by remember(pageIndex) { mutableFloatStateOf(0f) }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(pageIndex) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            val newScale = (zoomScale * zoom).coerceIn(1f, 4f)
+                            zoomScale = newScale
+                            if (newScale > 1f) {
+                                offsetX += pan.x
+                                offsetY += pan.y
+                            } else {
+                                offsetX = 0f
+                                offsetY = 0f
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                val loadedBitmap = bmp
+                if (loadedBitmap != null) {
+                    Image(
+                        bitmap = loadedBitmap.asImageBitmap(),
+                        contentDescription = media.filename,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer(
+                                scaleX = zoomScale,
+                                scaleY = zoomScale,
+                                translationX = offsetX,
+                                translationY = offsetY
+                            )
+                    )
+                } else if (media.isVideo) {
+                    val videoUrl = apiClient.getMediaUrl(media.filename, fromTrash)
+                    val cookieHeader = apiClient.getCookieHeaderForCurrentServer()
+                    AndroidView(
+                        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.8f),
+                        factory = { ctx ->
+                            VideoView(ctx).apply {
+                                val controller = MediaController(ctx)
+                                controller.setAnchorView(this)
+                                setMediaController(controller)
+                                setVideoURI(
+                                    Uri.parse(videoUrl),
+                                    if (cookieHeader.isNotBlank()) mapOf("Cookie" to cookieHeader) else emptyMap()
+                                )
+                                setOnPreparedListener { mp ->
+                                    mp.isLooping = true
+                                    start()
+                                }
                             }
                         }
                     )
+                } else if (isLoading) {
+                    CircularProgressIndicator(color = Color.White)
+                } else {
+                    Text(
+                        text = "Impossibile caricare l'immagine",
+                        color = Color.White.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+
+        // Top Floating Counter & Close Button
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = Color.White.copy(alpha = 0.14f)
+            ) {
+                Text(
+                    text = "${pagerState.currentPage + 1} / ${items.size}",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+
+            Surface(
+                onClick = onClose,
+                shape = CircleShape,
+                color = Color.White.copy(alpha = 0.14f),
+                modifier = Modifier.size(44.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Chiudi",
+                        tint = Color.White
+                    )
+                }
+            }
+        }
+
+        // Bottom Floating Pill Action Bar inside Lightbox
+        Surface(
+            shape = CircleShape,
+            color = Color(0xFF1C1C22).copy(alpha = 0.9f),
+            tonalElevation = 8.dp,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 20.dp)
+                .height(56.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(horizontal = 14.dp)
+            ) {
+                TextButton(
+                    onClick = { onDownload(currentItem.filename) },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Salva", fontWeight = FontWeight.SemiBold)
                 }
 
-                BackHandler(enabled = webViewInstance?.canGoBack() == true) {
-                    webViewInstance?.goBack()
+                if (fromTrash) {
+                    TextButton(
+                        onClick = { onRestore(currentItem.filename) },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFA8C7FA))
+                    ) {
+                        Icon(Icons.Default.RestoreFromTrash, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Ripristina", fontWeight = FontWeight.SemiBold)
+                    }
+                } else {
+                    TextButton(
+                        onClick = { onMoveToTrash(currentItem.filename) },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2B8B5))
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Cestina", fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }

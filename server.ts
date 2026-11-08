@@ -206,7 +206,7 @@ async function startServer() {
       const status: GitHubActionsRunStatus = await triggerGitHubActionsBuild({
         githubToken: process.env.GITHUB_TOKEN,
         branch: req.body?.branch,
-        releaseTag: req.body?.release_tag || 'v1.0.1',
+        releaseTag: req.body?.release_tag || 'v1.0.2',
       });
       res.json(status);
     } catch (e: unknown) {
@@ -221,7 +221,7 @@ async function startServer() {
     try {
       const compiled = await compileSignedAndroidApk(RELEASE_DIR);
       const token = process.env.GITHUB_TOKEN;
-      const tagName = req.body?.tag_name || 'v1.0.1';
+      const tagName = req.body?.tag_name || 'v1.0.2';
       const status = await publishApkToGitHubRelease({
         githubToken: token,
         tagName,
