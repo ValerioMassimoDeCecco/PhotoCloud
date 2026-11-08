@@ -2,8 +2,11 @@
 <html lang="it">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>PhotoCloud | Il tuo archivio sicuro</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles/base.css') }}">
     {% block styles %}{% endblock %}
@@ -14,28 +17,30 @@
     </div>
 
     <div id="lightbox" class="lightbox" onclick="closeLightbox()">
+        <div class="lightbox-top-bar" onclick="event.stopPropagation()">
+            <span id="lightbox-counter" class="lightbox-counter">1 / 1</span>
+            <button class="close-btn" onclick="closeLightbox()" title="Chiudi">
+                <span class="material-icons">close</span>
+            </button>
+        </div>
+
         <div class="lightbox-content" onclick="event.stopPropagation()">
-            <button class="nav-btn prev-btn" onclick="navigateMedia(-1, event)">
-                <span class="material-icons">arrow_back</span>
+            <button class="nav-btn prev-btn" onclick="navigateMedia(-1, event)" title="Precedente">
+                <span class="material-icons">chevron_left</span>
             </button>
             
-            <div class="media-container">
-                <img id="lightbox-img" src="" alt="">
-                <video id="lightbox-video" controls>
+            <div class="media-container" onclick="closeLightbox()">
+                <img id="lightbox-img" alt="Anteprima" style="display: none;" onclick="event.stopPropagation()">
+                <video id="lightbox-video" controls playsinline style="display: none;" onclick="event.stopPropagation()">
                     <source src="" type="video/mp4">
                     Il tuo browser non supporta i video.
                 </video>
             </div>
             
-            <button class="nav-btn next-btn" onclick="navigateMedia(1, event)">
-                <span class="material-icons">arrow_forward</span>
+            <button class="nav-btn next-btn" onclick="navigateMedia(1, event)" title="Successivo">
+                <span class="material-icons">chevron_right</span>
             </button>
-            
-            </div>
-        
-        <button class="close-btn" onclick="closeLightbox()">
-            <span class="material-icons">close</span>
-        </button>
+        </div>
     </div>
     
     <script src="{{ url_for('static', filename='scripts/lightbox.js') }}"></script>

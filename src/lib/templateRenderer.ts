@@ -47,6 +47,15 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
   const filenames = mediaFiles.map((m) => m.filename);
   const filenamesJson = JSON.stringify(filenames);
 
+  const emptyHtml =
+    mediaFiles.length === 0
+      ? `<div class="empty-state">
+            <span class="material-icons">photo_library</span>
+            <h3>Il tuo archivio è vuoto</h3>
+            <p>Tocca Carica nella barra fluttuante per cifrare foto e video.</p>
+        </div>`
+      : '';
+
   const cardsHtml = mediaFiles
     .map((media, index) => {
       const file = escapeHtml(media.filename);
@@ -61,8 +70,8 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
                     <div class="video-overlay"><span class="material-icons">play_circle</span></div>`;
 
       return `
-        <div class="media-card-wrapper" data-timestamp="${media.timestamp}">
-            <div class="media-card clickable-media" data-index="${index}">
+        <div class="media-card-wrapper" data-timestamp="${media.timestamp}" data-filename="${file}">
+            <div class="media-card clickable-media" data-index="${index}" data-filename="${file}">
                 ${mediaTag}
                 <div class="media-actions">
                     <form action="/trash/${encodeURIComponent(media.filename)}" method="POST" class="delete-form" data-filename="${file}">
@@ -84,58 +93,28 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
 <div class="gallery-container">
     <header class="gallery-header">
         <div class="header-content">
-            <div>
+            <div class="header-title-group">
                 <h1>Il tuo archivio</h1>
                 <p id="media-count">${mediaFiles.length} elementi</p>
             </div>
-            <div class="header-actions">
-                <div class="grouping-controls btn outlined">
-                    <span class="material-icons">sort</span>
-                    <select id="group-by-select" class="btn-like-select">
-                        <option value="none">Nessun gruppo</option>
-                        <option value="day">Per Giorno</option>
-                        <option value="month" selected>Per Mese</option>
-                        <option value="year">Per Anno</option>
+            <div class="header-top-controls">
+                <div class="grouping-controls">
+                    <span class="material-icons">calendar_view_month</span>
+                    <select id="group-by-select" class="btn-like-select" aria-label="Raggruppa per">
+                        <option value="none">Tutti</option>
+                        <option value="day">Giorno</option>
+                        <option value="month" selected>Mese</option>
+                        <option value="year">Anno</option>
                     </select>
                 </div>
 
                 <button class="btn outlined" id="select-all-btn" title="Seleziona Tutto" style="display: none;">
-                    <span class="material-icons">select_all</span>
+                    <span class="material-icons">done_all</span>
                     <span class="btn-text">Seleziona Tutto</span>
-                </button>
-                <button class="btn primary" id="download-selected-btn" title="Scarica Selezionati" style="display: none;">
-                    <span class="material-icons">download</span>
-                    <span class="btn-text">Scarica</span> (<span id="selected-count">0</span>)
-                </button>
-                <button class="btn danger" id="delete-selected-btn" title="Sposta Selezionati nel Cestino" style="display: none;">
-                    <span class="material-icons">delete_sweep</span>
-                    <span class="btn-text">Sposta nel Cestino</span>
-                </button>
-
-                <form action="/upload" method="POST" enctype="multipart/form-data" class="upload-form" id="upload-form">
-                    <input type="file" id="file-input" name="file[]" accept="image/*,video/*" hidden multiple>
-                    <label for="file-input" class="btn outlined" id="upload-label">
-                        <span class="material-icons">add_photo_alternate</span>
-                        Carica
-                    </label>
-                </form>
-
-                <button class="btn outlined" id="find-duplicates-btn" title="Trova Duplicati">
-                    <span class="material-icons">manage_search</span>
-                </button>
-                <a href="/trash" class="btn icon" title="Cestino">
-                    <span class="material-icons">delete_outline</span>
-                </a>
-
-                <button class="btn icon" id="theme-toggle-btn" title="Passa a tema scuro">
-                    <span class="material-icons">light_mode</span>
-                </button>
-
-                <button class="btn icon" id="logout-btn" title="Esci">
-                    <span class="material-icons">logout</span>
                 </button>
             </div>
         </div>
+
         <div id="scan-status-container" class="scan-status-container" style="display: none;">
             <div id="scan-progress-details">
                 <p id="scan-main-status">Inizio scansione...</p>
@@ -149,7 +128,55 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
     </header>
 
     <div class="gallery-grid" data-media-files='${filenamesJson}'>
+        ${emptyHtml}
         ${cardsHtml}
+    </div>
+
+    <!-- MATERIAL YOU 120HZ FLOATING BAR -->
+    <div class="m3-floating-bar-wrapper">
+        <div class="m3-selection-dock">
+            <button class="btn primary" id="download-selected-btn" title="Scarica Selezionati" style="display: none;">
+                <span class="material-icons">download</span>
+                <span class="btn-text">Scarica</span> (<span id="selected-count">0</span>)
+            </button>
+            <button class="btn danger" id="delete-selected-btn" title="Sposta Selezionati nel Cestino" style="display: none;">
+                <span class="material-icons">delete_sweep</span>
+                <span class="btn-text">Cestina</span>
+            </button>
+        </div>
+
+        <nav class="m3-floating-bar" aria-label="Azioni principali">
+            <a href="/" class="nav-pill active" title="Galleria">
+                <span class="material-icons">photo_library</span>
+                <span class="pill-label">Foto</span>
+            </a>
+
+            <form action="/upload" method="POST" enctype="multipart/form-data" class="upload-form" id="upload-form">
+                <input type="file" id="file-input" name="file[]" accept="image/*,video/*" hidden multiple>
+                <label for="file-input" class="nav-pill tonal-cta" id="upload-label" title="Carica foto o video">
+                    <span class="material-icons">add</span>
+                    <span class="pill-label">Carica</span>
+                </label>
+            </form>
+
+            <button class="nav-pill" id="find-duplicates-btn" title="Trova Duplicati">
+                <span class="material-icons">manage_search</span>
+                <span class="pill-label">Duplicati</span>
+            </button>
+
+            <a href="/trash" class="nav-pill" title="Cestino">
+                <span class="material-icons">delete_outline</span>
+                <span class="pill-label">Cestino</span>
+            </a>
+
+            <button class="nav-pill" id="theme-toggle-btn" title="Tema">
+                <span class="material-icons">light_mode</span>
+            </button>
+
+            <button class="nav-pill" id="logout-btn" title="Esci">
+                <span class="material-icons">logout</span>
+            </button>
+        </nav>
     </div>
 </div>
 
@@ -172,8 +199,7 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
             </button>
         </header>
         <div class="upload-card-body">
-            <ul id="upload-file-list" class="upload-file-list">
-            </ul>
+            <ul id="upload-file-list" class="upload-file-list"></ul>
         </div>
         <footer class="upload-card-footer">
             <p id="upload-card-status">Preparazione...</p>
@@ -227,7 +253,7 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
     document.addEventListener('DOMContentLoaded', () => {
         const groupingControls = document.querySelector('.grouping-controls');
         if (groupingControls) {
-            groupingControls.style.display = 'flex';
+            groupingControls.style.display = 'inline-flex';
         }
 
         const logoutBtn = document.getElementById('logout-btn');
@@ -237,16 +263,29 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
 
         const galleryGrid = document.querySelector('.gallery-grid');
         if (galleryGrid) {
-            const mediaFiles = JSON.parse(galleryGrid.dataset.mediaFiles || '[]');
             galleryGrid.addEventListener('click', (event) => {
                 const clickedCard = event.target.closest('.clickable-media');
                 if (clickedCard && !event.target.closest('.delete-form') && !event.target.matches('.media-checkbox')) {
-                    const index = parseInt(clickedCard.dataset.index, 10);
-                    const filename = mediaFiles[index];
-                    const isVideo = /\\.(mp4|mov|avi|mkv)$/i.test(filename);
-                    const url = \`/media/\${filename}\`;
-                    if (window.openLightbox) {
-                        window.openLightbox(url, isVideo, index, mediaFiles);
+                    const allCards = Array.from(galleryGrid.querySelectorAll('.clickable-media'));
+                    const allUrls = allCards.map(card => {
+                        const df = card.getAttribute('data-filename');
+                        if (df) return \`/media/\${encodeURIComponent(df)}\`;
+                        const img = card.querySelector('img');
+                        if (img && img.getAttribute('src')) return img.getAttribute('src');
+                        const src = card.querySelector('video source');
+                        return src ? src.getAttribute('src').split('#')[0] : '';
+                    }).filter(Boolean);
+
+                    const clickedIndex = Math.max(0, allCards.indexOf(clickedCard));
+                    const filename = clickedCard.getAttribute('data-filename') || '';
+                    const imgEl = clickedCard.querySelector('img');
+                    const url = filename
+                        ? \`/media/\${encodeURIComponent(filename)}\`
+                        : (imgEl ? imgEl.getAttribute('src') : allUrls[clickedIndex]);
+                    const isVideo = /\\.(mp4|mov|avi|mkv|webm)$/i.test(url || '');
+
+                    if (window.openLightbox && url) {
+                        window.openLightbox(url, isVideo, clickedIndex, allUrls);
                     }
                 }
             });
@@ -274,15 +313,15 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
             const result = await response.json();
 
             if (result.success) {
-                cardWrapper.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+                cardWrapper.style.transition = 'opacity 0.22s ease, transform 0.22s ease';
                 cardWrapper.style.opacity = '0';
-                cardWrapper.style.transform = 'scale(0.8)';
+                cardWrapper.style.transform = 'scale(0.85)';
                 setTimeout(() => {
                     cardWrapper.remove();
                     const countElement = document.getElementById('media-count');
                     let currentCount = parseInt(countElement.textContent) || 0;
                     countElement.textContent = \`\${Math.max(0, currentCount - 1)} elementi\`;
-                }, 300);
+                }, 220);
             } else {
                 alert(\`Errore: \${result.error || 'Impossibile spostare il file nel cestino'}\`);
             }
@@ -319,7 +358,7 @@ export function renderTrashTemplate(trashedFiles: MediaItem[]): string {
           .map((media) => {
             const file = escapeHtml(media.filename);
             const ext = file.split('.').pop()?.toLowerCase() || '';
-            const isImg = ['jpg', 'jpeg', 'png'].includes(ext);
+            const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
             const mediaTag = isImg
               ? `<img src="/media/${encodeURIComponent(media.filename)}?from_trash=true" alt="${file}" loading="lazy">`
               : `<video preload="metadata">
@@ -328,7 +367,7 @@ export function renderTrashTemplate(trashedFiles: MediaItem[]): string {
 
             return `
                 <div class="media-card-wrapper">
-                    <div class="media-card">
+                    <div class="media-card clickable-media" data-filename="${file}">
                         ${mediaTag}
                         <div class="media-actions">
                             <button class="btn icon restore-btn" title="Ripristina" data-filename="${file}">
@@ -347,15 +386,11 @@ export function renderTrashTemplate(trashedFiles: MediaItem[]): string {
 <div class="gallery-container">
     <header class="gallery-header">
         <div class="header-content">
-            <div>
+            <div class="header-title-group">
                 <h1>Cestino</h1>
                 <p id="media-count">${trashedFiles.length} elementi</p>
             </div>
-            <div class="header-actions">
-                <a href="/" class="btn outlined">
-                    <span class="material-icons">arrow_back</span>
-                    Torna alla galleria
-                </a>
+            <div class="header-top-controls">
                 ${emptyBtnHtml}
             </div>
         </div>
@@ -367,6 +402,19 @@ export function renderTrashTemplate(trashedFiles: MediaItem[]): string {
                 ${itemsHtml}
             </div>
         </div>
+    </div>
+
+    <div class="m3-floating-bar-wrapper">
+        <nav class="m3-floating-bar" aria-label="Navigazione Cestino">
+            <a href="/" class="nav-pill" title="Torna alla galleria">
+                <span class="material-icons">arrow_back</span>
+                <span class="pill-label">Foto</span>
+            </a>
+            <a href="/trash" class="nav-pill active" title="Cestino">
+                <span class="material-icons">delete</span>
+                <span class="pill-label">Cestino</span>
+            </a>
+        </nav>
     </div>
 </div>
 `;

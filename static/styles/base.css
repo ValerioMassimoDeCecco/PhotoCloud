@@ -1,72 +1,84 @@
 :root {
-    /* === TEMA CHIARO (DEFAULT) === */
-    --primary: #1a73e8; /* Google Blue */
+    /* === MATERIAL YOU (MD3) TONAL PALETTE - LIGHT === */
+    --primary: #0b57d0;
     --on-primary: #ffffff;
-    --primary-container: #d2e3fc;
-    --on-primary-container: #0b429b;
+    --primary-container: #d3e3fd;
+    --on-primary-container: #041e49;
     
-    --secondary: #5f6368; /* Google Gray */
+    --secondary: #00639b;
     --on-secondary: #ffffff;
-    --secondary-container: #e8eaed;
-    --on-secondary-container: #202124;
+    --secondary-container: #c2e7ff;
+    --on-secondary-container: #001d35;
     
-    --tertiary: #188038; /* Google Green */
+    --tertiary: #146c2e;
     --on-tertiary: #ffffff;
-    --on-tertiary-container: #0d652d;
+    --on-tertiary-container: #072711;
     
-    --error: #d93025; /* Google Red */
+    --error: #b3261e;
     --on-error: #ffffff;
-    --error-container: #fce8e6;
-    --on-error-container: #a50e0e;
+    --error-container: #f9dedc;
+    --on-error-container: #410e0b;
     
-    --background: #f8f9fa;
-    --on-background: #202124;
+    --background: #faf9fd;
+    --on-background: #1a1c1e;
     
-    --surface: #ffffff; /* Sfondo di card e componenti */
-    --on-surface: #202124; /* Testo su card e componenti */
-    --surface-variant: #e8eaed;
-    --on-surface-variant: #5f6368; /* Testo secondario */
+    --surface: #faf9fd;
+    --on-surface: #1a1c1e;
+    --surface-variant: #e1e2ec;
+    --on-surface-variant: #44474e;
     
-    --outline: #dadce0;
-    --outline-variant: #e0e0e0;
+    --outline: #74777f;
+    --outline-variant: rgba(68, 71, 78, 0.14);
     
-    --shadow: #000000;
-    --surface-dim: #e8eaed;
-    --surface-bright: #ffffff;
     --surface-container-lowest: #ffffff;
-    --surface-container-low: #f8f9fa;
-    --surface-container: #f1f3f4;
-    --surface-container-high: #e8eaed;
-    --surface-container-highest: #dadce0;
+    --surface-container-low: #f4f3f7;
+    --surface-container: #eeedf1;
+    --surface-container-high: #e8e7ec;
+    --surface-container-highest: #e2e2e6;
+
+    --floating-bar-bg: rgba(238, 237, 241, 0.86);
+    --floating-bar-border: rgba(26, 28, 30, 0.08);
+    --floating-bar-shadow: 0 12px 32px -4px rgba(11, 20, 38, 0.12), 0 4px 12px -2px rgba(11, 20, 38, 0.06);
     
-    --radius-xs: 4px;
-    --radius-s: 8px;
-    --radius-m: 12px;
-    --radius-l: 16px;
-    --radius-xl: 24px;
+    --radius-xs: 6px;
+    --radius-s: 12px;
+    --radius-m: 16px;
+    --radius-l: 24px;
+    --radius-xl: 32px;
+    --radius-pill: 9999px;
+
+    --ease-m3: cubic-bezier(0.2, 0.0, 0, 1.0);
+    --ease-m3-decel: cubic-bezier(0.05, 0.7, 0.1, 1.0);
 }
 
 * {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+}
+
+html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
 body {
-    font-family: 'Roboto', 'Google Sans', 'Segoe UI', system-ui, sans-serif;
+    font-family: 'Inter', 'Google Sans', 'Roboto', system-ui, -apple-system, sans-serif;
     background-color: var(--background);
     color: var(--on-background);
-    min-height: 100vh;
-    padding: 16px;
+    min-height: 100dvh;
+    padding: 0;
     display: flex;
     flex-direction: column;
-    line-height: 1.6;
-    /* NUOVA AGGIUNTA: Transizione fluida per il cambio di tema */
-    transition: background-color 0.3s ease, color 0.3s ease;
+    line-height: 1.5;
+    transition: background-color 0.25s var(--ease-m3), color 0.25s var(--ease-m3);
+    overflow-x: hidden;
 }
 
 .container {
-    max-width: 1600px;
+    max-width: 1440px;
     width: 100%;
     margin: 0 auto;
     flex-grow: 1;
@@ -74,18 +86,56 @@ body {
     flex-direction: column;
 }
 
-/* Lightbox Styles */
+/* ===================================================== */
+/* === MATERIAL YOU 120HZ FULLSCREEN LIGHTBOX        === */
+/* ===================================================== */
+
 .lightbox {
     display: none;
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: #000000;
-    z-index: 1000;
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    background: rgba(8, 8, 10, 0.96);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    z-index: 2000;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s var(--ease-m3);
+    will-change: opacity;
+}
+
+.lightbox.active {
+    opacity: 1;
+}
+
+.lightbox-top-bar {
+    position: absolute;
+    top: max(16px, env(safe-area-inset-top, 16px));
+    left: 16px;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 20;
+    pointer-events: none;
+}
+
+.lightbox-counter {
+    pointer-events: auto;
+    background: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: #f4f4f6;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 8px 16px;
+    border-radius: var(--radius-pill);
+    border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .lightbox-content {
@@ -93,36 +143,33 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    max-width: 98vw;
-    max-height: 98vh;
     width: 100%;
+    height: 100%;
+    padding: 64px 12px;
 }
 
 .media-container {
     position: relative;
-    max-width: 95%;
-    max-height: 95vh;
+    width: 100%;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
-    border: none;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-    background: #000;
 }
 
 .media-container img,
 .media-container video {
-    max-width: 100%;
-    max-height: 85vh;
-    display: block;
-    object-fit: contain;
-}
-
-.media-container video {
+    max-width: 96vw;
+    max-height: 82dvh;
     width: auto;
     height: auto;
-    max-height: 85vh;
-    max-width: 95vw;
+    object-fit: contain;
+    border-radius: var(--radius-m);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    transition: opacity 0.18s var(--ease-m3), transform 0.22s var(--ease-m3-decel);
+    will-change: transform, opacity;
+    user-select: none;
+    -webkit-user-drag: none;
 }
 
 .nav-btn {
@@ -132,22 +179,26 @@ body {
     width: 48px;
     height: 48px;
     border-radius: 50%;
-    background: rgba(32, 33, 36, 0.6);
-    color: white;
-    border: none;
+    background: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.1);
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    z-index: 10;
-    transition: background 0.2s, transform 0.2s;
-    opacity: 0.8;
+    z-index: 15;
+    transition: background 0.18s var(--ease-m3), transform 0.18s var(--ease-m3);
 }
 
 .nav-btn:hover {
-    background: rgba(32, 33, 36, 0.8);
-    opacity: 1;
-    transform: translateY(-50%) scale(1.05);
+    background: rgba(255, 255, 255, 0.22);
+    transform: translateY(-50%) scale(1.06);
+}
+
+.nav-btn:active {
+    transform: translateY(-50%) scale(0.94);
 }
 
 .nav-btn .material-icons {
@@ -158,115 +209,115 @@ body {
 .next-btn { right: 16px; }
 
 .close-btn {
-    position: absolute;
-    top: 16px;
-    right: 16px;
-    color: white;
-    background: rgba(32, 33, 36, 0.6);
-    width: 48px;
-    height: 48px;
+    pointer-events: auto;
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.12);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    width: 44px;
+    height: 44px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 24px;
     cursor: pointer;
-    z-index: 10;
-    border: none;
-    transition: background 0.2s;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition: background 0.18s var(--ease-m3), transform 0.18s var(--ease-m3);
 }
 
-.close-btn:hover { background: rgba(32, 33, 36, 0.8); }
+.close-btn:hover {
+    background: rgba(255, 255, 255, 0.22);
+}
+
+.close-btn:active {
+    transform: scale(0.92);
+}
 
 /* Tipografia */
 h1, h2, h3, p {
-    /* NUOVA AGGIUNTA: transizione fluida per il colore del testo */
-    transition: color 0.3s ease;
+    transition: color 0.2s var(--ease-m3);
 }
 
 h1 {
-    font-size: 24px;
-    font-weight: 500;
-    line-height: 32px;
-    letter-spacing: 0;
-    /* MODIFICA CHIAVE: Usiamo una variabile invece di un colore fisso */
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 28px;
+    letter-spacing: -0.02em;
     color: var(--on-surface);
 }
 
 h2 {
-    font-size: 20px;
-    font-weight: 500;
-    line-height: 28px;
-    color: var(--on-surface); /* Coerenza con h1 */
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 24px;
+    letter-spacing: -0.01em;
+    color: var(--on-surface);
 }
 
 h3 {
-    font-size: 16px;
-    font-weight: 500;
-    line-height: 24px;
-    color: var(--on-surface); /* Coerenza con h1 */
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 22px;
+    color: var(--on-surface);
 }
 
 p {
-    font-size: 14px;
-    line-height: 20px;
-    margin-bottom: 16px;
+    font-size: 13px;
+    line-height: 18px;
     color: var(--on-surface-variant);
 }
 
-/* Media Queries */
-@media (min-width: 768px) {
-    h1 { font-size: 28px; line-height: 36px; }
-    h2 { font-size: 24px; line-height: 32px; }
-}
-
 @media (max-width: 768px) {
-    .nav-btn { width: 40px; height: 40px; }
-    .nav-btn .material-icons { font-size: 20px; }
-    .close-btn { width: 40px; height: 40px; top: 10px; right: 10px; }
+    .nav-btn {
+        width: 42px;
+        height: 42px;
+    }
+    .prev-btn { left: 10px; }
+    .next-btn { right: 10px; }
 }
 
-/* ===================================== */
-/* === NUOVA SEZIONE: TEMA DARK MODE === */
-/* ===================================== */
+/* ===================================================== */
+/* === MATERIAL YOU (MD3) TONAL PALETTE - DARK MODE  === */
+/* ===================================================== */
 
 body.dark-mode {
-    --primary: #8ab4f8;
-    --on-primary: #002d6e;
-    --primary-container: #004a77;
-    --on-primary-container: #d3e4ff;
+    --primary: #a8c7fa;
+    --on-primary: #062e6f;
+    --primary-container: #0842a0;
+    --on-primary-container: #d3e3fd;
 
-    --secondary: #bdc1c6;
-    --on-secondary: #202124;
-    --secondary-container: #4d5156;
-    --on-secondary-container: #e8eaed;
+    --secondary: #7fcfff;
+    --on-secondary: #003355;
+    --secondary-container: #004a77;
+    --on-secondary-container: #c2e7ff;
 
-    --tertiary: #81c995;
-    --on-tertiary: #0d652d;
-    --on-tertiary-container: #188038;
+    --tertiary: #6dd58c;
+    --on-tertiary: #0a3818;
+    --on-tertiary-container: #c4eed0;
 
-    --error: #f28b82;
+    --error: #f2b8b5;
     --on-error: #601410;
     --error-container: #8c1d18;
-    --on-error-container: #fce8e6;
+    --on-error-container: #f9dedc;
 
-    --background: #121212; /* Sfondo principale molto scuro */
-    --on-background: #e6e1e5;
+    --background: #0e0e11;
+    --on-background: #e3e2e6;
 
-    --surface: #1c1b1f; /* Sfondo per card e componenti scuro */
-    /* MODIFICA CHIAVE PER H1: il testo su 'surface' diventa bianco */
-    --on-surface: #e6e1e5; 
-    --surface-variant: #44474f;
-    --on-surface-variant: #cac4d0; /* Testo secondario chiaro */
+    --surface: #0e0e11;
+    --on-surface: #e3e2e6;
+    --surface-variant: #44474e;
+    --on-surface-variant: #c4c6d0;
 
-    --outline: #49454f;
-    --outline-variant: #3a383d;
+    --outline: #8e9099;
+    --outline-variant: rgba(196, 198, 208, 0.12);
 
-    --surface-dim: #141218;
-    --surface-bright: #3a383d;
-    --surface-container-lowest: #0f0d13;
-    --surface-container-low: #1c1b1f;
-    --surface-container: #201f23;
-    --surface-container-high: #2b292d;
-    --surface-container-highest: #363438;
+    --surface-container-lowest: #09090b;
+    --surface-container-low: #16161a;
+    --surface-container: #1c1c22;
+    --surface-container-high: #25262e;
+    --surface-container-highest: #30313a;
+
+    --floating-bar-bg: rgba(28, 28, 34, 0.86);
+    --floating-bar-border: rgba(255, 255, 255, 0.09);
+    --floating-bar-shadow: 0 16px 40px -4px rgba(0, 0, 0, 0.55), 0 4px 14px -2px rgba(0, 0, 0, 0.35);
 }

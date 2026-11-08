@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 
 {% block styles %}
-{# Carica il foglio di stile per la galleria #}
 <link rel="stylesheet" href="{{ url_for('static', filename='styles/gallery.css') }}">
 {% endblock %}
 
@@ -9,71 +8,32 @@
 <div class="gallery-container">
     <header class="gallery-header">
         <div class="header-content">
-            <div>
+            <div class="header-title-group">
                 <h1>Il tuo archivio</h1>
                 <p id="media-count">{{ media_files|length }} elementi</p>
             </div>
-            <div class="header-actions">
-                {# Controlli per il raggruppamento #}
-                <div class="grouping-controls btn outlined">
-                    <span class="material-icons">sort</span>
-                    <select id="group-by-select" class="btn-like-select">
-                        <option value="none">Nessun gruppo</option>
-                        <option value="day">Per Giorno</option>
-                        <option value="month" selected>Per Mese</option>
-                        <option value="year">Per Anno</option>
+            <div class="header-top-controls">
+                <div class="grouping-controls">
+                    <span class="material-icons">calendar_view_month</span>
+                    <select id="group-by-select" class="btn-like-select" aria-label="Raggruppa per">
+                        <option value="none">Tutti</option>
+                        <option value="day">Giorno</option>
+                        <option value="month" selected>Mese</option>
+                        <option value="year">Anno</option>
                     </select>
                 </div>
 
-                {# Bottoni per la selezione multipla (nascosti di default) #}
                 <button class="btn outlined" id="select-all-btn" title="Seleziona Tutto" style="display: none;">
-                    <span class="material-icons">select_all</span>
+                    <span class="material-icons">done_all</span>
                     <span class="btn-text">Seleziona Tutto</span>
-                </button>
-                <button class="btn primary" id="download-selected-btn" title="Scarica Selezionati" style="display: none;">
-                    <span class="material-icons">download</span>
-                    <span class="btn-text">Scarica</span> (<span id="selected-count">0</span>)
-                </button>
-                <button class="btn danger" id="delete-selected-btn" title="Sposta Selezionati nel Cestino" style="display: none;">
-                    <span class="material-icons">delete_sweep</span>
-                    <span class="btn-text">Sposta nel Cestino</span>
-                </button>
-
-                {# Form per l'upload di file #}
-                <form action="/upload" method="POST" enctype="multipart/form-data" class="upload-form" id="upload-form">
-                    <input type="file" id="file-input" name="file[]" accept="image/*,video/*" hidden multiple>
-                    <label for="file-input" class="btn outlined" id="upload-label">
-                        <span class="material-icons">add_photo_alternate</span>
-                        Carica
-                    </label>
-                </form>
-
-                {# Altri bottoni di azione #}
-                <button class="btn outlined" id="find-duplicates-btn" title="Trova Duplicati">
-                    <span class="material-icons">manage_search</span>
-                </button>
-                <a href="{{ url_for('trash_view') }}" class="btn icon" title="Cestino">
-                    <span class="material-icons">delete_outline</span>
-                </a>
-
-                <!-- Pulsante per il cambio di tema -->
-                <button class="btn icon" id="theme-toggle-btn" title="Passa a tema scuro">
-                    <span class="material-icons">light_mode</span>
-                </button>
-
-                <button class="btn icon" id="logout-btn" title="Esci">
-                    <span class="material-icons">logout</span>
                 </button>
             </div>
         </div>
+
         <div id="scan-status-container" class="scan-status-container" style="display: none;">
             <div id="scan-progress-details">
                 <p id="scan-main-status">Inizio scansione...</p>
-                
-                <!-- Barra di progresso nativa -->
                 <progress id="scan-progress-bar" value="0" max="100"></progress>
-                
-                <!-- Contatori per i dettagli -->
                 <div class="scan-counters">
                     <span id="scan-progress-text">File: 0 / ?</span>
                     <span id="scan-duplicates-found">Duplicati trovati: 0</span>
@@ -82,14 +42,19 @@
         </div>
     </header>
 
-    {# Griglia della galleria. I nomi dei file vengono passati a JS #}
     {% set filenames = media_files | map(attribute='filename') | list %}
     <div class="gallery-grid" data-media-files='{{ filenames | tojson | safe }}'>
-        {# Ciclo per mostrare tutte le card dei media #}
+        {% if media_files|length == 0 %}
+        <div class="empty-state">
+            <span class="material-icons">photo_library</span>
+            <h3>Il tuo archivio è vuoto</h3>
+            <p>Tocca Carica nella barra fluttuante per cifrare foto e video.</p>
+        </div>
+        {% endif %}
         {% for media in media_files %}
-        <div class="media-card-wrapper" data-timestamp="{{ media.timestamp }}">
-            <div class="media-card clickable-media" data-index="{{ loop.index0 }}">
-                {% set file = media.filename %}
+        {% set file = media.filename %}
+        <div class="media-card-wrapper" data-timestamp="{{ media.timestamp }}" data-filename="{{ file }}">
+            <div class="media-card clickable-media" data-index="{{ loop.index0 }}" data-filename="{{ file }}">
                 {% if file.split('.')[-1]|lower in ['jpg', 'jpeg', 'png', 'gif', 'webp'] %}
                     <img src="{{ url_for('media', filename=file) }}" alt="{{ file }}" loading="lazy">
                 {% else %}
@@ -111,11 +76,57 @@
         </div>
         {% endfor %}
     </div>
+
+    <!-- MATERIAL YOU 120HZ FLOATING BAR -->
+    <div class="m3-floating-bar-wrapper">
+        <div class="m3-selection-dock">
+            <button class="btn primary" id="download-selected-btn" title="Scarica Selezionati" style="display: none;">
+                <span class="material-icons">download</span>
+                <span class="btn-text">Scarica</span> (<span id="selected-count">0</span>)
+            </button>
+            <button class="btn danger" id="delete-selected-btn" title="Sposta Selezionati nel Cestino" style="display: none;">
+                <span class="material-icons">delete_sweep</span>
+                <span class="btn-text">Cestina</span>
+            </button>
+        </div>
+
+        <nav class="m3-floating-bar" aria-label="Azioni principali">
+            <a href="/" class="nav-pill active" title="Galleria">
+                <span class="material-icons">photo_library</span>
+                <span class="pill-label">Foto</span>
+            </a>
+
+            <form action="/upload" method="POST" enctype="multipart/form-data" class="upload-form" id="upload-form">
+                <input type="file" id="file-input" name="file[]" accept="image/*,video/*" hidden multiple>
+                <label for="file-input" class="nav-pill tonal-cta" id="upload-label" title="Carica foto o video">
+                    <span class="material-icons">add</span>
+                    <span class="pill-label">Carica</span>
+                </label>
+            </form>
+
+            <button class="nav-pill" id="find-duplicates-btn" title="Trova Duplicati">
+                <span class="material-icons">manage_search</span>
+                <span class="pill-label">Duplicati</span>
+            </button>
+
+            <a href="{{ url_for('trash_view') }}" class="nav-pill" title="Cestino">
+                <span class="material-icons">delete_outline</span>
+                <span class="pill-label">Cestino</span>
+            </a>
+
+            <button class="nav-pill" id="theme-toggle-btn" title="Tema">
+                <span class="material-icons">light_mode</span>
+            </button>
+
+            <button class="nav-pill" id="logout-btn" title="Esci">
+                <span class="material-icons">logout</span>
+            </button>
+        </nav>
+    </div>
 </div>
 
 <!-- INDICATORE DI UPLOAD FLUTTUANTE -->
 <div id="upload-indicator-container" class="upload-indicator-container" style="display: none;">
-    <!-- Stato Chiuso (la "gemma" circolare) -->
     <div id="upload-gem" class="upload-gem">
         <svg class="upload-progress-ring" width="56" height="56">
             <circle class="progress-ring-track" cx="28" cy="28" r="24"></circle>
@@ -125,7 +136,6 @@
         <span id="upload-indicator-percentage">0%</span>
     </div>
 
-    <!-- Stato Aperto (la card con i dettagli) -->
     <div id="upload-details-card" class="upload-details-card">
         <header class="upload-card-header">
             <h3 id="upload-card-title">In caricamento...</h3>
@@ -134,9 +144,7 @@
             </button>
         </header>
         <div class="upload-card-body">
-            <ul id="upload-file-list" class="upload-file-list">
-                <!-- I file in caricamento verranno aggiunti qui da JavaScript -->
-            </ul>
+            <ul id="upload-file-list" class="upload-file-list"></ul>
         </div>
         <footer class="upload-card-footer">
             <p id="upload-card-status">Preparazione...</p>
@@ -144,18 +152,15 @@
     </div>
 </div>
 
-{# Form nascosto per il logout #}
 <form action="/logout" method="POST" id="logout-form" style="display:none;"></form>
 {% endblock %}
 
 {% block scripts %}
-{# Script esterni #}
 <script src="{{ url_for('static', filename='scripts/duplicates.js') }}"></script>
 <script src="{{ url_for('static', filename='scripts/selection.js') }}"></script>
 <script src="{{ url_for('static', filename='scripts/upload.js') }}"></script>
 <script src="{{ url_for('static', filename='scripts/grouping.js') }}"></script>
 
-<!-- Script per la gestione del tema dark/light -->
 <script>
     document.addEventListener('DOMContentLoaded', () => {
         const themeToggleBtn = document.getElementById('theme-toggle-btn');
@@ -164,43 +169,36 @@
         const body = document.body;
         const icon = themeToggleBtn.querySelector('.material-icons');
 
-        // Funzione per applicare un tema specifico (dark/light)
         const applyTheme = (theme) => {
             if (theme === 'dark') {
                 body.classList.add('dark-mode');
-                icon.textContent = 'dark_mode'; // Icona luna
+                icon.textContent = 'dark_mode';
                 themeToggleBtn.title = 'Passa a tema chiaro';
             } else {
                 body.classList.remove('dark-mode');
-                icon.textContent = 'light_mode'; // Icona sole
+                icon.textContent = 'light_mode';
                 themeToggleBtn.title = 'Passa a tema scuro';
             }
         };
 
-        // Funzione per cambiare tema e salvarlo nel localStorage
         const toggleTheme = () => {
             const newTheme = body.classList.contains('dark-mode') ? 'light' : 'dark';
             localStorage.setItem('theme', newTheme);
             applyTheme(newTheme);
         };
 
-        // Al caricamento, applica il tema salvato o quello preferito dal sistema
         const savedTheme = localStorage.getItem('theme');
         const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        
         applyTheme(savedTheme || (prefersDark ? 'dark' : 'light'));
-
-        // Aggiungi l'evento click al pulsante
         themeToggleBtn.addEventListener('click', toggleTheme);
     });
 </script>
 
-{# Script inline per la logica specifica della pagina #}
 <script>
     document.addEventListener('DOMContentLoaded', () => {
         const groupingControls = document.querySelector('.grouping-controls');
         if (groupingControls) {
-            groupingControls.style.display = 'flex';
+            groupingControls.style.display = 'inline-flex';
         }
 
         const logoutBtn = document.getElementById('logout-btn');
@@ -208,26 +206,37 @@
             logoutBtn.addEventListener('click', () => document.getElementById('logout-form').submit());
         }
 
-        // Gestione click per aprire la lightbox
         const galleryGrid = document.querySelector('.gallery-grid');
         if (galleryGrid) {
-            const mediaFiles = JSON.parse(galleryGrid.dataset.mediaFiles || '[]');
             galleryGrid.addEventListener('click', (event) => {
                 const clickedCard = event.target.closest('.clickable-media');
                 if (clickedCard && !event.target.closest('.delete-form') && !event.target.matches('.media-checkbox')) {
-                    const index = parseInt(clickedCard.dataset.index, 10);
-                    const filename = mediaFiles[index];
-                    const isVideo = /\.(mp4|mov|avi|mkv)$/i.test(filename);
-                    const url = `/media/${filename}`;
-                    if (window.openLightbox) {
-                        window.openLightbox(url, isVideo, index, mediaFiles);
+                    const allCards = Array.from(galleryGrid.querySelectorAll('.clickable-media'));
+                    const allUrls = allCards.map(card => {
+                        const df = card.getAttribute('data-filename');
+                        if (df) return `/media/${encodeURIComponent(df)}`;
+                        const img = card.querySelector('img');
+                        if (img && img.getAttribute('src')) return img.getAttribute('src');
+                        const src = card.querySelector('video source');
+                        return src ? src.getAttribute('src').split('#')[0] : '';
+                    }).filter(Boolean);
+
+                    const clickedIndex = Math.max(0, allCards.indexOf(clickedCard));
+                    const filename = clickedCard.getAttribute('data-filename') || '';
+                    const imgEl = clickedCard.querySelector('img');
+                    const url = filename
+                        ? `/media/${encodeURIComponent(filename)}`
+                        : (imgEl ? imgEl.getAttribute('src') : allUrls[clickedIndex]);
+                    const isVideo = /\.(mp4|mov|avi|mkv|webm)$/i.test(url || '');
+
+                    if (window.openLightbox && url) {
+                        window.openLightbox(url, isVideo, clickedIndex, allUrls);
                     }
                 }
             });
         }
     });
 
-    // Funzione asincrona per spostare un file nel cestino
     async function handleDelete(event, button) {
         event.stopPropagation();
         event.preventDefault();
@@ -249,17 +258,15 @@
             const result = await response.json();
 
             if (result.success) {
-                // Animazione di rimozione
-                cardWrapper.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+                cardWrapper.style.transition = 'opacity 0.22s ease, transform 0.22s ease';
                 cardWrapper.style.opacity = '0';
-                cardWrapper.style.transform = 'scale(0.8)';
+                cardWrapper.style.transform = 'scale(0.85)';
                 setTimeout(() => {
                     cardWrapper.remove();
-                    // Aggiorna il conteggio totale
                     const countElement = document.getElementById('media-count');
                     let currentCount = parseInt(countElement.textContent) || 0;
                     countElement.textContent = `${Math.max(0, currentCount - 1)} elementi`;
-                }, 300);
+                }, 220);
             } else {
                 alert(`Errore: ${result.error || 'Impossibile spostare il file nel cestino'}`);
             }
