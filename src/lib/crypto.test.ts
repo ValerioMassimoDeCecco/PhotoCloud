@@ -36,9 +36,9 @@ test('hashKey and verifyKey validate API keys accurately', () => {
   assert.equal(verifyKey('WrongKey!2026', hashed), false);
 });
 
-test('encryptFile and decryptFile round-trip binary media data accurately', () => {
+test('encryptFile and decryptFile round-trip binary media and non-media data accurately', () => {
   const key = generateApiKey(32);
-  const original = Buffer.from('Immagine JPEG cifrata di test 1234567890', 'utf-8');
+  const original = Buffer.from('Documento PDF / Archivio ZIP cifrato di test 1234567890', 'utf-8');
   const encrypted = encryptFile(original, key);
   assert.notDeepEqual(encrypted, original);
   assert.ok(encrypted.length > original.length);
@@ -62,23 +62,48 @@ test('findDuplicateGroups detects identical file hashes and sorts filenames', ()
   assert.deepEqual(duplicates, [['a_original.jpg', 'b_copy.jpg']]);
 });
 
-test('Original templates (login.html, gallery.html, trash.html) render faithfully', () => {
+test('Templates render non-media Cloud File Manager, Album grouping, and Top-Right Transfer Center', () => {
   const loginHtml = renderLoginTemplate();
   assert.ok(loginHtml.includes('Il tuo archivio foto/video sicuro'));
   assert.ok(loginHtml.includes('/static/styles/login.css'));
 
-  const galleryHtml = renderGalleryTemplate([
-    { filename: 'abc12345.jpg', timestamp: 1700000000, size: 1024 },
-  ]);
+  const galleryHtml = renderGalleryTemplate(
+    [
+      {
+        filename: 'abc12345.jpg',
+        timestamp: 1700000000,
+        size: 102400,
+        isMedia: true,
+        category: 'media',
+        album: 'Vacanze 2026',
+      },
+      {
+        filename: 'contratto.pdf',
+        timestamp: 1700000500,
+        size: 524288,
+        isMedia: false,
+        category: 'document',
+        album: 'Documenti',
+      },
+    ],
+    ['Vacanze 2026', 'Documenti']
+  );
   assert.ok(galleryHtml.includes('Il tuo archivio'));
-  assert.ok(galleryHtml.includes('1 elementi'));
+  assert.ok(galleryHtml.includes('2 elementi'));
   assert.ok(galleryHtml.includes('/media/abc12345.jpg'));
+  assert.ok(galleryHtml.includes('data-is-media="false"'));
+  assert.ok(galleryHtml.includes('data-category="document"'));
+  assert.ok(galleryHtml.includes('data-album="Vacanze 2026"'));
+  assert.ok(galleryHtml.includes('value="album">Album</option>'));
+  assert.ok(galleryHtml.includes('id="tab-files-btn"'));
+  assert.ok(galleryHtml.includes('id="upload-indicator-container"'));
+  assert.ok(galleryHtml.includes('id="upload-speed-badge"'));
 
   const trashHtml = renderTrashTemplate([]);
   assert.ok(trashHtml.includes('Il cestino è vuoto'));
 });
 
-test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android project are configured', async () => {
+test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android v1.0.6 project are configured', async () => {
   const workflowPath = path.resolve(process.cwd(), '.github/workflows/android-release.yml');
   assert.ok(fs.existsSync(workflowPath));
   const workflowYaml = fs.readFileSync(workflowPath, 'utf-8');
@@ -90,7 +115,7 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
   assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
   assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));
-  assert.ok(workflowYaml.includes('photocloud-release-v1.0.5-signed.apk'));
+  assert.ok(workflowYaml.includes('photocloud-release-v1.0.6-signed.apk'));
   assert.equal(workflowYaml.includes('rm -f photocloud-release-key.jks'), false);
 
   const keystorePath = path.resolve(process.cwd(), 'android-app/app/photocloud-release-key.jks');
@@ -106,29 +131,35 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
     path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
     'utf-8'
   );
+  const apiClientKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt'),
+    'utf-8'
+  );
+
   assert.equal(mainActivityKt.includes('android.webkit.WebView'), false);
   assert.equal(mainActivityKt.includes('isCheckingSession'), false);
   assert.ok(mainActivityKt.includes('hasActiveSessionCookie'));
   assert.ok(mainActivityKt.includes('getCachedGalleryItems'));
   assert.ok(mainActivityKt.includes('detectDragGesturesAfterLongPress'));
   assert.ok(mainActivityKt.includes('NativeSettingsScreen'));
-  assert.ok(mainActivityKt.includes('setLauncherIconMonochrome'));
-  assert.ok(mainActivityKt.includes('BiometricPrompt'));
-  assert.ok(mainActivityKt.includes('BiometricManager'));
-  assert.ok(mainActivityKt.includes('NativeBiometricLockScreen'));
-  assert.ok(mainActivityKt.includes('LazyVerticalGrid'));
-  assert.ok(mainActivityKt.includes('HorizontalPager'));
-  assert.ok(mainActivityKt.includes('NativeLightboxModal'));
-  assert.ok(mainActivityKt.includes('Alignment.BottomCenter'));
+  assert.ok(mainActivityKt.includes('NativeCloudFileManagerScreen'));
+  assert.ok(mainActivityKt.includes('TransferOperationsFloatingCard'));
+  assert.ok(mainActivityKt.includes('AlbumManagerDialog'));
+  assert.ok(mainActivityKt.includes('ALBUM("Album")'));
+  assert.ok(mainActivityKt.includes('VaultTab.FILES'));
+  assert.ok(apiClientKt.includes('ProgressRequestBody'));
+  assert.ok(apiClientKt.includes('TransferOperation'));
+  assert.ok(apiClientKt.includes('formatSpeedHuman'));
+  assert.ok(apiClientKt.includes('assignFilesToAlbum'));
 
   const outDir = path.resolve(process.cwd(), 'release');
   const res = await compileSignedAndroidApk(outDir);
   assert.ok(fs.existsSync(res.apkPath));
-  assert.ok(res.apkPath.endsWith('photocloud-release-v1.0.5-signed.apk'));
+  assert.ok(res.apkPath.endsWith('photocloud-release-v1.0.6-signed.apk'));
   assert.equal(res.sha256.length, 64);
 
   const actionsStatus = await triggerGitHubActionsBuild();
   assert.equal(actionsStatus.repo, 'ValerioMassimoDeCecco/PhotoCloud');
   assert.equal(actionsStatus.workflowFile, '.github/workflows/android-release.yml');
-  assert.equal(actionsStatus.releaseTag, 'v1.0.5');
+  assert.equal(actionsStatus.releaseTag, 'v1.0.6');
 });

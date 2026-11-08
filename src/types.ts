@@ -1,7 +1,12 @@
+export type FileCategory = 'media' | 'document' | 'archive' | 'audio' | 'code' | 'other';
+
 export interface MediaItem {
   filename: string;
   timestamp: number;
   size?: number;
+  isMedia?: boolean;
+  category?: FileCategory;
+  album?: string;
 }
 
 export interface GroupedMedia {

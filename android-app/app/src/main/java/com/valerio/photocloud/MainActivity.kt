@@ -38,14 +38,17 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -53,33 +56,45 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PhotoAlbum
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestoreFromTrash
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Visibility
@@ -111,7 +126,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -126,7 +140,8 @@ enum class GroupingMode(val label: String) {
     NONE("Tutti"),
     DAY("Giorno"),
     MONTH("Mese"),
-    YEAR("Anno")
+    YEAR("Anno"),
+    ALBUM("Album")
 }
 
 enum class SortOrder(val label: String) {
@@ -215,6 +230,7 @@ enum class AccentPreset(
 
 enum class VaultTab {
     GALLERY,
+    FILES,
     TRASH,
     SETTINGS
 }
@@ -243,12 +259,13 @@ data class CustomizationState(
 )
 
 /**
- * PhotoCloud 100% Native Android Client v1.0.5
+ * PhotoCloud 100% Native Android Client v1.0.6
+ * - Cloud File Manager for non-media files (PDF, ZIP, APK, Docs, Audio, Code, etc.)
+ * - Top-Right Upload/Download Transfer Center with floating operations menu (real-time speed, size, progress)
+ * - Media & File Grouping by Album (create, assign, filter, delete albums)
  * - 0ms Instant Startup (Synchronous cookie/cache hydration, zero loading circle)
  * - Drag-to-Select Multiple Media in LazyVerticalGrid
- * - Full Settings & Customization Menu (Grid, Theme, AMOLED, Accents, Security, Floating Bar, Cache)
- * - Dual App Icon Support (Color Purple/Night & Black/White Monochrome via Launcher Aliases)
- * - Native Biometric Authentication (BiometricPrompt)
+ * - Full Settings & Customization Menu + Dual App Icon Support (Color & B/W)
  */
 class MainActivity : FragmentActivity() {
 
@@ -517,7 +534,6 @@ fun PhotoCloudLogoBadge(
         val w = size.width
         val h = size.height
 
-        // 1. Squircle gradient background
         val bgColors = if (monochrome) {
             listOf(Color(0xFF343434), Color(0xFF1A1A1A), Color(0xFF070707))
         } else {
@@ -541,7 +557,6 @@ fun PhotoCloudLogoBadge(
 
         val sw = w * 0.035f
 
-        // 2. Back rounded frame
         drawRoundRect(
             color = strokeBack,
             topLeft = Offset(w * 0.23f, h * 0.38f),
@@ -550,7 +565,6 @@ fun PhotoCloudLogoBadge(
             style = Stroke(width = sw)
         )
 
-        // 3. Middle rounded frame
         drawRoundRect(
             color = fillMid,
             topLeft = Offset(w * 0.32f, h * 0.31f),
@@ -565,7 +579,6 @@ fun PhotoCloudLogoBadge(
             style = Stroke(width = sw)
         )
 
-        // 4. Sun & Glow (top-right)
         val sunCenter = Offset(w * 0.685f, h * 0.285f)
         drawCircle(
             color = sunColor.copy(alpha = 0.16f),
@@ -583,7 +596,6 @@ fun PhotoCloudLogoBadge(
             center = sunCenter
         )
 
-        // 5. Front folded right-triangle card
         val triPath = Path().apply {
             moveTo(w * 0.41f, h * 0.25f)
             lineTo(w * 0.75f, h * 0.59f)
@@ -662,6 +674,9 @@ fun PhotoCloudNativeApp(
     var trashItems by remember(serverUrl) {
         mutableStateOf(apiClient.getCachedTrashItems())
     }
+    var albumsList by remember(serverUrl) {
+        mutableStateOf(apiClient.getCachedAlbums())
+    }
     var infoDialogMessage by remember { mutableStateOf<String?>(null) }
 
     fun saveKeyForBiometrics(bytes: ByteArray) {
@@ -670,12 +685,19 @@ fun PhotoCloudNativeApp(
         prefs.edit().putString("saved_auth_key_b64", b64).apply()
     }
 
+    fun refreshLocalCacheOnly() {
+        galleryItems = apiClient.getCachedGalleryItems()
+        trashItems = apiClient.getCachedTrashItems()
+        albumsList = apiClient.getCachedAlbums()
+    }
+
     fun refreshVaultSilently() {
         scope.launch {
             when (val syncResult = apiClient.syncGallerySession()) {
                 is GallerySyncResult.Authenticated -> {
                     isAuthenticated = true
                     galleryItems = syncResult.items
+                    albumsList = apiClient.getCachedAlbums()
                     trashItems = apiClient.fetchTrashItems()
                 }
                 is GallerySyncResult.Unauthenticated -> {
@@ -684,6 +706,7 @@ fun PhotoCloudNativeApp(
                     isBiometricLocked = false
                     galleryItems = emptyList()
                     trashItems = emptyList()
+                    albumsList = emptyList()
                 }
                 is GallerySyncResult.NetworkError -> {
                     // Keep showing cached items without interrupting the user
@@ -692,7 +715,6 @@ fun PhotoCloudNativeApp(
         }
     }
 
-    // Trigger BiometricPrompt immediately at 0ms if vault is locked on startup
     LaunchedEffect(isAuthenticated, isBiometricLocked) {
         if (isAuthenticated && isBiometricLocked) {
             activity.showBiometricPrompt(
@@ -702,7 +724,6 @@ fun PhotoCloudNativeApp(
         }
     }
 
-    // Silent background sync only when a session cookie exists
     LaunchedEffect(serverUrl) {
         if (apiClient.hasActiveSessionCookie()) {
             refreshVaultSilently()
@@ -741,8 +762,7 @@ fun PhotoCloudNativeApp(
             onLoginSuccess = {
                 isAuthenticated = true
                 isBiometricLocked = false
-                galleryItems = apiClient.getCachedGalleryItems()
-                trashItems = apiClient.getCachedTrashItems()
+                refreshLocalCacheOnly()
                 refreshVaultSilently()
             },
             onShowInfo = { msg ->
@@ -756,6 +776,7 @@ fun PhotoCloudNativeApp(
             serverUrl = serverUrl,
             galleryItems = galleryItems,
             trashItems = trashItems,
+            albumsList = albumsList,
             custom = custom,
             isDarkTheme = isDarkTheme,
             onUpdateCustom = onUpdateCustom,
@@ -767,6 +788,7 @@ fun PhotoCloudNativeApp(
                 }
             },
             onRefresh = { refreshVaultSilently() },
+            onLocalAlbumsChanged = { refreshLocalCacheOnly() },
             onOpenServerConfig = {
                 tempServerInput = serverUrl
                 showServerDialog = true
@@ -777,6 +799,7 @@ fun PhotoCloudNativeApp(
                     isAuthenticated = false
                     galleryItems = emptyList()
                     trashItems = emptyList()
+                    albumsList = emptyList()
                 }
             },
             onShowInfo = { msg ->
@@ -875,7 +898,7 @@ fun NativeBiometricLockScreen(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "Autenticati con impronta o volto per sbloccare le tue foto",
+                    text = "Autenticati con impronta o volto per sbloccare foto e file cloud",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -1010,7 +1033,7 @@ fun NativeAuthScreen(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "Archivio foto e video crittografato",
+                        text = "Galleria & Cloud File Manager crittografato",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1314,10 +1337,6 @@ fun NativeAuthScreen(
     }
 }
 
-/**
- * Finds the filename of the media tile located at the pointer's current [offset]
- * inside the [LazyGridState] layout info.
- */
 private fun findMediaFilenameAtOffset(gridState: LazyGridState, offset: Offset): String? {
     val hitItem = gridState.layoutInfo.visibleItemsInfo.firstOrNull { info ->
         val keyStr = info.key as? String ?: return@firstOrNull false
@@ -1339,11 +1358,13 @@ fun NativeVaultScreen(
     serverUrl: String,
     galleryItems: List<MediaItemModel>,
     trashItems: List<MediaItemModel>,
+    albumsList: List<String>,
     custom: CustomizationState,
     isDarkTheme: Boolean,
     onUpdateCustom: (CustomizationState) -> Unit,
     onLockNow: () -> Unit,
     onRefresh: () -> Unit,
+    onLocalAlbumsChanged: () -> Unit,
     onOpenServerConfig: () -> Unit,
     onLogout: () -> Unit,
     onShowInfo: (String) -> Unit
@@ -1355,22 +1376,73 @@ fun NativeVaultScreen(
     var groupingMode by remember(custom.defaultGrouping) { mutableStateOf(custom.defaultGrouping) }
     var showGroupingMenu by remember { mutableStateOf(false) }
 
+    var selectedAlbumFilter by remember { mutableStateOf<String?>(null) }
+    var showAlbumDialog by remember { mutableStateOf(false) }
+
     var selectedFilenames by remember { mutableStateOf<Set<String>>(emptySet()) }
     var lightboxInitialIndex by remember { mutableStateOf<Int?>(null) }
     var pendingTrashConfirmFilenames by remember { mutableStateOf<List<String>?>(null) }
 
-    var isUploading by remember { mutableStateOf(false) }
-    var uploadProgressText by remember { mutableStateOf("") }
+    // Top-Right Transfer Operations State (Uploads & Downloads with live speed & size)
+    var transferOperations by remember { mutableStateOf<List<TransferOperation>>(emptyList()) }
+    var showTransferPopup by remember { mutableStateOf(false) }
+
+    fun upsertTransferOperation(op: TransferOperation) {
+        val current = transferOperations.toMutableList()
+        val idx = current.indexOfFirst { it.id == op.id }
+        if (idx >= 0) {
+            current[idx] = op
+        } else {
+            current.add(0, op)
+        }
+        transferOperations = current.take(25)
+    }
+
+    val activeRunningOps = remember(transferOperations) {
+        transferOperations.filter { it.status == TransferStatus.RUNNING }
+    }
+    val totalLiveSpeed = remember(activeRunningOps) {
+        activeRunningOps.sumOf { it.speedBytesPerSec }
+    }
+    val overallProgressFraction = remember(activeRunningOps) {
+        val totalB = activeRunningOps.sumOf { it.totalBytes }
+        val doneB = activeRunningOps.sumOf { it.transferredBytes }
+        if (totalB > 0L) (doneB.toFloat() / totalB.toFloat()).coerceIn(0f, 1f) else 0f
+    }
 
     var isScanningDuplicates by remember { mutableStateOf(false) }
     var duplicateGroups by remember { mutableStateOf<List<List<String>>?>(null) }
 
-    val rawItems = if (currentTab == VaultTab.GALLERY) galleryItems else trashItems
-    val activeItems = remember(rawItems, custom.sortOrder) {
+    val mediaOnlyItems = remember(galleryItems) {
+        galleryItems.filter { it.isMedia }
+    }
+    val nonMediaCloudFiles = remember(galleryItems) {
+        galleryItems.filter { !it.isMedia }
+    }
+
+    val allAlbumNames = remember(albumsList, galleryItems) {
+        val fromItems = galleryItems.mapNotNull { it.album.takeIf { a -> a.isNotBlank() } }
+        (albumsList + fromItems).distinct().sorted()
+    }
+
+    val rawItemsForCurrentTab = when (currentTab) {
+        VaultTab.GALLERY -> {
+            if (selectedAlbumFilter != null) {
+                mediaOnlyItems.filter { it.album == selectedAlbumFilter }
+            } else {
+                mediaOnlyItems
+            }
+        }
+        VaultTab.FILES -> nonMediaCloudFiles
+        VaultTab.TRASH -> trashItems
+        VaultTab.SETTINGS -> emptyList()
+    }
+
+    val activeItems = remember(rawItemsForCurrentTab, custom.sortOrder) {
         when (custom.sortOrder) {
-            SortOrder.NEWEST -> rawItems.sortedByDescending { it.timestamp }
-            SortOrder.OLDEST -> rawItems.sortedBy { it.timestamp }
-            SortOrder.NAME_ASC -> rawItems.sortedBy { it.filename.lowercase() }
+            SortOrder.NEWEST -> rawItemsForCurrentTab.sortedByDescending { it.timestamp }
+            SortOrder.OLDEST -> rawItemsForCurrentTab.sortedBy { it.timestamp }
+            SortOrder.NAME_ASC -> rawItemsForCurrentTab.sortedBy { it.filename.lowercase() }
         }
     }
     val isFromTrash = currentTab == VaultTab.TRASH
@@ -1379,13 +1451,14 @@ fun NativeVaultScreen(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
-            isUploading = true
-            uploadProgressText = "Caricamento 0 / ${uris.size}..."
+            showTransferPopup = true
+            val targetAlb = selectedAlbumFilter ?: ""
             scope.launch {
-                val (ok, msg) = apiClient.uploadMediaUris(uris) { done, total ->
-                    uploadProgressText = "Caricamento $done / $total..."
-                }
-                isUploading = false
+                val (ok, msg) = apiClient.uploadMediaUris(
+                    uris = uris,
+                    targetAlbum = targetAlb,
+                    onTransferUpdate = { op -> upsertTransferOperation(op) }
+                )
                 onShowInfo(msg)
                 if (ok) {
                     onRefresh()
@@ -1397,12 +1470,19 @@ fun NativeVaultScreen(
     val groupedSections = remember(activeItems, groupingMode, currentTab) {
         if (currentTab == VaultTab.TRASH || groupingMode == GroupingMode.NONE) {
             listOf("" to activeItems)
+        } else if (groupingMode == GroupingMode.ALBUM) {
+            val byAlbum = activeItems.groupBy { item ->
+                item.album.ifBlank { "Senza Album" }
+            }
+            byAlbum.entries
+                .sortedWith(compareBy<Map.Entry<String, List<MediaItemModel>>> { it.key == "Senza Album" }.thenBy { it.key.lowercase() })
+                .map { "📁 ${it.key} (${it.value.size})" to it.value }
         } else {
             val fmt = when (groupingMode) {
                 GroupingMode.DAY -> SimpleDateFormat("dd MMMM yyyy", Locale.ITALIAN)
                 GroupingMode.MONTH -> SimpleDateFormat("MMMM yyyy", Locale.ITALIAN)
                 GroupingMode.YEAR -> SimpleDateFormat("yyyy", Locale.ITALIAN)
-                GroupingMode.NONE -> SimpleDateFormat("yyyy", Locale.ITALIAN)
+                else -> SimpleDateFormat("MMMM yyyy", Locale.ITALIAN)
             }
             activeItems.groupBy { item ->
                 val label = fmt.format(Date((item.timestamp * 1000).toLong()))
@@ -1411,8 +1491,11 @@ fun NativeVaultScreen(
         }
     }
 
-    BackHandler(enabled = lightboxInitialIndex != null || selectedFilenames.isNotEmpty() || currentTab != VaultTab.GALLERY) {
+    BackHandler(
+        enabled = showTransferPopup || lightboxInitialIndex != null || selectedFilenames.isNotEmpty() || currentTab != VaultTab.GALLERY
+    ) {
         when {
+            showTransferPopup -> showTransferPopup = false
             lightboxInitialIndex != null -> lightboxInitialIndex = null
             selectedFilenames.isNotEmpty() -> selectedFilenames = emptySet()
             currentTab != VaultTab.GALLERY -> currentTab = VaultTab.GALLERY
@@ -1421,7 +1504,6 @@ fun NativeVaultScreen(
 
     val gridState = rememberLazyGridState()
 
-    // State for Drag-to-Select gesture
     var dragStartIndex by remember { mutableStateOf<Int?>(null) }
     var dragLastIndex by remember { mutableStateOf<Int?>(null) }
     var dragAddingSelection by remember { mutableStateOf(true) }
@@ -1437,7 +1519,7 @@ fun NativeVaultScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Minimalist Material You Top Header
+            // Minimalist Material You Top Header with Top-Right Transfer Center Button
             Surface(
                 color = MaterialTheme.colorScheme.background.copy(alpha = 0.94f),
                 modifier = Modifier.fillMaxWidth()
@@ -1446,38 +1528,47 @@ fun NativeVaultScreen(
                     modifier = Modifier
                         .statusBarsPadding()
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
                         PhotoCloudLogoBadge(
                             monochrome = custom.monochromeAppIcon,
-                            modifier = Modifier.size(38.dp)
+                            modifier = Modifier.size(36.dp)
                         )
                         Column {
                             Text(
-                                text = when (currentTab) {
-                                    VaultTab.GALLERY -> if (selectedFilenames.isNotEmpty()) "${selectedFilenames.size} selezionati" else "Archivio"
-                                    VaultTab.TRASH -> "Cestino"
-                                    VaultTab.SETTINGS -> "Impostazioni"
+                                text = when {
+                                    selectedFilenames.isNotEmpty() -> "${selectedFilenames.size} selezionati"
+                                    currentTab == VaultTab.GALLERY -> "Galleria"
+                                    currentTab == VaultTab.FILES -> "File Manager Cloud"
+                                    currentTab == VaultTab.TRASH -> "Cestino"
+                                    currentTab == VaultTab.SETTINGS -> "Impostazioni"
+                                    else -> "PhotoCloud"
                                 },
                                 style = MaterialTheme.typography.titleLarge.copy(
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = (-0.5).sp
                                 ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 color = MaterialTheme.colorScheme.onBackground
                             )
                             Text(
                                 text = when (currentTab) {
-                                    VaultTab.GALLERY -> "${galleryItems.size} elementi • Trascina per selezionare"
+                                    VaultTab.GALLERY -> "${mediaOnlyItems.size} foto/video • ${allAlbumNames.size} album"
+                                    VaultTab.FILES -> "${nonMediaCloudFiles.size} file cloud (${PhotoCloudApiClient.formatBytesHuman(nonMediaCloudFiles.sumOf { it.size })})"
                                     VaultTab.TRASH -> "${trashItems.size} elementi nel cestino"
                                     VaultTab.SETTINGS -> "Personalizzazione & Opzioni Generali"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -1487,7 +1578,7 @@ fun NativeVaultScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        if (currentTab == VaultTab.GALLERY && activeItems.isNotEmpty()) {
+                        if (currentTab == VaultTab.GALLERY) {
                             Box {
                                 Surface(
                                     onClick = { showGroupingMenu = true },
@@ -1496,9 +1587,9 @@ fun NativeVaultScreen(
                                 ) {
                                     Text(
                                         text = groupingMode.label,
-                                        style = MaterialTheme.typography.labelLarge,
+                                        style = MaterialTheme.typography.labelMedium,
                                         fontWeight = FontWeight.SemiBold,
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp)
                                     )
                                 }
                                 DropdownMenu(
@@ -1518,6 +1609,20 @@ fun NativeVaultScreen(
                             }
 
                             IconButton(
+                                onClick = { showAlbumDialog = true },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CreateNewFolder,
+                                    contentDescription = "Gestisci Album",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        if ((currentTab == VaultTab.GALLERY || currentTab == VaultTab.FILES) && activeItems.isNotEmpty()) {
+                            IconButton(
                                 onClick = {
                                     triggerHaptic()
                                     selectedFilenames = if (selectedFilenames.size == activeItems.size) {
@@ -1525,12 +1630,14 @@ fun NativeVaultScreen(
                                     } else {
                                         activeItems.map { it.filename }.toSet()
                                     }
-                                }
+                                },
+                                modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.DoneAll,
                                     contentDescription = "Seleziona tutto",
-                                    tint = if (selectedFilenames.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    tint = if (selectedFilenames.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
@@ -1550,36 +1657,126 @@ fun NativeVaultScreen(
                                     contentColor = MaterialTheme.colorScheme.onErrorContainer
                                 ),
                                 shape = CircleShape,
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                             ) {
-                                Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Svuota", style = MaterialTheme.typography.labelLarge)
+                                Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(17.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Svuota", style = MaterialTheme.typography.labelMedium)
                             }
                         }
 
-                        IconButton(onClick = onLockNow) {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = "Blocca ora",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        // TOP-RIGHT UPLOAD/DOWNLOAD TRANSFER CENTER BUTTON
+                        Surface(
+                            onClick = {
+                                triggerHaptic()
+                                showTransferPopup = !showTransferPopup
+                            },
+                            shape = CircleShape,
+                            color = if (activeRunningOps.isNotEmpty() || showTransferPopup) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerHigh
+                            },
+                            modifier = Modifier.height(38.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center, modifier = Modifier.size(24.dp)) {
+                                    if (activeRunningOps.isNotEmpty()) {
+                                        CircularProgressIndicator(
+                                            progress = { overallProgressFraction.coerceIn(0.08f, 1f) },
+                                            modifier = Modifier.size(24.dp),
+                                            strokeWidth = 2.5.dp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = when {
+                                            activeRunningOps.any { it.isUpload } -> Icons.Default.CloudUpload
+                                            activeRunningOps.isNotEmpty() -> Icons.Default.CloudDownload
+                                            else -> Icons.Default.SwapVert
+                                        },
+                                        contentDescription = "Centro Trasferimenti",
+                                        tint = if (activeRunningOps.isNotEmpty() || showTransferPopup) {
+                                            MaterialTheme.colorScheme.onPrimaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
 
-                        if (currentTab != VaultTab.SETTINGS) {
-                            IconButton(onClick = onRefresh) {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "Aggiorna",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                if (activeRunningOps.isNotEmpty()) {
+                                    Text(
+                                        text = PhotoCloudApiClient.formatSpeedHuman(totalLiveSpeed),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                } else if (transferOperations.isNotEmpty()) {
+                                    Text(
+                                        text = "${transferOperations.size}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
 
-            if (isUploading || isScanningDuplicates) {
+            // Album Quick Filter Chips bar when in Gallery and albums exist or GroupingMode.ALBUM is active
+            if (currentTab == VaultTab.GALLERY && (allAlbumNames.isNotEmpty() || groupingMode == GroupingMode.ALBUM)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 14.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = selectedAlbumFilter == null,
+                        onClick = { selectedAlbumFilter = null },
+                        label = { Text("Tutti (${mediaOnlyItems.size})") }
+                    )
+                    allAlbumNames.forEach { albName ->
+                        val count = mediaOnlyItems.count { it.album == albName }
+                        FilterChip(
+                            selected = selectedAlbumFilter == albName,
+                            onClick = {
+                                selectedAlbumFilter = if (selectedAlbumFilter == albName) null else albName
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.PhotoAlbum,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            label = { Text("$albName ($count)") }
+                        )
+                    }
+                    AssistChip(
+                        onClick = { showAlbumDialog = true },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text("Nuovo Album") }
+                    )
+                }
+            }
+
+            if (isScanningDuplicates) {
                 Surface(
                     shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -1598,7 +1795,7 @@ fun NativeVaultScreen(
                         )
                         Spacer(Modifier.width(12.dp))
                         Text(
-                            text = if (isUploading) uploadProgressText else "Scansione duplicati in corso...",
+                            text = "Scansione duplicati in corso...",
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSecondaryContainer
@@ -1607,221 +1804,292 @@ fun NativeVaultScreen(
                 }
             }
 
-            if (currentTab == VaultTab.SETTINGS) {
-                NativeSettingsScreen(
-                    activity = activity,
-                    apiClient = apiClient,
-                    serverUrl = serverUrl,
-                    galleryCount = galleryItems.size,
-                    trashCount = trashItems.size,
-                    custom = custom,
-                    onUpdateCustom = onUpdateCustom,
-                    onOpenServerConfig = onOpenServerConfig,
-                    onScanDuplicates = {
-                        isScanningDuplicates = true
-                        scope.launch {
-                            val groups = apiClient.findDuplicates()
-                            isScanningDuplicates = false
-                            if (groups.isEmpty()) {
-                                onShowInfo("Nessun duplicato trovato")
-                            } else {
-                                duplicateGroups = groups
-                            }
-                        }
-                    },
-                    onLockNow = onLockNow,
-                    onLogout = onLogout,
-                    onShowInfo = onShowInfo
-                )
-            } else if (activeItems.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = 110.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = if (currentTab == VaultTab.GALLERY) Icons.Default.PhotoLibrary else Icons.Default.DeleteOutline,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
-                            modifier = Modifier.size(52.dp)
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            text = if (currentTab == VaultTab.GALLERY) "Il tuo archivio è vuoto" else "Il cestino è vuoto",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = if (currentTab == VaultTab.GALLERY) "Tocca + Carica nella barra in basso" else "Gli elementi eliminati appariranno qui",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            } else {
-                // 120Hz Photo Grid with Drag-to-Select Multi-Selection
-                LazyVerticalGrid(
-                    state = gridState,
-                    columns = GridCells.Fixed(custom.gridColumns.coerceIn(2, 5)),
-                    contentPadding = PaddingValues(
-                        start = 6.dp,
-                        end = 6.dp,
-                        top = 6.dp,
-                        bottom = 140.dp
-                    ),
-                    horizontalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
-                    verticalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(activeItems, currentTab) {
-                            if (currentTab != VaultTab.GALLERY) return@pointerInput
-                            detectDragGesturesAfterLongPress(
-                                onDragStart = { startOffset ->
-                                    val hitFn = findMediaFilenameAtOffset(gridState, startOffset)
-                                    val idx = activeItems.indexOfFirst { it.filename == hitFn }
-                                    if (idx >= 0 && hitFn != null) {
-                                        triggerHaptic(longPress = true)
-                                        dragStartIndex = idx
-                                        dragLastIndex = idx
-                                        selectionSnapshotBeforeDrag = selectedFilenames
-                                        val shouldSelect = !selectedFilenames.contains(hitFn)
-                                        dragAddingSelection = shouldSelect
-                                        selectedFilenames = if (shouldSelect) {
-                                            selectedFilenames + hitFn
-                                        } else {
-                                            selectedFilenames - hitFn
-                                        }
-                                    } else {
-                                        dragStartIndex = null
-                                        dragLastIndex = null
-                                    }
-                                },
-                                onDrag = { change, _ ->
-                                    val startIdx = dragStartIndex ?: return@detectDragGesturesAfterLongPress
-                                    change.consume()
-
-                                    // Smooth auto-scroll near top or bottom edges during drag selection
-                                    val viewportH = gridState.layoutInfo.viewportSize.height.toFloat()
-                                    val y = change.position.y
-                                    if (y < 140f) {
-                                        scope.launch { gridState.scrollBy(-28f) }
-                                    } else if (y > viewportH - 220f) {
-                                        scope.launch { gridState.scrollBy(28f) }
-                                    }
-
-                                    val hitFn = findMediaFilenameAtOffset(gridState, change.position)
-                                    val currentIdx = activeItems.indexOfFirst { it.filename == hitFn }
-                                    if (currentIdx >= 0 && currentIdx != dragLastIndex) {
-                                        dragLastIndex = currentIdx
-                                        triggerHaptic(longPress = false)
-                                        val rangeStart = minOf(startIdx, currentIdx)
-                                        val rangeEnd = maxOf(startIdx, currentIdx)
-                                        val rangeFilenames = activeItems
-                                            .subList(rangeStart, rangeEnd + 1)
-                                            .map { it.filename }
-                                            .toSet()
-
-                                        selectedFilenames = if (dragAddingSelection) {
-                                            selectionSnapshotBeforeDrag + rangeFilenames
-                                        } else {
-                                            selectionSnapshotBeforeDrag - rangeFilenames
-                                        }
-                                    }
-                                },
-                                onDragEnd = {
-                                    dragStartIndex = null
-                                    dragLastIndex = null
-                                },
-                                onDragCancel = {
-                                    dragStartIndex = null
-                                    dragLastIndex = null
+            when (currentTab) {
+                VaultTab.SETTINGS -> {
+                    NativeSettingsScreen(
+                        activity = activity,
+                        apiClient = apiClient,
+                        serverUrl = serverUrl,
+                        galleryCount = mediaOnlyItems.size,
+                        cloudFilesCount = nonMediaCloudFiles.size,
+                        trashCount = trashItems.size,
+                        custom = custom,
+                        onUpdateCustom = onUpdateCustom,
+                        onOpenServerConfig = onOpenServerConfig,
+                        onScanDuplicates = {
+                            isScanningDuplicates = true
+                            scope.launch {
+                                val groups = apiClient.findDuplicates()
+                                isScanningDuplicates = false
+                                if (groups.isEmpty()) {
+                                    onShowInfo("Nessun duplicato trovato")
+                                } else {
+                                    duplicateGroups = groups
                                 }
-                            )
+                            }
+                        },
+                        onLockNow = onLockNow,
+                        onLogout = onLogout,
+                        onShowInfo = onShowInfo
+                    )
+                }
+
+                VaultTab.FILES -> {
+                    NativeCloudFileManagerScreen(
+                        files = activeItems,
+                        selectedFilenames = selectedFilenames,
+                        albumsList = allAlbumNames,
+                        onToggleSelect = { fn ->
+                            triggerHaptic()
+                            selectedFilenames = if (selectedFilenames.contains(fn)) {
+                                selectedFilenames - fn
+                            } else {
+                                selectedFilenames + fn
+                            }
+                        },
+                        onDownloadFile = { item ->
+                            showTransferPopup = true
+                            scope.launch {
+                                val (_, msg) = apiClient.saveSingleMediaToDownloads(
+                                    filename = item.filename,
+                                    fromTrash = false,
+                                    onTransferUpdate = { op -> upsertTransferOperation(op) }
+                                )
+                                onShowInfo(msg)
+                            }
+                        },
+                        onUploadFilesClick = {
+                            uploadLauncher.launch("*/*")
+                        },
+                        onOpenAlbumManager = {
+                            showAlbumDialog = true
                         }
-                ) {
-                    groupedSections.forEach { (sectionTitle, sectionItems) ->
-                        if (sectionTitle.isNotBlank()) {
-                            item(
-                                key = "header_$sectionTitle",
-                                span = { GridItemSpan(maxLineSpan) }
-                            ) {
+                    )
+                }
+
+                else -> {
+                    if (activeItems.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(bottom = 110.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = if (currentTab == VaultTab.GALLERY) Icons.Default.PhotoLibrary else Icons.Default.DeleteOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                                    modifier = Modifier.size(52.dp)
+                                )
+                                Spacer(Modifier.height(12.dp))
                                 Text(
-                                    text = sectionTitle,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(start = 8.dp, top = 14.dp, bottom = 6.dp)
+                                    text = if (currentTab == VaultTab.GALLERY) "Nessuna foto o video qui" else "Il cestino è vuoto",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = if (currentTab == VaultTab.GALLERY) "Tocca + Carica nella barra in basso" else "Gli elementi eliminati appariranno qui",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
+                    } else {
+                        // 120Hz Photo Grid with Drag-to-Select Multi-Selection
+                        LazyVerticalGrid(
+                            state = gridState,
+                            columns = GridCells.Fixed(custom.gridColumns.coerceIn(2, 5)),
+                            contentPadding = PaddingValues(
+                                start = 6.dp,
+                                end = 6.dp,
+                                top = 6.dp,
+                                bottom = 140.dp
+                            ),
+                            horizontalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
+                            verticalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(activeItems, currentTab) {
+                                    if (currentTab != VaultTab.GALLERY) return@pointerInput
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = { startOffset ->
+                                            val hitFn = findMediaFilenameAtOffset(gridState, startOffset)
+                                            val idx = activeItems.indexOfFirst { it.filename == hitFn }
+                                            if (idx >= 0 && hitFn != null) {
+                                                triggerHaptic(longPress = true)
+                                                dragStartIndex = idx
+                                                dragLastIndex = idx
+                                                selectionSnapshotBeforeDrag = selectedFilenames
+                                                val shouldSelect = !selectedFilenames.contains(hitFn)
+                                                dragAddingSelection = shouldSelect
+                                                selectedFilenames = if (shouldSelect) {
+                                                    selectedFilenames + hitFn
+                                                } else {
+                                                    selectedFilenames - hitFn
+                                                }
+                                            } else {
+                                                dragStartIndex = null
+                                                dragLastIndex = null
+                                            }
+                                        },
+                                        onDrag = { change, _ ->
+                                            val startIdx = dragStartIndex ?: return@detectDragGesturesAfterLongPress
+                                            change.consume()
 
-                        items(
-                            items = sectionItems,
-                            key = { "media_${it.filename}" }
-                        ) { mediaItem ->
-                            val isSelected = selectedFilenames.contains(mediaItem.filename)
-                            MediaGridTile(
-                                apiClient = apiClient,
-                                item = mediaItem,
-                                fromTrash = isFromTrash,
-                                isSelected = isSelected,
-                                inSelectionMode = selectedFilenames.isNotEmpty(),
-                                cornerRadiusDp = custom.tileCornerRadiusDp,
-                                aspectRatio = if (custom.portraitAspectRatio) 0.8f else 1f,
-                                showVideoBadge = custom.showVideoBadges,
-                                onClick = {
-                                    if (selectedFilenames.isNotEmpty() && currentTab == VaultTab.GALLERY) {
-                                        triggerHaptic()
-                                        selectedFilenames = if (isSelected) {
-                                            selectedFilenames - mediaItem.filename
-                                        } else {
-                                            selectedFilenames + mediaItem.filename
-                                        }
-                                    } else {
-                                        val globalIndex = activeItems.indexOfFirst { it.filename == mediaItem.filename }
-                                        if (globalIndex >= 0) {
-                                            lightboxInitialIndex = globalIndex
-                                        }
-                                    }
-                                },
-                                onLongClick = {
-                                    if (currentTab == VaultTab.GALLERY) {
-                                        triggerHaptic(longPress = true)
-                                        selectedFilenames = if (isSelected) {
-                                            selectedFilenames - mediaItem.filename
-                                        } else {
-                                            selectedFilenames + mediaItem.filename
-                                        }
-                                    }
-                                },
-                                onRestore = if (isFromTrash) {
-                                    {
-                                        scope.launch {
-                                            if (apiClient.restoreFromTrash(mediaItem.filename)) {
-                                                onShowInfo("Elemento ripristinato")
-                                                onRefresh()
+                                            val viewportH = gridState.layoutInfo.viewportSize.height.toFloat()
+                                            val y = change.position.y
+                                            if (y < 140f) {
+                                                scope.launch { gridState.scrollBy(-28f) }
+                                            } else if (y > viewportH - 220f) {
+                                                scope.launch { gridState.scrollBy(28f) }
                                             }
-                                        }
-                                    }
-                                } else null,
-                                onDeletePermanent = if (isFromTrash) {
-                                    {
-                                        scope.launch {
-                                            if (apiClient.deletePermanent(mediaItem.filename)) {
-                                                onShowInfo("Eliminato definitivamente")
-                                                onRefresh()
+
+                                            val hitFn = findMediaFilenameAtOffset(gridState, change.position)
+                                            val currentIdx = activeItems.indexOfFirst { it.filename == hitFn }
+                                            if (currentIdx >= 0 && currentIdx != dragLastIndex) {
+                                                dragLastIndex = currentIdx
+                                                triggerHaptic(longPress = false)
+                                                val rangeStart = minOf(startIdx, currentIdx)
+                                                val rangeEnd = maxOf(startIdx, currentIdx)
+                                                val rangeFilenames = activeItems
+                                                    .subList(rangeStart, rangeEnd + 1)
+                                                    .map { it.filename }
+                                                    .toSet()
+
+                                                selectedFilenames = if (dragAddingSelection) {
+                                                    selectionSnapshotBeforeDrag + rangeFilenames
+                                                } else {
+                                                    selectionSnapshotBeforeDrag - rangeFilenames
+                                                }
                                             }
+                                        },
+                                        onDragEnd = {
+                                            dragStartIndex = null
+                                            dragLastIndex = null
+                                        },
+                                        onDragCancel = {
+                                            dragStartIndex = null
+                                            dragLastIndex = null
                                         }
+                                    )
+                                }
+                        ) {
+                            groupedSections.forEach { (sectionTitle, sectionItems) ->
+                                if (sectionTitle.isNotBlank()) {
+                                    item(
+                                        key = "header_$sectionTitle",
+                                        span = { GridItemSpan(maxLineSpan) }
+                                    ) {
+                                        Text(
+                                            text = sectionTitle,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(start = 8.dp, top = 14.dp, bottom = 6.dp)
+                                        )
                                     }
-                                } else null
-                            )
+                                }
+
+                                items(
+                                    items = sectionItems,
+                                    key = { "media_${it.filename}" }
+                                ) { mediaItem ->
+                                    val isSelected = selectedFilenames.contains(mediaItem.filename)
+                                    MediaGridTile(
+                                        apiClient = apiClient,
+                                        item = mediaItem,
+                                        fromTrash = isFromTrash,
+                                        isSelected = isSelected,
+                                        inSelectionMode = selectedFilenames.isNotEmpty(),
+                                        cornerRadiusDp = custom.tileCornerRadiusDp,
+                                        aspectRatio = if (custom.portraitAspectRatio) 0.8f else 1f,
+                                        showVideoBadge = custom.showVideoBadges,
+                                        onClick = {
+                                            if (selectedFilenames.isNotEmpty() && currentTab == VaultTab.GALLERY) {
+                                                triggerHaptic()
+                                                selectedFilenames = if (isSelected) {
+                                                    selectedFilenames - mediaItem.filename
+                                                } else {
+                                                    selectedFilenames + mediaItem.filename
+                                                }
+                                            } else if (mediaItem.isMedia) {
+                                                val globalIndex = activeItems.indexOfFirst { it.filename == mediaItem.filename }
+                                                if (globalIndex >= 0) {
+                                                    lightboxInitialIndex = globalIndex
+                                                }
+                                            } else {
+                                                showTransferPopup = true
+                                                scope.launch {
+                                                    val (_, msg) = apiClient.saveSingleMediaToDownloads(
+                                                        filename = mediaItem.filename,
+                                                        fromTrash = isFromTrash,
+                                                        onTransferUpdate = { op -> upsertTransferOperation(op) }
+                                                    )
+                                                    onShowInfo(msg)
+                                                }
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (currentTab == VaultTab.GALLERY) {
+                                                triggerHaptic(longPress = true)
+                                                selectedFilenames = if (isSelected) {
+                                                    selectedFilenames - mediaItem.filename
+                                                } else {
+                                                    selectedFilenames + mediaItem.filename
+                                                }
+                                            }
+                                        },
+                                        onRestore = if (isFromTrash) {
+                                            {
+                                                scope.launch {
+                                                    if (apiClient.restoreFromTrash(mediaItem.filename)) {
+                                                        onShowInfo("Elemento ripristinato")
+                                                        onRefresh()
+                                                    }
+                                                }
+                                            }
+                                        } else null,
+                                        onDeletePermanent = if (isFromTrash) {
+                                            {
+                                                scope.launch {
+                                                    if (apiClient.deletePermanent(mediaItem.filename)) {
+                                                        onShowInfo("Eliminato definitivamente")
+                                                        onRefresh()
+                                                    }
+                                                }
+                                            }
+                                        } else null
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
+        }
+
+        // =========================================================================
+        // === FLOATING TRANSFER OPERATIONS MENU (Top-Right Dropdown)
+        // =========================================================================
+        AnimatedVisibility(
+            visible = showTransferPopup,
+            enter = fadeIn() + slideInVertically { -it / 3 },
+            exit = fadeOut() + slideOutVertically { -it / 3 },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(top = 62.dp, end = 12.dp, start = 12.dp)
+        ) {
+            TransferOperationsFloatingCard(
+                operations = transferOperations,
+                totalLiveSpeed = totalLiveSpeed,
+                onClearFinished = {
+                    transferOperations = transferOperations.filter { it.status == TransferStatus.RUNNING }
+                },
+                onClose = { showTransferPopup = false }
+            )
         }
 
         // =========================================================================
@@ -1832,10 +2100,10 @@ fun NativeVaultScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 14.dp)
+                .padding(horizontal = 10.dp, vertical = 14.dp)
         ) {
             AnimatedVisibility(
-                visible = selectedFilenames.isNotEmpty() && currentTab == VaultTab.GALLERY,
+                visible = selectedFilenames.isNotEmpty() && (currentTab == VaultTab.GALLERY || currentTab == VaultTab.FILES),
                 enter = slideInVertically { it } + fadeIn(),
                 exit = slideOutVertically { it } + fadeOut()
             ) {
@@ -1848,24 +2116,46 @@ fun NativeVaultScreen(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
+                        FilledTonalButton(
+                            onClick = { showAlbumDialog = true },
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Default.PhotoAlbum, contentDescription = null, modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text("Album")
+                        }
+
                         FilledTonalButton(
                             onClick = {
                                 val toDownload = selectedFilenames.toList()
-                                onShowInfo("Preparazione ZIP (${toDownload.size} file)...")
+                                showTransferPopup = true
                                 scope.launch {
-                                    val (_, msg) = apiClient.downloadZipToDevice(toDownload)
-                                    onShowInfo(msg)
+                                    if (toDownload.size == 1) {
+                                        val (_, msg) = apiClient.saveSingleMediaToDownloads(
+                                            filename = toDownload.first(),
+                                            fromTrash = false,
+                                            onTransferUpdate = { op -> upsertTransferOperation(op) }
+                                        )
+                                        onShowInfo(msg)
+                                    } else {
+                                        val (_, msg) = apiClient.downloadZipToDevice(
+                                            filenames = toDownload,
+                                            onTransferUpdate = { op -> upsertTransferOperation(op) }
+                                        )
+                                        onShowInfo(msg)
+                                    }
                                     selectedFilenames = emptySet()
                                 }
                             },
                             shape = CircleShape,
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                         ) {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(5.dp))
                             Text("Scarica (${selectedFilenames.size})")
                         }
 
@@ -1889,16 +2179,16 @@ fun NativeVaultScreen(
                                 contentColor = MaterialTheme.colorScheme.onErrorContainer
                             ),
                             shape = CircleShape,
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                         ) {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
+                            Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(4.dp))
                             Text("Cestina")
                         }
 
                         IconButton(
                             onClick = { selectedFilenames = emptySet() },
-                            modifier = Modifier.size(36.dp)
+                            modifier = Modifier.size(34.dp)
                         ) {
                             Icon(Icons.Default.Close, contentDescription = "Deseleziona")
                         }
@@ -1924,8 +2214,8 @@ fun NativeVaultScreen(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.padding(horizontal = 10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp)
                 ) {
                     // Tab 1: Foto (Gallery)
                     Surface(
@@ -1940,16 +2230,16 @@ fun NativeVaultScreen(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 14.dp)
+                            modifier = Modifier.padding(horizontal = 12.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.PhotoLibrary,
                                 contentDescription = "Foto",
                                 tint = if (currentTab == VaultTab.GALLERY) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(21.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                             if (currentTab == VaultTab.GALLERY && custom.showFloatingBarLabels) {
-                                Spacer(Modifier.width(6.dp))
+                                Spacer(Modifier.width(5.dp))
                                 Text(
                                     text = "Foto",
                                     style = MaterialTheme.typography.labelLarge,
@@ -1960,7 +2250,40 @@ fun NativeVaultScreen(
                         }
                     }
 
-                    // Primary Pill: + Carica
+                    // Tab 2: File Manager Cloud (Non-media files)
+                    Surface(
+                        onClick = {
+                            triggerHaptic()
+                            currentTab = VaultTab.FILES
+                            selectedFilenames = emptySet()
+                        },
+                        shape = CircleShape,
+                        color = if (currentTab == VaultTab.FILES) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                        modifier = Modifier.height(pillHeight)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Folder,
+                                contentDescription = "File Cloud",
+                                tint = if (currentTab == VaultTab.FILES) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            if (currentTab == VaultTab.FILES && custom.showFloatingBarLabels) {
+                                Spacer(Modifier.width(5.dp))
+                                Text(
+                                    text = "File",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                        }
+                    }
+
+                    // Primary Pill: + Carica (Media or any Cloud File)
                     Surface(
                         onClick = {
                             triggerHaptic()
@@ -1972,16 +2295,16 @@ fun NativeVaultScreen(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 16.dp)
+                            modifier = Modifier.padding(horizontal = 14.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Add,
                                 contentDescription = "Carica",
                                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(21.dp)
                             )
                             if (custom.showFloatingBarLabels) {
-                                Spacer(Modifier.width(6.dp))
+                                Spacer(Modifier.width(4.dp))
                                 Text(
                                     text = "Carica",
                                     style = MaterialTheme.typography.labelLarge,
@@ -1992,7 +2315,7 @@ fun NativeVaultScreen(
                         }
                     }
 
-                    // Tab 2: Cestino (Trash)
+                    // Tab 3: Cestino (Trash)
                     Surface(
                         onClick = {
                             triggerHaptic()
@@ -2005,16 +2328,16 @@ fun NativeVaultScreen(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 12.dp)
+                            modifier = Modifier.padding(horizontal = 11.dp)
                         ) {
                             Icon(
                                 imageVector = if (currentTab == VaultTab.TRASH) Icons.Default.Delete else Icons.Default.DeleteOutline,
                                 contentDescription = "Cestino",
                                 tint = if (currentTab == VaultTab.TRASH) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(21.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                             if (currentTab == VaultTab.TRASH && custom.showFloatingBarLabels) {
-                                Spacer(Modifier.width(6.dp))
+                                Spacer(Modifier.width(5.dp))
                                 Text(
                                     text = "Cestino",
                                     style = MaterialTheme.typography.labelLarge,
@@ -2025,7 +2348,7 @@ fun NativeVaultScreen(
                         }
                     }
 
-                    // Tab 3: Impostazioni (Settings & Customization)
+                    // Tab 4: Impostazioni (Settings & Customization)
                     Surface(
                         onClick = {
                             triggerHaptic()
@@ -2038,16 +2361,16 @@ fun NativeVaultScreen(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 12.dp)
+                            modifier = Modifier.padding(horizontal = 11.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Settings,
                                 contentDescription = "Impostazioni",
                                 tint = if (currentTab == VaultTab.SETTINGS) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(21.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                             if (currentTab == VaultTab.SETTINGS && custom.showFloatingBarLabels) {
-                                Spacer(Modifier.width(6.dp))
+                                Spacer(Modifier.width(5.dp))
                                 Text(
                                     text = "Opzioni",
                                     style = MaterialTheme.typography.labelLarge,
@@ -2093,9 +2416,66 @@ fun NativeVaultScreen(
                     }
                 },
                 onDownload = { filename ->
+                    showTransferPopup = true
                     scope.launch {
-                        val (_, msg) = apiClient.saveSingleMediaToDownloads(filename, isFromTrash)
+                        val (_, msg) = apiClient.saveSingleMediaToDownloads(
+                            filename = filename,
+                            fromTrash = isFromTrash,
+                            onTransferUpdate = { op -> upsertTransferOperation(op) }
+                        )
                         onShowInfo(msg)
+                    }
+                }
+            )
+        }
+
+        if (showAlbumDialog) {
+            AlbumManagerDialog(
+                albums = allAlbumNames,
+                selectedCount = selectedFilenames.size,
+                onDismiss = { showAlbumDialog = false },
+                onCreateAlbum = { newName ->
+                    scope.launch {
+                        if (apiClient.createAlbum(newName)) {
+                            if (selectedFilenames.isNotEmpty()) {
+                                apiClient.assignFilesToAlbum(selectedFilenames.toList(), newName)
+                                onShowInfo("Album \"$newName\" creato con ${selectedFilenames.size} file")
+                                selectedFilenames = emptySet()
+                            } else {
+                                onShowInfo("Album \"$newName\" creato")
+                            }
+                            onLocalAlbumsChanged()
+                            onRefresh()
+                        }
+                    }
+                },
+                onAssignToAlbum = { albumName ->
+                    val targets = selectedFilenames.toList()
+                    if (targets.isEmpty()) {
+                        selectedAlbumFilter = albumName.ifBlank { null }
+                        groupingMode = GroupingMode.ALBUM
+                        showAlbumDialog = false
+                    } else {
+                        scope.launch {
+                            apiClient.assignFilesToAlbum(targets, albumName)
+                            onLocalAlbumsChanged()
+                            selectedFilenames = emptySet()
+                            showAlbumDialog = false
+                            onShowInfo(
+                                if (albumName.isBlank()) "Rimossi dall'album"
+                                else "Spostati nell'album \"$albumName\""
+                            )
+                            onRefresh()
+                        }
+                    }
+                },
+                onDeleteAlbum = { albumName ->
+                    scope.launch {
+                        apiClient.deleteAlbum(albumName)
+                        if (selectedAlbumFilter == albumName) selectedAlbumFilter = null
+                        onLocalAlbumsChanged()
+                        onShowInfo("Album \"$albumName\" eliminato")
+                        onRefresh()
                     }
                 }
             )
@@ -2182,12 +2562,654 @@ fun NativeVaultScreen(
     }
 }
 
+/**
+ * Floating Transfer Operations Menu anchored in the top-right, displaying all active & recent
+ * uploads/downloads with real-time speed (KB/s, MB/s), transferred/total size, and progress bars.
+ */
+@Composable
+fun TransferOperationsFloatingCard(
+    operations: List<TransferOperation>,
+    totalLiveSpeed: Long,
+    onClearFinished: () -> Unit,
+    onClose: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(26.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 10.dp,
+        shadowElevation = 20.dp,
+        modifier = Modifier
+            .widthIn(max = 390.dp)
+            .fillMaxWidth()
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(26.dp)
+            )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SwapVert,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Column {
+                        Text(
+                            text = "Operazioni di Trasferimento",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = if (totalLiveSpeed > 0L) {
+                                "Velocità attuale: ${PhotoCloudApiClient.formatSpeedHuman(totalLiveSpeed)}"
+                            } else {
+                                "${operations.size} operazioni registrate"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (totalLiveSpeed > 0L) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (operations.any { it.status != TransferStatus.RUNNING }) {
+                        TextButton(
+                            onClick = onClearFinished,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text("Pulisci", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    IconButton(
+                        onClick = onClose,
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Chiudi", modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            if (operations.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 22.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.CloudDone,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(34.dp)
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = "Nessun caricamento o scaricamento in corso",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(operations, key = { it.id }) { op ->
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            imageVector = when (op.status) {
+                                                TransferStatus.COMPLETED -> Icons.Default.CheckCircle
+                                                TransferStatus.ERROR -> Icons.Default.ErrorOutline
+                                                TransferStatus.RUNNING -> if (op.isUpload) Icons.Default.CloudUpload else Icons.Default.CloudDownload
+                                            },
+                                            contentDescription = null,
+                                            tint = when (op.status) {
+                                                TransferStatus.COMPLETED -> MaterialTheme.colorScheme.primary
+                                                TransferStatus.ERROR -> MaterialTheme.colorScheme.error
+                                                TransferStatus.RUNNING -> MaterialTheme.colorScheme.tertiary
+                                            },
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Text(
+                                            text = op.title,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+
+                                    Spacer(Modifier.width(8.dp))
+
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.secondaryContainer
+                                    ) {
+                                        Text(
+                                            text = if (op.status == TransferStatus.RUNNING && op.speedBytesPerSec > 0L) {
+                                                PhotoCloudApiClient.formatSpeedHuman(op.speedBytesPerSec)
+                                            } else {
+                                                "${op.percentInt}%"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+
+                                Spacer(Modifier.height(6.dp))
+
+                                LinearProgressIndicator(
+                                    progress = { op.progressFraction },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(CircleShape),
+                                    color = if (op.status == TransferStatus.ERROR) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.primary
+                                    }
+                                )
+
+                                Spacer(Modifier.height(6.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = op.detail.ifBlank {
+                                            if (op.isUpload) "Upload cloud" else "Download locale"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    val sizeLabel = if (op.totalBytes > 0L) {
+                                        "${PhotoCloudApiClient.formatBytesHuman(op.transferredBytes)} / ${PhotoCloudApiClient.formatBytesHuman(op.totalBytes)}"
+                                    } else {
+                                        PhotoCloudApiClient.formatBytesHuman(op.transferredBytes)
+                                    }
+                                    Text(
+                                        text = sizeLabel,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Cloud File Manager View for non-media files (PDF, ZIP, APK, Docs, Audio, Code, etc.)
+ * grouped by Category or Album.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun NativeCloudFileManagerScreen(
+    files: List<MediaItemModel>,
+    selectedFilenames: Set<String>,
+    albumsList: List<String>,
+    onToggleSelect: (String) -> Unit,
+    onDownloadFile: (MediaItemModel) -> Unit,
+    onUploadFilesClick: () -> Unit,
+    onOpenAlbumManager: () -> Unit
+) {
+    var selectedCategory by remember { mutableStateOf("all") }
+    var searchQuery by remember { mutableStateOf("") }
+
+    val categories = listOf(
+        "all" to "Tutti (${files.size})",
+        "document" to "Documenti & PDF",
+        "archive" to "Archivi & APK",
+        "audio" to "Audio & Musica",
+        "code" to "Codice & Dati",
+        "other" to "Altri File"
+    )
+
+    val filteredFiles = remember(files, selectedCategory, searchQuery) {
+        files.filter { item ->
+            val matchCat = selectedCategory == "all" || item.category == selectedCategory
+            val matchQuery = searchQuery.isBlank() ||
+                item.filename.contains(searchQuery.trim(), ignoreCase = true) ||
+                item.album.contains(searchQuery.trim(), ignoreCase = true)
+            matchCat && matchQuery
+        }
+    }
+
+    val groupedByCat = remember(filteredFiles) {
+        val labelMap = mapOf(
+            "document" to "📄 Documenti & PDF",
+            "archive" to "📦 Archivi, ZIP & APK",
+            "audio" to "🎵 Audio & Musica",
+            "code" to "💻 Codice & Configurazione",
+            "other" to "📁 Altri File Cloud"
+        )
+        filteredFiles.groupBy { labelMap[it.category] ?: "📁 Altri File Cloud" }.toList()
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Search & Quick Upload Row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Cerca file cloud (PDF, ZIP, APK...)") },
+                singleLine = true,
+                shape = CircleShape,
+                modifier = Modifier.weight(1f)
+            )
+            FilledTonalIconButton(onClick = onOpenAlbumManager) {
+                Icon(Icons.Default.PhotoAlbum, contentDescription = "Album")
+            }
+        }
+
+        // Category Filter Chips
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            categories.forEach { (catId, catLabel) ->
+                FilterChip(
+                    selected = selectedCategory == catId,
+                    onClick = { selectedCategory = catId },
+                    label = { Text(catLabel) }
+                )
+            }
+        }
+
+        if (filteredFiles.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 110.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                        modifier = Modifier.size(56.dp)
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "Nessun file non-media nel File Manager Cloud",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "Puoi caricare PDF, ZIP, APK, documenti Office, brani audio e qualsiasi altro file nel tuo spazio cifrato.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    Button(
+                        onClick = onUploadFilesClick,
+                        shape = CircleShape
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Carica File Cloud")
+                    }
+                }
+            }
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(
+                    start = 14.dp,
+                    end = 14.dp,
+                    top = 6.dp,
+                    bottom = 150.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                groupedByCat.forEach { (groupTitle, groupItems) ->
+                    item(key = "cat_header_$groupTitle") {
+                        Text(
+                            text = "$groupTitle (${groupItems.size})",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 10.dp, bottom = 4.dp, start = 4.dp)
+                        )
+                    }
+
+                    items(groupItems, key = { "file_${it.filename}" }) { fileItem ->
+                        val isSelected = selectedFilenames.contains(fileItem.filename)
+                        val dateStr = remember(fileItem.timestamp) {
+                            SimpleDateFormat("dd MMM yyyy • HH:mm", Locale.ITALIAN)
+                                .format(Date((fileItem.timestamp * 1000).toLong()))
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            },
+                            tonalElevation = 2.dp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(20.dp))
+                                .combinedClickable(
+                                    onClick = {
+                                        if (selectedFilenames.isNotEmpty()) {
+                                            onToggleSelect(fileItem.filename)
+                                        } else {
+                                            onDownloadFile(fileItem)
+                                        }
+                                    },
+                                    onLongClick = {
+                                        onToggleSelect(fileItem.filename)
+                                    }
+                                )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.fillMaxSize(),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = when (fileItem.category) {
+                                                    "document" -> Icons.Default.Description
+                                                    "archive" -> Icons.Default.FolderZip
+                                                    "audio" -> Icons.Default.AudioFile
+                                                    "code" -> Icons.Default.Code
+                                                    else -> Icons.AutoMirrored.Filled.InsertDriveFile
+                                                },
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Text(
+                                                text = fileItem.extensionBadge,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                            )
+                                        }
+                                    }
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = fileItem.filename,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Spacer(Modifier.height(2.dp))
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            val sizeText = if (fileItem.size > 0L) {
+                                                PhotoCloudApiClient.formatBytesHuman(fileItem.size)
+                                            } else {
+                                                "File Cloud"
+                                            }
+                                            Text(
+                                                text = "$sizeText • $dateStr",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        if (fileItem.album.isNotBlank()) {
+                                            Spacer(Modifier.height(4.dp))
+                                            Surface(
+                                                shape = CircleShape,
+                                                color = MaterialTheme.colorScheme.tertiaryContainer
+                                            ) {
+                                                Text(
+                                                    text = "📁 ${fileItem.album}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(onClick = { onDownloadFile(fileItem) }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Download,
+                                            contentDescription = "Scarica file",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    Checkbox(
+                                        checked = isSelected,
+                                        onCheckedChange = { onToggleSelect(fileItem.filename) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AlbumManagerDialog(
+    albums: List<String>,
+    selectedCount: Int,
+    onDismiss: () -> Unit,
+    onCreateAlbum: (String) -> Unit,
+    onAssignToAlbum: (String) -> Unit,
+    onDeleteAlbum: (String) -> Unit
+) {
+    var newAlbumName by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        title = {
+            Text(
+                text = if (selectedCount > 0) "Assegna $selectedCount elementi a un Album" else "Gestione Album",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = newAlbumName,
+                        onValueChange = { newAlbumName = it },
+                        label = { Text("Nuovo album (es. Vacanze)") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.weight(1f)
+                    )
+                    Button(
+                        onClick = {
+                            val clean = newAlbumName.trim()
+                            if (clean.isNotBlank()) {
+                                onCreateAlbum(clean)
+                                newAlbumName = ""
+                            }
+                        },
+                        shape = CircleShape
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                    }
+                }
+
+                if (selectedCount > 0) {
+                    OutlinedButton(
+                        onClick = { onAssignToAlbum("") },
+                        shape = CircleShape,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Rimuovi dall'album corrente")
+                    }
+                }
+
+                if (albums.isEmpty()) {
+                    Text(
+                        text = "Nessun album creato. Scrivi un nome qui sopra e premi + per creare il tuo primo album.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(
+                        text = if (selectedCount > 0) "Tocca un album per spostare i file selezionati:" else "I tuoi Album:",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .heightIn(max = 240.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        albums.forEach { albumName ->
+                            Surface(
+                                onClick = { onAssignToAlbum(albumName) },
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.PhotoAlbum,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = albumName,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { onDeleteAlbum(albumName) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.DeleteOutline,
+                                            contentDescription = "Elimina album",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Chiudi")
+            }
+        }
+    )
+}
+
 @Composable
 fun NativeSettingsScreen(
     activity: MainActivity,
     apiClient: PhotoCloudApiClient,
     serverUrl: String,
     galleryCount: Int,
+    cloudFilesCount: Int,
     trashCount: Int,
     custom: CustomizationState,
     onUpdateCustom: (CustomizationState) -> Unit,
@@ -2223,7 +3245,6 @@ fun NativeSettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Option 1: Color Logo
                 Surface(
                     onClick = {
                         onUpdateCustom(custom.copy(monochromeAppIcon = false))
@@ -2262,7 +3283,6 @@ fun NativeSettingsScreen(
                     }
                 }
 
-                // Option 2: Black & White Logo
                 Surface(
                     onClick = {
                         onUpdateCustom(custom.copy(monochromeAppIcon = true))
@@ -2459,15 +3479,16 @@ fun NativeSettingsScreen(
             )
             Spacer(Modifier.height(6.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 GroupingMode.entries.forEach { mode ->
                     FilterChip(
                         selected = custom.defaultGrouping == mode,
                         onClick = { onUpdateCustom(custom.copy(defaultGrouping = mode)) },
-                        label = { Text(mode.label, maxLines = 1) },
-                        modifier = Modifier.weight(1f)
+                        label = { Text(mode.label, maxLines = 1) }
                     )
                 }
             }
@@ -2522,7 +3543,7 @@ fun NativeSettingsScreen(
 
             SettingsSwitchRow(
                 title = "Chiedi Conferma prima di Cestinare",
-                subtitle = "Mostra un avviso prima di spostare foto nel cestino",
+                subtitle = "Mostra un avviso prima di spostare foto o file nel cestino",
                 checked = custom.confirmBeforeTrash,
                 onCheckedChange = { onUpdateCustom(custom.copy(confirmBeforeTrash = it)) }
             )
@@ -2585,7 +3606,7 @@ fun NativeSettingsScreen(
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                text = "Archivio: $galleryCount foto/video • Cestino: $trashCount • Cache locale: ${cacheStats.first} file ($cacheMb)",
+                text = "Foto/Video: $galleryCount • File Cloud: $cloudFilesCount • Cestino: $trashCount • Cache: $cacheMb",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -2758,12 +3779,14 @@ fun MediaGridTile(
     onDeletePermanent: (() -> Unit)? = null
 ) {
     var bitmap by remember(item.filename, fromTrash) {
-        mutableStateOf(apiClient.getCachedBitmap(item.filename, fromTrash))
+        mutableStateOf(
+            if (item.isMedia) apiClient.getCachedBitmap(item.filename, fromTrash) else null
+        )
     }
     var loadFailed by remember(item.filename) { mutableStateOf(false) }
 
     LaunchedEffect(item.filename, fromTrash) {
-        if (bitmap == null && !item.isVideo) {
+        if (item.isMedia && bitmap == null && !item.isVideo) {
             val loaded = apiClient.loadMediaBitmap(item.filename, fromTrash)
             if (loaded != null) {
                 bitmap = loaded
@@ -2808,6 +3831,36 @@ fun MediaGridTile(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
+            } else if (!item.isMedia) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .padding(8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.InsertDriveFile,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = item.extensionBadge,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = item.filename,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             } else if (item.isVideo) {
                 Box(
                     modifier = Modifier
@@ -2846,6 +3899,25 @@ fun MediaGridTile(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                     )
                 }
+            }
+        }
+
+        if (item.album.isNotBlank() && onRestore == null) {
+            Surface(
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = 0.58f),
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(6.dp)
+            ) {
+                Text(
+                    text = item.album,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
             }
         }
 

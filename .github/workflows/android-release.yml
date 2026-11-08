@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag della Release GitHub (es. v1.0.5)'
+        description: 'Tag della Release GitHub (es. v1.0.6)'
         required: false
-        default: 'v1.0.5'
+        default: 'v1.0.6'
 
 permissions:
   contents: write
@@ -74,16 +74,16 @@ jobs:
             echo "Errore: nessun file APK trovato in app/build/outputs/apk/release"
             exit 1
           fi
-          cp "$APK_OUT" ../photocloud-release-v1.0.5-signed.apk
-          sha256sum ../photocloud-release-v1.0.5-signed.apk > ../photocloud-release-v1.0.5-signed.apk.sha256
+          cp "$APK_OUT" ../photocloud-release-v1.0.6-signed.apk
+          sha256sum ../photocloud-release-v1.0.6-signed.apk > ../photocloud-release-v1.0.6-signed.apk.sha256
 
       - name: Upload Signed APK as GitHub Actions Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: photocloud-release-v1.0.5-signed-apk
+          name: photocloud-release-v1.0.6-signed-apk
           path: |
-            photocloud-release-v1.0.5-signed.apk
-            photocloud-release-v1.0.5-signed.apk.sha256
+            photocloud-release-v1.0.6-signed.apk
+            photocloud-release-v1.0.6-signed.apk.sha256
           if-no-files-found: error
 
       - name: Determine Release Tag
@@ -94,7 +94,7 @@ jobs:
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "TAG=v1.0.5" >> $GITHUB_OUTPUT
+            echo "TAG=v1.0.6" >> $GITHUB_OUTPUT
           fi
 
       - name: Publish Signed APK to GitHub Releases
@@ -104,20 +104,20 @@ jobs:
           name: PhotoCloud Android Release ${{ steps.release_meta.outputs.TAG }}
           body: |
             ### PhotoCloud Android Release (${{ steps.release_meta.outputs.TAG }})
-            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4** per aggiornamento diretto.
+            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4 / v1.0.5** per aggiornamento diretto.
 
             - **Application ID**: `com.valerio.photocloud`
-            - **Versione**: `1.0.5` (`versionCode 6`)
-            - **Novità v1.0.5**:
-              - **Menu Impostazioni & Personalizzazione Completa**: Scelta tema (Sistema/Chiaro/Scuro + Nero Puro AMOLED), Colori Dinamici Material You o 6 Palette Accento, colonne griglia (2–5), spaziatura, raggio bordi foto, proporzioni 1:1 o 4:5, ordinamento, stile Floating Bar, blocco in background, schermo anti-screenshot (`FLAG_SECURE`) e gestione cache.
-              - **Selezione Multipla tramite Trascinamento (Drag-to-Select)**: Tieni premuto e trascina il dito sulla griglia per selezionare/deselezionare rapidamente interi blocchi di foto con auto-scroll e feedback aptico a 120Hz.
-              - **Nuova Icona App (Colorata Viola Notte + Bianco & Nero)**: Possibilità di cambiare dinamicamente l'icona del launcher Android tra la versione Colorata e quella in Bianco e Nero.
-              - **Stessa Firma Keystore della v1.0.4 (`photocloud-release-key.jks`)**: Aggiornabile direttamente sopra la v1.0.4 senza disinstallare.
-            - **APK Firmato**: `photocloud-release-v1.0.5-signed.apk`
-            - **Checksum SHA-256**: `photocloud-release-v1.0.5-signed.apk.sha256`
+            - **Versione**: `1.0.6` (`versionCode 7`)
+            - **Novità v1.0.6**:
+              - **File Manager Cloud (Web & APK)**: Possibilità di caricare qualsiasi file non-media (PDF, ZIP, APK, documenti Office, audio, codice, ecc.) e organizzarli per categoria nel File Manager Cloud crittografato.
+              - **Centro Trasferimenti Floating in Alto a Destra (Web & APK)**: L'icona di caricamento/scaricamento è posizionata in alto a destra e apre un menu floating con tutte le operazioni in corso, velocità attuale in tempo reale (`KB/s` o `MB/s`), dimensione trasferita/totale e barra di avanzamento.
+              - **Raggruppamento per Album (Web & APK)**: Creazione di album personalizzati, assegnazione multipla di foto/video/file agli album e raggruppamento della galleria per `Album`.
+              - **Stessa Firma Keystore (`photocloud-release-key.jks`)**: Aggiornabile direttamente sopra le versioni precedenti senza disinstallare.
+            - **APK Firmato**: `photocloud-release-v1.0.6-signed.apk`
+            - **Checksum SHA-256**: `photocloud-release-v1.0.6-signed.apk.sha256`
           files: |
-            photocloud-release-v1.0.5-signed.apk
-            photocloud-release-v1.0.5-signed.apk.sha256
+            photocloud-release-v1.0.6-signed.apk
+            photocloud-release-v1.0.6-signed.apk.sha256
           draft: false
           prerelease: false
         env:

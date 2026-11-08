@@ -37,8 +37,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.0.5';
-const APK_FILENAME = 'photocloud-release-v1.0.5-signed.apk';
+const DEFAULT_TAG = 'v1.0.6';
+const APK_FILENAME = 'photocloud-release-v1.0.6-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /**
@@ -178,8 +178,8 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
         type: 'SINGLE',
         filters: [],
         attributes: [],
-        versionCode: 6,
-        versionName: '1.0.5',
+        versionCode: 7,
+        versionName: '1.0.6',
         outputFile: APK_FILENAME,
         sha256,
       },

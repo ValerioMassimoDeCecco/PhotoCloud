@@ -15,6 +15,21 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#39;');
 }
 
+function formatFileSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function getCategoryIcon(category?: string, ext?: string): string {
+  if (category === 'document') return ext === 'pdf' ? 'picture_as_pdf' : 'description';
+  if (category === 'archive') return ext === 'apk' ? 'android' : 'folder_zip';
+  if (category === 'audio') return 'audiotrack';
+  if (category === 'code') return 'code';
+  return 'insert_drive_file';
+}
+
 function renderWithBase(stylesBlock: string, contentBlock: string, scriptsBlock: string): string {
   let base = readTemplate('base.html');
   base = base.replace(
@@ -43,38 +58,79 @@ export function renderLoginTemplate(): string {
   return renderWithBase(styles, content, scripts);
 }
 
-export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
-  const filenames = mediaFiles.map((m) => m.filename);
+export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = []): string {
+  const filenames = allFiles.map((m) => m.filename);
   const filenamesJson = JSON.stringify(filenames);
+  const albumsJson = JSON.stringify(albums);
 
   const emptyHtml =
-    mediaFiles.length === 0
+    allFiles.length === 0
       ? `<div class="empty-state">
             <span class="material-icons">photo_library</span>
             <h3>Il tuo archivio è vuoto</h3>
-            <p>Tocca Carica nella barra fluttuante per cifrare foto e video.</p>
+            <p>Tocca Carica nella barra fluttuante per cifrare foto, video o qualsiasi file nel Cloud.</p>
         </div>`
       : '';
 
-  const cardsHtml = mediaFiles
-    .map((media, index) => {
-      const file = escapeHtml(media.filename);
+  const cardsHtml = allFiles
+    .map((item, index) => {
+      const file = escapeHtml(item.filename);
       const ext = file.split('.').pop()?.toLowerCase() || '';
-      const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+      const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic'].includes(ext);
+      const isVid = ['mp4', 'mov', 'webm', 'mkv'].includes(ext);
+      const isMedia = item.isMedia !== undefined ? item.isMedia : isImg || isVid;
+      const category = item.category || (isMedia ? 'media' : 'other');
+      const album = escapeHtml(item.album || '');
+      const sizeBytes = item.size || 0;
+      const humanSize = formatFileSize(sizeBytes);
 
-      const mediaTag = isImg
-        ? `<img src="/media/${encodeURIComponent(media.filename)}" alt="${file}" loading="lazy">`
-        : `<video preload="metadata">
-                        <source src="/media/${encodeURIComponent(media.filename)}#t=0.5" type="video/mp4">
+      let mediaTag = '';
+      if (isImg) {
+        mediaTag = `<img src="/media/${encodeURIComponent(item.filename)}" alt="${file}" loading="lazy">`;
+      } else if (isVid) {
+        mediaTag = `<video preload="metadata">
+                        <source src="/media/${encodeURIComponent(item.filename)}#t=0.5" type="video/mp4">
                     </video>
                     <div class="video-overlay"><span class="material-icons">play_circle</span></div>`;
+      } else {
+        const iconName = getCategoryIcon(category, ext);
+        mediaTag = `<div class="cloud-file-preview" data-category="${category}">
+                        <div class="cloud-file-icon-wrap">
+                            <span class="material-icons">${iconName}</span>
+                            <span class="cloud-file-ext">${escapeHtml(ext.toUpperCase() || 'FILE')}</span>
+                        </div>
+                        <div class="cloud-file-meta">
+                            <span class="cloud-file-title" title="${file}">${file}</span>
+                            <span class="cloud-file-sub">${humanSize}${album ? ` • ${album}` : ''}</span>
+                        </div>
+                    </div>`;
+      }
+
+      const albumBadge =
+        album && isMedia
+          ? `<span class="media-album-badge" title="Album: ${album}"><span class="material-icons">photo_album</span>${album}</span>`
+          : '';
 
       return `
-        <div class="media-card-wrapper" data-timestamp="${media.timestamp}" data-filename="${file}">
-            <div class="media-card clickable-media" data-index="${index}" data-filename="${file}">
+        <div class="media-card-wrapper ${isMedia ? 'is-media-item' : 'is-cloud-file'}"
+             data-timestamp="${item.timestamp}"
+             data-filename="${file}"
+             data-size="${sizeBytes}"
+             data-is-media="${isMedia ? 'true' : 'false'}"
+             data-category="${category}"
+             data-album="${album}">
+            <div class="media-card ${isMedia ? 'clickable-media' : 'clickable-cloud-file'}" data-index="${index}" data-filename="${file}">
                 ${mediaTag}
+                ${albumBadge}
                 <div class="media-actions">
-                    <form action="/trash/${encodeURIComponent(media.filename)}" method="POST" class="delete-form" data-filename="${file}">
+                    ${
+                      !isMedia
+                        ? `<a href="/media/${encodeURIComponent(item.filename)}?download=1" download="${file}" class="btn icon" title="Scarica file" onclick="window.trackDirectDownload && window.trackDirectDownload(event, '${file}', ${sizeBytes})">
+                            <span class="material-icons">download</span>
+                        </a>`
+                        : ''
+                    }
+                    <form action="/trash/${encodeURIComponent(item.filename)}" method="POST" class="delete-form" data-filename="${file}">
                         <button type="submit" class="btn icon danger" title="Sposta nel Cestino" onclick="handleDelete(event, this)">
                             <span class="material-icons">delete</span>
                         </button>
@@ -90,28 +146,66 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
   const styles = `<link rel="stylesheet" href="/static/styles/gallery.css">`;
 
   const content = `
-<div class="gallery-container">
+<div class="gallery-container" data-albums='${albumsJson}'>
     <header class="gallery-header">
         <div class="header-content">
             <div class="header-title-group">
-                <h1>Il tuo archivio</h1>
-                <p id="media-count">${mediaFiles.length} elementi</p>
+                <h1 id="main-view-title">Il tuo archivio</h1>
+                <p id="media-count">${allFiles.length} elementi</p>
             </div>
             <div class="header-top-controls">
-                <div class="grouping-controls">
-                    <span class="material-icons">calendar_view_month</span>
+                <div class="grouping-controls" id="grouping-controls-wrap">
+                    <span class="material-icons">folder_special</span>
                     <select id="group-by-select" class="btn-like-select" aria-label="Raggruppa per">
                         <option value="none">Tutti</option>
                         <option value="day">Giorno</option>
                         <option value="month" selected>Mese</option>
                         <option value="year">Anno</option>
+                        <option value="album">Album</option>
                     </select>
                 </div>
+
+                <button class="btn outlined" id="new-album-btn" title="Crea o Gestisci Album">
+                    <span class="material-icons">create_new_folder</span>
+                    <span class="btn-text">Album</span>
+                </button>
 
                 <button class="btn outlined" id="select-all-btn" title="Seleziona Tutto" style="display: none;">
                     <span class="material-icons">done_all</span>
                     <span class="btn-text">Seleziona Tutto</span>
                 </button>
+
+                <!-- TOP-RIGHT FLOATING TRANSFER CENTER (UPLOADS & DOWNLOADS WITH LIVE SPEED & SIZE) -->
+                <div id="upload-indicator-container" class="upload-indicator-container top-right-transfer">
+                    <button type="button" id="upload-gem" class="upload-gem" title="Operazioni di Caricamento e Scaricamento">
+                        <svg class="upload-progress-ring" width="44" height="44">
+                            <circle class="progress-ring-track" cx="22" cy="22" r="18"></circle>
+                            <circle id="upload-progress-arc" class="progress-ring-arc" cx="22" cy="22" r="18"></circle>
+                        </svg>
+                        <span id="upload-indicator-icon" class="material-icons">swap_vert</span>
+                        <span id="upload-indicator-percentage">0%</span>
+                    </button>
+
+                    <div id="upload-details-card" class="upload-details-card">
+                        <header class="upload-card-header">
+                            <div>
+                                <h3 id="upload-card-title">Centro Trasferimenti</h3>
+                                <p id="upload-speed-badge" class="transfer-speed-meta">0 KB/s • 0 B / 0 B</p>
+                            </div>
+                            <button id="upload-close-btn" class="btn icon" title="Chiudi pannello">
+                                <span class="material-icons">close</span>
+                            </button>
+                        </header>
+                        <div class="upload-card-body">
+                            <ul id="upload-file-list" class="upload-file-list">
+                                <li class="transfer-empty-item">Nessuna operazione in corso</li>
+                            </ul>
+                        </div>
+                        <footer class="upload-card-footer">
+                            <p id="upload-card-status">Pronto per caricare o scaricare file</p>
+                        </footer>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -132,12 +226,32 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
         ${cardsHtml}
     </div>
 
+    <!-- ALBUM MODAL -->
+    <div id="album-modal-backdrop" class="m3-modal-backdrop" style="display: none;">
+        <div class="m3-modal-card">
+            <h3>Gestisci Album</h3>
+            <p class="m3-modal-sub">Crea un nuovo album o assegna gli elementi selezionati a un album.</p>
+            <div class="m3-modal-input-row">
+                <input type="text" id="new-album-name-input" placeholder="Nome nuovo album (es. Vacanze 2026)" />
+                <button type="button" class="btn primary" id="confirm-create-album-btn">Crea</button>
+            </div>
+            <div id="album-chips-list" class="album-chips-list"></div>
+            <div class="m3-modal-actions">
+                <button type="button" class="btn outlined" id="close-album-modal-btn">Chiudi</button>
+            </div>
+        </div>
+    </div>
+
     <!-- MATERIAL YOU 120HZ FLOATING BAR -->
     <div class="m3-floating-bar-wrapper">
         <div class="m3-selection-dock">
             <button class="btn primary" id="download-selected-btn" title="Scarica Selezionati" style="display: none;">
                 <span class="material-icons">download</span>
                 <span class="btn-text">Scarica</span> (<span id="selected-count">0</span>)
+            </button>
+            <button class="btn outlined" id="assign-album-selected-btn" title="Sposta in un Album" style="display: none;">
+                <span class="material-icons">photo_album</span>
+                <span class="btn-text">Album</span>
             </button>
             <button class="btn danger" id="delete-selected-btn" title="Sposta Selezionati nel Cestino" style="display: none;">
                 <span class="material-icons">delete_sweep</span>
@@ -146,14 +260,19 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
         </div>
 
         <nav class="m3-floating-bar" aria-label="Azioni principali">
-            <a href="/" class="nav-pill active" title="Galleria">
+            <button type="button" class="nav-pill active" id="tab-media-btn" data-view-tab="media" title="Galleria Foto e Video">
                 <span class="material-icons">photo_library</span>
                 <span class="pill-label">Foto</span>
-            </a>
+            </button>
+
+            <button type="button" class="nav-pill" id="tab-files-btn" data-view-tab="files" title="File Manager Cloud">
+                <span class="material-icons">folder</span>
+                <span class="pill-label">File Cloud</span>
+            </button>
 
             <form action="/upload" method="POST" enctype="multipart/form-data" class="upload-form" id="upload-form">
-                <input type="file" id="file-input" name="file[]" accept="image/*,video/*" hidden multiple>
-                <label for="file-input" class="nav-pill tonal-cta" id="upload-label" title="Carica foto o video">
+                <input type="file" id="file-input" name="file[]" accept="*/*" hidden multiple>
+                <label for="file-input" class="nav-pill tonal-cta" id="upload-label" title="Carica Foto, Video o qualsiasi File Cloud">
                     <span class="material-icons">add</span>
                     <span class="pill-label">Carica</span>
                 </label>
@@ -177,33 +296,6 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
                 <span class="material-icons">logout</span>
             </button>
         </nav>
-    </div>
-</div>
-
-<!-- INDICATORE DI UPLOAD FLUTTUANTE -->
-<div id="upload-indicator-container" class="upload-indicator-container" style="display: none;">
-    <div id="upload-gem" class="upload-gem">
-        <svg class="upload-progress-ring" width="56" height="56">
-            <circle class="progress-ring-track" cx="28" cy="28" r="24"></circle>
-            <circle id="upload-progress-arc" class="progress-ring-arc" cx="28" cy="28" r="24"></circle>
-        </svg>
-        <span id="upload-indicator-icon" class="material-icons">upload</span>
-        <span id="upload-indicator-percentage">0%</span>
-    </div>
-
-    <div id="upload-details-card" class="upload-details-card">
-        <header class="upload-card-header">
-            <h3 id="upload-card-title">In caricamento...</h3>
-            <button id="upload-close-btn" class="btn icon" title="Chiudi">
-                <span class="material-icons">expand_more</span>
-            </button>
-        </header>
-        <div class="upload-card-body">
-            <ul id="upload-file-list" class="upload-file-list"></ul>
-        </div>
-        <footer class="upload-card-footer">
-            <p id="upload-card-status">Preparazione...</p>
-        </footer>
     </div>
 </div>
 
@@ -264,6 +356,20 @@ export function renderGalleryTemplate(mediaFiles: MediaItem[]): string {
         const galleryGrid = document.querySelector('.gallery-grid');
         if (galleryGrid) {
             galleryGrid.addEventListener('click', (event) => {
+                const clickedCloudFile = event.target.closest('.clickable-cloud-file');
+                if (clickedCloudFile && !event.target.closest('.media-actions') && !event.target.matches('.media-checkbox')) {
+                    const df = clickedCloudFile.getAttribute('data-filename');
+                    if (df) {
+                        const a = document.createElement('a');
+                        a.href = \`/media/\${encodeURIComponent(df)}?download=1\`;
+                        a.download = df;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }
+                    return;
+                }
+
                 const clickedCard = event.target.closest('.clickable-media');
                 if (clickedCard && !event.target.closest('.delete-form') && !event.target.matches('.media-checkbox')) {
                     const allCards = Array.from(galleryGrid.querySelectorAll('.clickable-media'));
@@ -355,15 +461,34 @@ export function renderTrashTemplate(trashedFiles: MediaItem[]): string {
                     <p>I file eliminati appariranno qui.</p>
                 </div>`
       : trashedFiles
-          .map((media) => {
-            const file = escapeHtml(media.filename);
+          .map((item) => {
+            const file = escapeHtml(item.filename);
             const ext = file.split('.').pop()?.toLowerCase() || '';
-            const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
-            const mediaTag = isImg
-              ? `<img src="/media/${encodeURIComponent(media.filename)}?from_trash=true" alt="${file}" loading="lazy">`
-              : `<video preload="metadata">
-                                <source src="/media/${encodeURIComponent(media.filename)}?from_trash=true#t=0.5" type="video/mp4">
+            const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic'].includes(ext);
+            const isVid = ['mp4', 'mov', 'webm', 'mkv'].includes(ext);
+            const isMedia = item.isMedia !== undefined ? item.isMedia : isImg || isVid;
+            const category = item.category || (isMedia ? 'media' : 'other');
+
+            let mediaTag = '';
+            if (isImg) {
+              mediaTag = `<img src="/media/${encodeURIComponent(item.filename)}?from_trash=true" alt="${file}" loading="lazy">`;
+            } else if (isVid) {
+              mediaTag = `<video preload="metadata">
+                                <source src="/media/${encodeURIComponent(item.filename)}?from_trash=true#t=0.5" type="video/mp4">
                             </video>`;
+            } else {
+              const iconName = getCategoryIcon(category, ext);
+              mediaTag = `<div class="cloud-file-preview" data-category="${category}">
+                            <div class="cloud-file-icon-wrap">
+                                <span class="material-icons">${iconName}</span>
+                                <span class="cloud-file-ext">${escapeHtml(ext.toUpperCase() || 'FILE')}</span>
+                            </div>
+                            <div class="cloud-file-meta">
+                                <span class="cloud-file-title">${file}</span>
+                                <span class="cloud-file-sub">${formatFileSize(item.size)}</span>
+                            </div>
+                        </div>`;
+            }
 
             return `
                 <div class="media-card-wrapper">

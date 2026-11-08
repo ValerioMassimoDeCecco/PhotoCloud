@@ -1,35 +1,34 @@
-// static/scripts/selection.js (Versione con controlli di esistenza degli elementi UI)
-
 document.addEventListener('DOMContentLoaded', () => {
-    // --- Riferimenti agli elementi del DOM ---
     const selectAllBtn = document.getElementById('select-all-btn');
     const downloadSelectedBtn = document.getElementById('download-selected-btn');
+    const assignAlbumSelectedBtn = document.getElementById('assign-album-selected-btn');
     const deleteSelectedBtn = document.getElementById('delete-selected-btn');
     const selectedCountSpan = document.getElementById('selected-count');
     const mediaCheckboxes = document.querySelectorAll('.media-checkbox');
     const hasMedia = mediaCheckboxes.length > 0;
 
-    // Elementi per la barra di avanzamento del download
-    const progressContainer = document.querySelector('.scan-status-container');
-    const progressStatus = document.getElementById('scan-main-status');
+    // Album Modal elements
+    const newAlbumBtn = document.getElementById('new-album-btn');
+    const albumModalBackdrop = document.getElementById('album-modal-backdrop');
+    const closeAlbumModalBtn = document.getElementById('close-album-modal-btn');
+    const confirmCreateAlbumBtn = document.getElementById('confirm-create-album-btn');
+    const newAlbumNameInput = document.getElementById('new-album-name-input');
+    const albumChipsList = document.getElementById('album-chips-list');
+    const galleryContainer = document.querySelector('.gallery-container');
 
-    // --- Stato della selezione ---
     let selectedFiles = new Set();
     let isSelectAll = false;
-
-    // --- Inizializzazione ---
-    if (!hasMedia && !window.location.pathname.includes('/trash')) {
-        if (selectAllBtn) selectAllBtn.style.display = 'none';
-        return;
+    let availableAlbums = [];
+    try {
+        availableAlbums = JSON.parse(galleryContainer?.dataset.albums || '[]');
+    } catch (_e) {
+        availableAlbums = [];
     }
 
-    if (selectAllBtn) selectAllBtn.style.display = 'inline-flex';
+    if (hasMedia && selectAllBtn) {
+        selectAllBtn.style.display = 'inline-flex';
+    }
 
-    // --- Funzioni ---
-
-    /**
-     * Aggiorna l'interfaccia utente (UI) in base ai file selezionati.
-     */
     function updateUI() {
         const count = selectedFiles.size;
         if (selectedCountSpan) selectedCountSpan.textContent = count;
@@ -45,23 +44,122 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const showActionButtons = count > 0;
         if (downloadSelectedBtn) downloadSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
+        if (assignAlbumSelectedBtn) assignAlbumSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
         if (deleteSelectedBtn) deleteSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
 
         if (selectAllBtn) {
             const btnText = selectAllBtn.querySelector('.btn-text');
             if (count > 0 && count === mediaCheckboxes.length) {
-                btnText.textContent = "Deseleziona Tutto";
+                if (btnText) btnText.textContent = 'Deseleziona Tutto';
                 isSelectAll = true;
             } else {
-                btnText.textContent = "Seleziona Tutto";
+                if (btnText) btnText.textContent = 'Seleziona Tutto';
                 isSelectAll = false;
             }
         }
     }
 
-    /**
-     * Avvia il download di un file creando un link temporaneo.
-     */
+    function renderAlbumChips() {
+        if (!albumChipsList) return;
+        albumChipsList.innerHTML = '';
+
+        const allAlbums = ['Senza Album', ...availableAlbums];
+        allAlbums.forEach(albumName => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'btn outlined album-chip-btn';
+            chip.innerHTML = `<span class="material-icons">${albumName === 'Senza Album' ? 'folder_off' : 'photo_album'}</span> ${albumName}`;
+            chip.addEventListener('click', async () => {
+                const targetAlbum = albumName === 'Senza Album' ? '' : albumName;
+                const files = Array.from(selectedFiles);
+                if (files.length === 0) {
+                    const groupBySelect = document.getElementById('group-by-select');
+                    if (groupBySelect) {
+                        groupBySelect.value = 'album';
+                        if (window.refreshGalleryGrouping) window.refreshGalleryGrouping();
+                    }
+                    if (albumModalBackdrop) albumModalBackdrop.style.display = 'none';
+                    return;
+                }
+                await assignSelectedToAlbum(files, targetAlbum);
+            });
+            albumChipsList.appendChild(chip);
+        });
+    }
+
+    async function assignSelectedToAlbum(filenames, albumName) {
+        try {
+            const resp = await fetch('/api/albums/assign', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filenames, album: albumName })
+            });
+            const data = await resp.json();
+            if (data.success) {
+                availableAlbums = data.albums || availableAlbums;
+                filenames.forEach(fn => {
+                    const wrapper = document.querySelector(`.media-card-wrapper[data-filename="${CSS.escape(fn)}"]`);
+                    if (wrapper) {
+                        wrapper.dataset.album = albumName;
+                    }
+                });
+                selectedFiles.clear();
+                updateUI();
+                if (albumModalBackdrop) albumModalBackdrop.style.display = 'none';
+                const groupBySelect = document.getElementById('group-by-select');
+                if (groupBySelect) {
+                    groupBySelect.value = 'album';
+                }
+                if (window.refreshGalleryGrouping) window.refreshGalleryGrouping();
+            }
+        } catch (e) {
+            console.error('Errore assegnazione album:', e);
+        }
+    }
+
+    if (newAlbumBtn) {
+        newAlbumBtn.addEventListener('click', () => {
+            renderAlbumChips();
+            if (albumModalBackdrop) albumModalBackdrop.style.display = 'flex';
+        });
+    }
+    if (assignAlbumSelectedBtn) {
+        assignAlbumSelectedBtn.addEventListener('click', () => {
+            renderAlbumChips();
+            if (albumModalBackdrop) albumModalBackdrop.style.display = 'flex';
+        });
+    }
+    if (closeAlbumModalBtn) {
+        closeAlbumModalBtn.addEventListener('click', () => {
+            if (albumModalBackdrop) albumModalBackdrop.style.display = 'none';
+        });
+    }
+    if (confirmCreateAlbumBtn && newAlbumNameInput) {
+        confirmCreateAlbumBtn.addEventListener('click', async () => {
+            const name = newAlbumNameInput.value.trim();
+            if (!name) return;
+            try {
+                const resp = await fetch('/api/albums/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    availableAlbums = data.albums || [];
+                    newAlbumNameInput.value = '';
+                    if (selectedFiles.size > 0) {
+                        await assignSelectedToAlbum(Array.from(selectedFiles), name);
+                    } else {
+                        renderAlbumChips();
+                    }
+                }
+            } catch (e) {
+                console.error('Errore creazione album:', e);
+            }
+        });
+    }
+
     function triggerDownload(url, filename) {
         const a = document.createElement('a');
         a.href = url;
@@ -70,67 +168,45 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        console.log(`Download avviato per: ${filename}`);
     }
 
-    /**
-     * Interroga il server per ottenere lo stato di avanzamento della creazione dello ZIP.
-     */
-    function pollZipProgress(taskId) {
-        console.log(`Avvio polling per il task ID: ${taskId}`);
+    function pollZipProgress(taskId, fileCount) {
+        const startTime = performance.now();
+        const tracker = window.registerTransferOperation
+            ? window.registerTransferOperation({
+                  id: `zip_${taskId}`,
+                  name: `Archivio ZIP (${fileCount} file)`,
+                  type: 'download',
+                  totalBytes: 0
+              })
+            : null;
+
         const interval = setInterval(async () => {
             try {
                 const response = await fetch(`/zip-progress/${taskId}`);
-                if (!response.ok) {
-                    throw new Error(`Errore di rete: ${response.status} ${response.statusText}`);
-                }
+                if (!response.ok) throw new Error(`Errore: ${response.status}`);
                 const data = await response.json();
-                console.log('Stato ricevuto:', data);
+                const elapsedSec = Math.max(0.1, (performance.now() - startTime) / 1000);
+                const processed = data.processedBytes || 0;
+                const total = data.totalBytes || processed || 1;
+                const speedBps = processed / elapsedSec;
 
-                switch (data.status) {
-                    case 'processing':
-                        if (progressStatus) {
-                            progressStatus.innerHTML = `Creazione archivio in corso... <div class="progress-bar-inline" style="width:${data.progress}%"></div> ${data.progress}%`;
-                        }
-                        break;
-                    case 'complete':
-                        clearInterval(interval);
-                        if (progressStatus) {
-                            progressStatus.textContent = "Archivio pronto! Download in avvio...";
-                        }
-                        triggerDownload(`/download-zip/${data.filename}`, data.filename);
-                        
-                        setTimeout(() => {
-                            if (progressContainer) progressContainer.style.display = 'none';
-                        }, 5000);
-                        break;
-                    case 'error':
-                    case 'not_found':
-                        clearInterval(interval);
-                        const errorMessage = data.error || 'Task non trovato o fallito.';
-                        if (progressStatus) {
-                            progressStatus.textContent = `Errore: ${errorMessage}`;
-                        }
-                        alert(`Si è verificato un errore durante la creazione dell'archivio: ${errorMessage}`);
-                        setTimeout(() => { if (progressContainer) progressContainer.style.display = 'none'; }, 5000);
-                        break;
-                    default:
-                        console.warn(`Stato del task non riconosciuto: ${data.status}`);
-                        break;
+                if (data.status === 'processing') {
+                    if (tracker) tracker.update(processed, total, speedBps);
+                } else if (data.status === 'complete') {
+                    clearInterval(interval);
+                    if (tracker) tracker.complete(total, elapsedSec);
+                    triggerDownload(`/download-zip/${data.filename}`, data.filename);
+                } else if (data.status === 'error' || data.status === 'not_found') {
+                    clearInterval(interval);
+                    if (tracker) tracker.fail(data.error || 'Errore creazione ZIP');
                 }
             } catch (error) {
                 clearInterval(interval);
-                if (progressStatus) {
-                    progressStatus.textContent = 'Errore di comunicazione durante il controllo.';
-                }
-                console.error("Errore durante il polling:", error);
-                alert("Impossibile contattare il server per verificare lo stato dell'archivio.");
-                setTimeout(() => { if (progressContainer) progressContainer.style.display = 'none'; }, 3000);
+                if (tracker) tracker.fail(error.message);
             }
-        }, 2000);
+        }, 800);
     }
-
-    // --- Gestori di Eventi ---
 
     if (selectAllBtn) {
         selectAllBtn.addEventListener('click', () => {
@@ -138,7 +214,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 selectedFiles.clear();
             } else {
                 mediaCheckboxes.forEach(checkbox => {
-                    selectedFiles.add(checkbox.dataset.filename);
+                    if (checkbox.closest('.media-card-wrapper')?.isConnected) {
+                        selectedFiles.add(checkbox.dataset.filename);
+                    }
                 });
             }
             updateUI();
@@ -160,15 +238,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (downloadSelectedBtn) {
         downloadSelectedBtn.addEventListener('click', async () => {
             const filesToDownload = Array.from(selectedFiles);
-            if (filesToDownload.length === 0) {
-                alert("Nessun file selezionato per il download.");
-                return;
-            }
-
-            console.log("Richiesta di download per i file:", filesToDownload);
-
-            if (progressContainer) progressContainer.style.display = 'block';
-            if (progressStatus) progressStatus.textContent = "Avvio della preparazione dell'archivio...";
+            if (filesToDownload.length === 0) return;
 
             try {
                 const response = await fetch('/prepare-zip', {
@@ -176,21 +246,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ filenames: filesToDownload }),
                 });
-
-                if (!response.ok) {
-                    throw new Error("Il server non ha potuto avviare la creazione dell'archivio.");
-                }
-
                 const data = await response.json();
                 if (data.task_id) {
-                    pollZipProgress(data.task_id);
-                } else {
-                    throw new Error(data.error || "Risposta non valida dal server dopo la richiesta di ZIP.");
+                    pollZipProgress(data.task_id, filesToDownload.length);
                 }
             } catch (error) {
-                console.error("Errore durante la preparazione dello ZIP:", error);
-                if (progressStatus) progressStatus.textContent = `Errore: ${error.message}`;
-                alert(error.message);
+                console.error('Errore preparazione ZIP:', error);
             }
         });
     }
@@ -198,16 +259,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (deleteSelectedBtn) {
         deleteSelectedBtn.addEventListener('click', async () => {
             const filesToDelete = Array.from(selectedFiles);
-            if (filesToDelete.length === 0) {
-                alert("Nessun file selezionato da eliminare.");
-                return;
-            }
-
-            if (!confirm(`Sei sicuro di voler spostare ${filesToDelete.length} elementi nel cestino?`)) {
-                return;
-            }
-
-            console.log("Richiesta di eliminazione per i file:", filesToDelete);
+            if (filesToDelete.length === 0) return;
+            if (!confirm(`Spostare ${filesToDelete.length} elementi nel cestino?`)) return;
 
             try {
                 const response = await fetch('/trash/batch', {
@@ -215,41 +268,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ filenames: filesToDelete }),
                 });
-
                 const result = await response.json();
-
                 if (result.success) {
                     filesToDelete.forEach(filename => {
-                        const checkbox = document.querySelector(`.media-checkbox[data-filename="${filename}"]`);
+                        const checkbox = document.querySelector(`.media-checkbox[data-filename="${CSS.escape(filename)}"]`);
                         if (checkbox) {
                             const wrapper = checkbox.closest('.media-card-wrapper');
-                            if (wrapper) {
-                                wrapper.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
-                                wrapper.style.opacity = '0';
-                                wrapper.style.transform = 'scale(0.8)';
-                                setTimeout(() => wrapper.remove(), 300);
-                            }
+                            if (wrapper) wrapper.remove();
                         }
                     });
-                    
-                    const countElement = document.getElementById('media-count');
-                    if (countElement) {
-                        const currentCount = parseInt(countElement.textContent) || 0;
-                        countElement.textContent = `${Math.max(0, currentCount - filesToDelete.length)} elementi`;
-                    }
-
                     selectedFiles.clear();
                     updateUI();
-
-                } else {
-                    alert(`Errore: ${result.error || "Impossibile completare l'operazione."}`);
+                    if (window.refreshGalleryGrouping) window.refreshGalleryGrouping();
                 }
             } catch (error) {
-                console.error('Errore durante lo spostamento nel cestino:', error);
-                alert('Errore di comunicazione con il server.');
+                console.error('Errore cestino batch:', error);
             }
         });
     }
-    
+
     updateUI();
 });

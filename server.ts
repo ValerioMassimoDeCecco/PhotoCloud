@@ -25,6 +25,7 @@ import {
   GitHubReleaseStatus,
   GitHubActionsRunStatus,
 } from './src/lib/githubReleasePublisher';
+import { FileCategory, MediaItem } from './src/types';
 
 const UPLOAD_FOLDER = path.resolve(process.cwd(), 'user_media');
 const TEMP_ZIP_FOLDER = path.resolve(process.cwd(), 'temp_zips');
@@ -44,6 +45,11 @@ interface SessionData {
   apiKey: string;
 }
 
+interface UserAlbumsData {
+  albums: string[];
+  fileAlbums: Record<string, string>;
+}
+
 const SESSIONS = new Map<string, SessionData>();
 const ZIP_TASKS = new Map<
   string,
@@ -51,6 +57,8 @@ const ZIP_TASKS = new Map<
     status: 'starting' | 'processing' | 'complete' | 'error';
     progress: number;
     filename: string | null;
+    totalBytes?: number;
+    processedBytes?: number;
     error?: string;
   }
 >();
@@ -92,21 +100,73 @@ function saveUser(username: string, keyHash: string): void {
   fs.appendFileSync(USERS_FILE, `${username}:${keyHash}\n`, 'utf-8');
 }
 
-const VALID_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov'];
+const MEDIA_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic', '.mp4', '.mov', '.webm', '.mkv']);
+const DOC_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.rtf', '.txt', '.md', '.csv']);
+const ARCHIVE_EXTENSIONS = new Set(['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.apk', '.iso', '.dmg', '.exe']);
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus']);
+const CODE_EXTENSIONS = new Set(['.json', '.xml', '.yaml', '.yml', '.js', '.ts', '.py', '.kt', '.java', '.html', '.css', '.sql', '.sh']);
 
-function listMediaFiles(folderPath: string) {
+export function classifyFileExtension(filename: string): { isMedia: boolean; category: FileCategory } {
+  const ext = path.extname(filename).toLowerCase();
+  if (MEDIA_EXTENSIONS.has(ext)) return { isMedia: true, category: 'media' };
+  if (DOC_EXTENSIONS.has(ext)) return { isMedia: false, category: 'document' };
+  if (ARCHIVE_EXTENSIONS.has(ext)) return { isMedia: false, category: 'archive' };
+  if (AUDIO_EXTENSIONS.has(ext)) return { isMedia: false, category: 'audio' };
+  if (CODE_EXTENSIONS.has(ext)) return { isMedia: false, category: 'code' };
+  return { isMedia: false, category: 'other' };
+}
+
+function getAlbumsFilePath(username: string): string {
+  return path.join(UPLOAD_FOLDER, username, '.albums.json');
+}
+
+function loadUserAlbums(username: string): UserAlbumsData {
+  const p = getAlbumsFilePath(username);
+  if (!fs.existsSync(p)) {
+    return { albums: [], fileAlbums: {} };
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(p, 'utf-8')) as Partial<UserAlbumsData>;
+    return {
+      albums: Array.isArray(raw.albums) ? raw.albums : [],
+      fileAlbums: raw.fileAlbums && typeof raw.fileAlbums === 'object' ? raw.fileAlbums : {},
+    };
+  } catch {
+    return { albums: [], fileAlbums: {} };
+  }
+}
+
+function saveUserAlbums(username: string, data: UserAlbumsData): void {
+  const userFolder = path.join(UPLOAD_FOLDER, username);
+  fs.mkdirSync(userFolder, { recursive: true });
+  fs.writeFileSync(getAlbumsFilePath(username), JSON.stringify(data, null, 2), 'utf-8');
+}
+
+function listMediaFiles(folderPath: string, username?: string): MediaItem[] {
   if (!fs.existsSync(folderPath)) return [];
   const files = fs.readdirSync(folderPath);
-  const details: Array<{ filename: string; timestamp: number; size: number }> = [];
+  const albumsData = username ? loadUserAlbums(username) : { albums: [], fileAlbums: {} };
+  const details: MediaItem[] = [];
   for (const f of files) {
+    if (f.startsWith('.')) continue; // skip .albums.json and hidden files
     const full = path.join(folderPath, f);
-    const stat = fs.statSync(full);
-    const ext = path.extname(f).toLowerCase();
-    if (stat.isFile() && VALID_EXTENSIONS.includes(ext)) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      continue;
+    }
+    if (stat.isFile()) {
+      const { isMedia, category } = classifyFileExtension(f);
+      // Encrypted payload has 28-byte AES-GCM overhead (12 IV + 16 AuthTag)
+      const originalApproxSize = Math.max(0, stat.size - 28);
       details.push({
         filename: f,
         timestamp: stat.mtimeMs / 1000,
-        size: stat.size,
+        size: originalApproxSize,
+        isMedia,
+        category,
+        album: albumsData.fileAlbums[f] || '',
       });
     }
   }
@@ -117,8 +177,6 @@ function listMediaFiles(folderPath: string) {
 const upload = multer({ storage: multer.memoryStorage() });
 
 async function startServer() {
-  // Compile the native Android APK from /android-app into /release/photocloud-release-v1.0.0-signed.apk
-  // and automatically publish to GitHub Releases if GITHUB_TOKEN is configured
   try {
     const compiled = await compileSignedAndroidApk(RELEASE_DIR);
     latestReleaseStatus = await publishApkToGitHubRelease({
@@ -135,7 +193,7 @@ async function startServer() {
   app.use('/static', express.static(STATIC_DIR));
   app.use('/release', express.static(RELEASE_DIR));
 
-  // --- ORIGINAL WEB APP ROUTES (1:1 with main.py) ---
+  // --- ORIGINAL WEB APP ROUTES + CLOUD FILE MANAGER & ALBUMS ---
   app.get('/', (req: Request, res: Response) => {
     const sess = getSession(req);
     if (!sess) {
@@ -145,9 +203,10 @@ async function startServer() {
     }
     const userFolder = path.join(UPLOAD_FOLDER, sess.username);
     fs.mkdirSync(userFolder, { recursive: true });
-    const mediaFiles = listMediaFiles(userFolder);
+    const allFiles = listMediaFiles(userFolder, sess.username);
+    const albumsData = loadUserAlbums(sess.username);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderGalleryTemplate(mediaFiles));
+    res.send(renderGalleryTemplate(allFiles, albumsData.albums));
   });
 
   app.get('/trash', (req: Request, res: Response) => {
@@ -158,12 +217,12 @@ async function startServer() {
     }
     const trashFolder = path.join(UPLOAD_FOLDER, sess.username, 'trash');
     fs.mkdirSync(trashFolder, { recursive: true });
-    const trashedFiles = listMediaFiles(trashFolder);
+    const trashedFiles = listMediaFiles(trashFolder, sess.username);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(renderTrashTemplate(trashedFiles));
   });
 
-  // --- SESSION API (Used by Native Android APK Client) ---
+  // --- SESSION & ALBUMS API (Used by Web & Native Android APK Client) ---
   app.get('/api/session', (req: Request, res: Response) => {
     const sess = getSession(req);
     if (!sess) {
@@ -172,12 +231,88 @@ async function startServer() {
     }
     const userFolder = path.join(UPLOAD_FOLDER, sess.username);
     const trashFolder = path.join(userFolder, 'trash');
+    const albumsData = loadUserAlbums(sess.username);
     res.json({
       authenticated: true,
       username: sess.username,
-      mediaFiles: listMediaFiles(userFolder),
-      trashedFiles: listMediaFiles(trashFolder),
+      mediaFiles: listMediaFiles(userFolder, sess.username),
+      trashedFiles: listMediaFiles(trashFolder, sess.username),
+      albums: albumsData.albums,
+      fileAlbums: albumsData.fileAlbums,
     });
+  });
+
+  app.get('/api/albums', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    res.json(loadUserAlbums(sess.username));
+  });
+
+  app.post('/api/albums/create', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const rawName = String(req.body?.name || '').trim();
+    if (!rawName) {
+      res.status(400).json({ error: 'Nome album non valido' });
+      return;
+    }
+    const data = loadUserAlbums(sess.username);
+    if (!data.albums.includes(rawName)) {
+      data.albums.push(rawName);
+      data.albums.sort((a, b) => a.localeCompare(b, 'it'));
+      saveUserAlbums(sess.username, data);
+    }
+    res.json({ success: true, ...data });
+  });
+
+  app.post('/api/albums/assign', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const filenames: string[] = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
+    const albumName = String(req.body?.album || '').trim();
+    const data = loadUserAlbums(sess.username);
+
+    if (albumName && !data.albums.includes(albumName)) {
+      data.albums.push(albumName);
+      data.albums.sort((a, b) => a.localeCompare(b, 'it'));
+    }
+
+    for (const fn of filenames) {
+      if (albumName) {
+        data.fileAlbums[fn] = albumName;
+      } else {
+        delete data.fileAlbums[fn];
+      }
+    }
+    saveUserAlbums(sess.username, data);
+    res.json({ success: true, ...data });
+  });
+
+  app.post('/api/albums/delete', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const albumName = String(req.body?.name || '').trim();
+    const data = loadUserAlbums(sess.username);
+    data.albums = data.albums.filter((a) => a !== albumName);
+    for (const [fn, alb] of Object.entries(data.fileAlbums)) {
+      if (alb === albumName) {
+        delete data.fileAlbums[fn];
+      }
+    }
+    saveUserAlbums(sess.username, data);
+    res.json({ success: true, ...data });
   });
 
   // --- APK & GITHUB ACTIONS / RELEASE ENDPOINTS ---
@@ -206,7 +341,7 @@ async function startServer() {
       const status: GitHubActionsRunStatus = await triggerGitHubActionsBuild({
         githubToken: process.env.GITHUB_TOKEN,
         branch: req.body?.branch,
-        releaseTag: req.body?.release_tag || 'v1.0.5',
+        releaseTag: req.body?.release_tag || 'v1.0.6',
       });
       res.json(status);
     } catch (e: unknown) {
@@ -221,7 +356,7 @@ async function startServer() {
     try {
       const compiled = await compileSignedAndroidApk(RELEASE_DIR);
       const token = process.env.GITHUB_TOKEN;
-      const tagName = req.body?.tag_name || 'v1.0.5';
+      const tagName = req.body?.tag_name || 'v1.0.6';
       const status = await publishApkToGitHubRelease({
         githubToken: token,
         tagName,
@@ -340,7 +475,7 @@ async function startServer() {
     res.redirect('/');
   });
 
-  // --- UPLOAD ---
+  // --- UPLOAD (Supports Both Media & Non-Media Cloud Files + Optional Album) ---
   app.post('/upload', upload.array('file[]'), (req: Request, res: Response) => {
     const sess = getSession(req);
     if (!sess) {
@@ -363,18 +498,50 @@ async function startServer() {
       ? [rawTimestamps]
       : [];
 
+    const targetAlbum = String(req.body?.album || '').trim();
+    const albumsData = loadUserAlbums(sess.username);
+    if (targetAlbum && !albumsData.albums.includes(targetAlbum)) {
+      albumsData.albums.push(targetAlbum);
+      albumsData.albums.sort((a, b) => a.localeCompare(b, 'it'));
+    }
+
     try {
       files.forEach((file, i) => {
-        const ext = path.extname(file.originalname) || '.jpg';
+        const rawOrig = path.basename(file.originalname || `file_${Date.now()}`);
+        const ext = path.extname(rawOrig) || '.bin';
+        const baseClean = path
+          .basename(rawOrig, ext)
+          .replace(/[^a-zA-Z0-9._-]/g, '_')
+          .slice(0, 64) || 'file';
+
+        const { isMedia } = classifyFileExtension(rawOrig);
         let filename = '';
         let filepath = '';
-        while (true) {
-          filename = `${crypto.randomBytes(8).toString('hex')}${ext}`;
-          filepath = path.join(userFolder, filename);
-          if (!fs.existsSync(filepath)) break;
+
+        if (!isMedia) {
+          // For Cloud File Manager non-media files, preserve readable filename
+          const candidate = `${baseClean}${ext}`;
+          if (!fs.existsSync(path.join(userFolder, candidate))) {
+            filename = candidate;
+            filepath = path.join(userFolder, candidate);
+          }
         }
+
+        if (!filename) {
+          while (true) {
+            const suffix = crypto.randomBytes(4).toString('hex');
+            filename = isMedia ? `${crypto.randomBytes(8).toString('hex')}${ext}` : `${baseClean}_${suffix}${ext}`;
+            filepath = path.join(userFolder, filename);
+            if (!fs.existsSync(filepath)) break;
+          }
+        }
+
         const encrypted = encryptFile(file.buffer, sess.apiKey);
         fs.writeFileSync(filepath, encrypted);
+
+        if (targetAlbum) {
+          albumsData.fileAlbums[filename] = targetAlbum;
+        }
 
         if (timestamps[i]) {
           const mtime = parseFloat(timestamps[i]) / 1000;
@@ -388,10 +555,14 @@ async function startServer() {
         }
       });
 
+      if (targetAlbum) {
+        saveUserAlbums(sess.username, albumsData);
+      }
+
       res.json({
         success: true,
         message: `${files.length} file caricati.`,
-        mediaFiles: listMediaFiles(userFolder),
+        mediaFiles: listMediaFiles(userFolder, sess.username),
       });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -399,7 +570,7 @@ async function startServer() {
     }
   });
 
-  // --- MEDIA DECRYPTION ---
+  // --- MEDIA & CLOUD FILE DECRYPTION ---
   app.get('/media/:filename', (req: Request, res: Response) => {
     const sess = getSession(req);
     if (!sess) {
@@ -435,10 +606,40 @@ async function startServer() {
         png: 'image/png',
         gif: 'image/gif',
         webp: 'image/webp',
+        bmp: 'image/bmp',
         mp4: 'video/mp4',
         mov: 'video/mp4',
+        webm: 'video/webm',
+        mkv: 'video/x-matroska',
+        pdf: 'application/pdf',
+        txt: 'text/plain; charset=utf-8',
+        md: 'text/markdown; charset=utf-8',
+        csv: 'text/csv; charset=utf-8',
+        json: 'application/json; charset=utf-8',
+        xml: 'application/xml; charset=utf-8',
+        zip: 'application/zip',
+        rar: 'application/vnd.rar',
+        '7z': 'application/x-7z-compressed',
+        apk: 'application/vnd.android.package-archive',
+        mp3: 'audio/mpeg',
+        wav: 'audio/wav',
+        ogg: 'audio/ogg',
+        flac: 'audio/flac',
+        doc: 'application/msword',
+        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        xls: 'application/vnd.ms-excel',
+        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ppt: 'application/vnd.ms-powerpoint',
+        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       };
       res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
+      res.setHeader('Content-Length', String(decrypted.length));
+      if (req.query.download === '1' || req.query.download === 'true') {
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${encodeURIComponent(filename)}"`
+        );
+      }
       res.send(decrypted);
     } catch {
       res.status(500).send('Errore durante la decrittografia.');
@@ -573,6 +774,11 @@ async function startServer() {
 
     try {
       fs.unlinkSync(safeFilepath);
+      const data = loadUserAlbums(sess.username);
+      if (data.fileAlbums[filename]) {
+        delete data.fileAlbums[filename];
+        saveUserAlbums(sess.username, data);
+      }
       res.json({ success: true });
     } catch (e: unknown) {
       res.status(500).json({
@@ -615,7 +821,7 @@ async function startServer() {
       res.json({ duplicates: [] });
       return;
     }
-    const files = listMediaFiles(userFolder);
+    const files = listMediaFiles(userFolder, sess.username);
     if (files.length < 2) {
       res.json({ duplicates: [] });
       return;
@@ -650,29 +856,55 @@ async function startServer() {
 
     const taskId = crypto.randomUUID();
     const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
-    ZIP_TASKS.set(taskId, { status: 'starting', progress: 0, filename: null });
+    ZIP_TASKS.set(taskId, {
+      status: 'starting',
+      progress: 0,
+      filename: null,
+      totalBytes: 0,
+      processedBytes: 0,
+    });
 
     (async () => {
       try {
         const zip = new JSZip();
         const total = filenames.length;
+        let processedBytes = 0;
+        let totalBytes = 0;
+        for (const fname of filenames) {
+          const sp = path.resolve(userFolder, fname);
+          if (sp.startsWith(userFolder + path.sep) && fs.existsSync(sp)) {
+            totalBytes += Math.max(0, fs.statSync(sp).size - 28);
+          }
+        }
         for (let i = 0; i < total; i++) {
           const fname = filenames[i];
           const progress = Math.round(((i + 1) / total) * 100);
-          ZIP_TASKS.set(taskId, { status: 'processing', progress, filename: null });
-
           const safePath = path.resolve(userFolder, fname);
           if (safePath.startsWith(userFolder + path.sep) && fs.existsSync(safePath)) {
             const enc = fs.readFileSync(safePath);
             const dec = decryptFile(enc, sess.apiKey);
+            processedBytes += dec.length;
             zip.file(path.basename(fname), dec);
           }
+          ZIP_TASKS.set(taskId, {
+            status: 'processing',
+            progress,
+            filename: null,
+            totalBytes,
+            processedBytes,
+          });
         }
         const zipFilename = `${taskId}.zip`;
         const zipFilepath = path.join(TEMP_ZIP_FOLDER, zipFilename);
         const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
         fs.writeFileSync(zipFilepath, buf);
-        ZIP_TASKS.set(taskId, { status: 'complete', progress: 100, filename: zipFilename });
+        ZIP_TASKS.set(taskId, {
+          status: 'complete',
+          progress: 100,
+          filename: zipFilename,
+          totalBytes: buf.length,
+          processedBytes: buf.length,
+        });
       } catch (err: unknown) {
         ZIP_TASKS.set(taskId, {
           status: 'error',
@@ -725,6 +957,7 @@ async function startServer() {
     ZIP_TASKS.delete(taskId);
 
     res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Length', String(zipBytes.length));
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(zipBytes);
   });
