@@ -1,18 +1,22 @@
 package com.valerio.photocloud
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Base64
 import android.widget.MediaController
 import android.widget.Toast
 import android.widget.VideoView
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
+import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
+import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+import androidx.biometric.BiometricPrompt
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -52,8 +56,10 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayCircleFilled
@@ -82,6 +88,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -100,13 +108,14 @@ enum class VaultTab {
 }
 
 /**
- * PhotoCloud 100% Native Android Client v1.0.2
+ * PhotoCloud 100% Native Android Client v1.0.3
+ * - Native Biometric Authentication (BiometricPrompt: Fingerprint / Face Unlock + Quick Biometric Login)
  * - Pure Jetpack Compose Material You (MD3 Dynamic Color) UI — NO WebView
  * - 120Hz High Refresh Rate display mode & spring physics
  * - Bottom Floating Bar (Material You Pill Bar)
- * - Instant Fullscreen 120Hz Lightbox with HorizontalPager + Pinch-to-Zoom using shared Bitmap cache
+ * - Instant Fullscreen 120Hz Lightbox with HorizontalPager + Pinch-to-Zoom
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private fun enableHighRefreshRate120Hz() {
         try {
@@ -127,6 +136,46 @@ class MainActivity : ComponentActivity() {
             window.attributes = params
         } catch (_: Exception) {
         }
+    }
+
+    fun canUseBiometrics(): Boolean {
+        val manager = BiometricManager.from(this)
+        val authenticators = BIOMETRIC_STRONG or BIOMETRIC_WEAK or DEVICE_CREDENTIAL
+        return manager.canAuthenticate(authenticators) == BiometricManager.BIOMETRIC_SUCCESS
+    }
+
+    fun showBiometricPrompt(
+        title: String = "Sblocca PhotoCloud",
+        subtitle: String = "Usa l'impronta digitale o il riconoscimento facciale per accedere all'archivio",
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val executor = ContextCompat.getMainExecutor(this)
+        val callback = object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                super.onAuthenticationSucceeded(result)
+                onSuccess()
+            }
+
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                super.onAuthenticationError(errorCode, errString)
+                if (errorCode != BiometricPrompt.ERROR_USER_CANCELED &&
+                    errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON &&
+                    errorCode != BiometricPrompt.ERROR_CANCELED
+                ) {
+                    onError(errString.toString())
+                }
+            }
+        }
+
+        val prompt = BiometricPrompt(this, executor, callback)
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+            .setTitle(title)
+            .setSubtitle(subtitle)
+            .setAllowedAuthenticators(BIOMETRIC_STRONG or BIOMETRIC_WEAK or DEVICE_CREDENTIAL)
+            .build()
+
+        prompt.authenticate(promptInfo)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -158,6 +207,7 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     PhotoCloudNativeApp(
+                        activity = this@MainActivity,
                         apiClient = apiClient,
                         initialServerUrl = initialServerUrl,
                         isDarkTheme = isDarkTheme,
@@ -180,6 +230,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun PhotoCloudNativeApp(
+    activity: MainActivity,
     apiClient: PhotoCloudApiClient,
     initialServerUrl: String,
     isDarkTheme: Boolean,
@@ -188,6 +239,7 @@ fun PhotoCloudNativeApp(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val prefs = remember { context.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE) }
 
     var serverUrl by remember { mutableStateOf(initialServerUrl) }
     var showServerDialog by remember { mutableStateOf(false) }
@@ -195,19 +247,50 @@ fun PhotoCloudNativeApp(
 
     var isCheckingSession by remember { mutableStateOf(true) }
     var isAuthenticated by remember { mutableStateOf(false) }
+    var isBiometricLocked by remember { mutableStateOf(false) }
+    var biometricEnabled by remember {
+        mutableStateOf(prefs.getBoolean("biometric_enabled", true))
+    }
+
+    var savedKeyBytes by remember {
+        mutableStateOf<ByteArray?>(
+            prefs.getString("saved_auth_key_b64", null)?.let {
+                try {
+                    Base64.decode(it, Base64.DEFAULT)
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        )
+    }
+
     var galleryItems by remember { mutableStateOf<List<MediaItemModel>>(emptyList()) }
     var trashItems by remember { mutableStateOf<List<MediaItemModel>>(emptyList()) }
     var infoDialogMessage by remember { mutableStateOf<String?>(null) }
 
-    fun refreshVault() {
+    fun saveKeyForBiometrics(bytes: ByteArray) {
+        savedKeyBytes = bytes
+        val b64 = Base64.encodeToString(bytes, Base64.DEFAULT)
+        prefs.edit().putString("saved_auth_key_b64", b64).apply()
+    }
+
+    fun refreshVault(requireBiometricOnInitialUnlock: Boolean = false) {
         scope.launch {
             val gallery = apiClient.fetchGalleryIfAuthenticated()
             if (gallery != null) {
                 isAuthenticated = true
                 galleryItems = gallery
                 trashItems = apiClient.fetchTrashItems()
+                if (requireBiometricOnInitialUnlock && biometricEnabled && activity.canUseBiometrics()) {
+                    isBiometricLocked = true
+                    activity.showBiometricPrompt(
+                        onSuccess = { isBiometricLocked = false },
+                        onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
+                    )
+                }
             } else {
                 isAuthenticated = false
+                isBiometricLocked = false
             }
             isCheckingSession = false
         }
@@ -215,23 +298,42 @@ fun PhotoCloudNativeApp(
 
     LaunchedEffect(serverUrl) {
         isCheckingSession = true
-        refreshVault()
+        refreshVault(requireBiometricOnInitialUnlock = true)
     }
 
     if (isCheckingSession) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(strokeWidth = 3.dp)
         }
+    } else if (isAuthenticated && isBiometricLocked) {
+        NativeBiometricLockScreen(
+            onUnlockClick = {
+                activity.showBiometricPrompt(
+                    onSuccess = { isBiometricLocked = false },
+                    onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
+                )
+            },
+            onSwitchAccount = {
+                scope.launch {
+                    apiClient.logout()
+                    isAuthenticated = false
+                    isBiometricLocked = false
+                }
+            }
+        )
     } else if (!isAuthenticated) {
         NativeAuthScreen(
+            activity = activity,
             apiClient = apiClient,
             serverUrl = serverUrl,
+            savedKeyBytes = savedKeyBytes,
+            onSaveKeyForBiometrics = { saveKeyForBiometrics(it) },
             onOpenServerConfig = {
                 tempServerInput = serverUrl
                 showServerDialog = true
             },
             onLoginSuccess = {
-                refreshVault()
+                refreshVault(requireBiometricOnInitialUnlock = false)
             },
             onShowInfo = { msg ->
                 infoDialogMessage = msg
@@ -243,8 +345,26 @@ fun PhotoCloudNativeApp(
             galleryItems = galleryItems,
             trashItems = trashItems,
             isDarkTheme = isDarkTheme,
+            biometricEnabled = biometricEnabled,
+            onToggleBiometric = {
+                val next = !biometricEnabled
+                biometricEnabled = next
+                prefs.edit().putBoolean("biometric_enabled", next).apply()
+                Toast.makeText(
+                    context,
+                    if (next) "Blocco biometrico attivato" else "Blocco biometrico disattivato",
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
+            onLockNow = {
+                if (activity.canUseBiometrics()) {
+                    isBiometricLocked = true
+                } else {
+                    Toast.makeText(context, "Biometria non configurata sul dispositivo", Toast.LENGTH_SHORT).show()
+                }
+            },
             onToggleTheme = onToggleTheme,
-            onRefresh = { refreshVault() },
+            onRefresh = { refreshVault(requireBiometricOnInitialUnlock = false) },
             onOpenServerConfig = {
                 tempServerInput = serverUrl
                 showServerDialog = true
@@ -316,9 +436,87 @@ fun PhotoCloudNativeApp(
 }
 
 @Composable
+fun NativeBiometricLockScreen(
+    onUnlockClick: () -> Unit,
+    onSwitchAccount: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(32.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            tonalElevation = 4.dp,
+            modifier = Modifier.fillMaxWidth().widthIn(max = 380.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(76.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Fingerprint,
+                            contentDescription = "Biometria",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(42.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                Text(
+                    text = "Archivio Protetto",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "Autenticati con impronta o volto per sbloccare le tue foto",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(Modifier.height(28.dp))
+
+                Button(
+                    onClick = onUnlockClick,
+                    shape = CircleShape,
+                    modifier = Modifier.fillMaxWidth().height(52.dp)
+                ) {
+                    Icon(Icons.Default.Fingerprint, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Sblocca con Biometria", fontWeight = FontWeight.SemiBold)
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                TextButton(onClick = onSwitchAccount) {
+                    Text("Cambia account")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun NativeAuthScreen(
+    activity: MainActivity,
     apiClient: PhotoCloudApiClient,
     serverUrl: String,
+    savedKeyBytes: ByteArray?,
+    onSaveKeyForBiometrics: (ByteArray) -> Unit,
     onOpenServerConfig: () -> Unit,
     onLoginSuccess: () -> Unit,
     onShowInfo: (String) -> Unit
@@ -330,11 +528,9 @@ fun NativeAuthScreen(
     var isBusy by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    // Login state
     var selectedFileName by remember { mutableStateOf<String?>(null) }
     var selectedFileBytes by remember { mutableStateOf<ByteArray?>(null) }
 
-    // Register state
     var username by remember { mutableStateOf("") }
     var useCustomKey by remember { mutableStateOf(false) }
     var customKey by remember { mutableStateOf("") }
@@ -351,7 +547,7 @@ fun NativeAuthScreen(
                     selectedFileName = uri.lastPathSegment?.substringAfterLast('/') ?: "photocloud_auth.json"
                     errorMessage = null
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 errorMessage = "Impossibile leggere il file selezionato"
             }
         }
@@ -364,7 +560,6 @@ fun NativeAuthScreen(
             .navigationBarsPadding()
             .padding(20.dp)
     ) {
-        // Server chip top right
         Surface(
             onClick = onOpenServerConfig,
             shape = CircleShape,
@@ -423,7 +618,6 @@ fun NativeAuthScreen(
 
                     Spacer(Modifier.height(24.dp))
 
-                    // Segmented Tab Switcher
                     Surface(
                         shape = CircleShape,
                         color = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -487,14 +681,52 @@ fun NativeAuthScreen(
                     }
 
                     if (!isRegisterTab) {
-                        // LOGIN FORM
+                        // Quick Biometric Login if a key was previously used on this phone
+                        if (savedKeyBytes != null && activity.canUseBiometrics()) {
+                            FilledTonalButton(
+                                onClick = {
+                                    activity.showBiometricPrompt(
+                                        title = "Accesso Biometrico PhotoCloud",
+                                        subtitle = "Conferma la tua identità per accedere con la chiave salvata",
+                                        onSuccess = {
+                                            isBusy = true
+                                            errorMessage = null
+                                            scope.launch {
+                                                val (ok, err) = apiClient.loginWithAuthBytes(savedKeyBytes)
+                                                isBusy = false
+                                                if (ok) {
+                                                    onLoginSuccess()
+                                                } else {
+                                                    errorMessage = err
+                                                }
+                                            }
+                                        },
+                                        onError = { err ->
+                                            errorMessage = err
+                                        }
+                                    )
+                                },
+                                enabled = !isBusy,
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                            ) {
+                                Icon(Icons.Default.Fingerprint, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Accedi con Impronta / Volto", fontWeight = FontWeight.SemiBold)
+                            }
+
+                            Spacer(Modifier.height(14.dp))
+                        }
+
                         Surface(
                             onClick = { authFileLauncher.launch(arrayOf("*/*")) },
                             shape = RoundedCornerShape(20.dp),
                             color = MaterialTheme.colorScheme.surfaceContainerHigh,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(110.dp)
+                                .height(104.dp)
                         ) {
                             Column(
                                 modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -505,7 +737,7 @@ fun NativeAuthScreen(
                                     imageVector = if (selectedFileBytes != null) Icons.Default.CheckCircle else Icons.Default.UploadFile,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(32.dp)
+                                    modifier = Modifier.size(30.dp)
                                 )
                                 Spacer(Modifier.height(8.dp))
                                 Text(
@@ -518,7 +750,7 @@ fun NativeAuthScreen(
                             }
                         }
 
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(18.dp))
 
                         Button(
                             onClick = {
@@ -533,6 +765,7 @@ fun NativeAuthScreen(
                                     val (ok, err) = apiClient.loginWithAuthBytes(bytes)
                                     isBusy = false
                                     if (ok) {
+                                        onSaveKeyForBiometrics(bytes)
                                         onLoginSuccess()
                                     } else {
                                         errorMessage = err
@@ -554,7 +787,6 @@ fun NativeAuthScreen(
                             }
                         }
                     } else {
-                        // REGISTER FORM
                         OutlinedTextField(
                             value = username,
                             onValueChange = { username = it },
@@ -640,14 +872,14 @@ fun NativeAuthScreen(
                                         mimeType = "application/json"
                                     )
 
-                                    // Also pre-populate login bytes and log in immediately
+                                    onSaveKeyForBiometrics(keyBytes)
                                     selectedFileBytes = keyBytes
                                     selectedFileName = res.filename
                                     val (loggedIn, _) = apiClient.loginWithAuthBytes(keyBytes)
                                     isBusy = false
 
                                     val saveNote = if (saved) {
-                                        "Chiave salvata nella cartella Download: ${res.filename}"
+                                        "Chiave salvata in Download: ${res.filename}"
                                     } else {
                                         "Account creato (${res.filename})"
                                     }
@@ -684,13 +916,15 @@ fun NativeAuthScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NativeVaultScreen(
     apiClient: PhotoCloudApiClient,
     galleryItems: List<MediaItemModel>,
     trashItems: List<MediaItemModel>,
     isDarkTheme: Boolean,
+    biometricEnabled: Boolean,
+    onToggleBiometric: () -> Unit,
+    onLockNow: () -> Unit,
     onToggleTheme: () -> Unit,
     onRefresh: () -> Unit,
     onOpenServerConfig: () -> Unit,
@@ -734,7 +968,6 @@ fun NativeVaultScreen(
         }
     }
 
-    // Group items for display
     val groupedSections = remember(activeItems, groupingMode, currentTab) {
         if (currentTab == VaultTab.TRASH || groupingMode == GroupingMode.NONE) {
             listOf("" to activeItems)
@@ -793,10 +1026,9 @@ fun NativeVaultScreen(
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         if (currentTab == VaultTab.GALLERY && activeItems.isNotEmpty()) {
-                            // Grouping selector pill
                             Box {
                                 Surface(
                                     onClick = { showGroupingMenu = true },
@@ -826,7 +1058,6 @@ fun NativeVaultScreen(
                                 }
                             }
 
-                            // Select All toggle
                             IconButton(
                                 onClick = {
                                     selectedFilenames = if (selectedFilenames.size == activeItems.size) {
@@ -865,6 +1096,23 @@ fun NativeVaultScreen(
                                 Spacer(Modifier.width(6.dp))
                                 Text("Svuota", style = MaterialTheme.typography.labelLarge)
                             }
+                        }
+
+                        // Biometric toggle & instant lock
+                        IconButton(onClick = onToggleBiometric) {
+                            Icon(
+                                imageVector = Icons.Default.Fingerprint,
+                                contentDescription = "Blocco Biometrico",
+                                tint = if (biometricEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        IconButton(onClick = onLockNow) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Blocca ora",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
 
                         IconButton(onClick = onRefresh) {
@@ -1035,7 +1283,6 @@ fun NativeVaultScreen(
                 .navigationBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 14.dp)
         ) {
-            // Contextual Selection Floating Bar (when 1+ photos are selected)
             AnimatedVisibility(
                 visible = selectedFilenames.isNotEmpty() && currentTab == VaultTab.GALLERY,
                 enter = slideInVertically { it } + fadeIn(),
@@ -1104,7 +1351,6 @@ fun NativeVaultScreen(
                 }
             }
 
-            // Primary Material You Bottom Floating Pill Bar
             Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
@@ -1123,7 +1369,6 @@ fun NativeVaultScreen(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.padding(horizontal = 10.dp)
                 ) {
-                    // 1. Gallery Tab Pill
                     Surface(
                         onClick = {
                             currentTab = VaultTab.GALLERY
@@ -1155,7 +1400,6 @@ fun NativeVaultScreen(
                         }
                     }
 
-                    // 2. Primary Tonal Upload Pill (+ Carica)
                     Surface(
                         onClick = { uploadLauncher.launch("*/*") },
                         shape = CircleShape,
@@ -1182,7 +1426,6 @@ fun NativeVaultScreen(
                         }
                     }
 
-                    // 3. Find Duplicates
                     IconButton(
                         onClick = {
                             isScanningDuplicates = true
@@ -1205,7 +1448,6 @@ fun NativeVaultScreen(
                         )
                     }
 
-                    // 4. Trash Tab Pill
                     Surface(
                         onClick = {
                             currentTab = VaultTab.TRASH
@@ -1237,7 +1479,6 @@ fun NativeVaultScreen(
                         }
                     }
 
-                    // 5. Theme Toggle
                     IconButton(
                         onClick = onToggleTheme,
                         modifier = Modifier.size(44.dp)
@@ -1249,7 +1490,6 @@ fun NativeVaultScreen(
                         )
                     }
 
-                    // 6. Server Config
                     IconButton(
                         onClick = onOpenServerConfig,
                         modifier = Modifier.size(44.dp)
@@ -1261,7 +1501,6 @@ fun NativeVaultScreen(
                         )
                     }
 
-                    // 7. Logout
                     IconButton(
                         onClick = onLogout,
                         modifier = Modifier.size(44.dp)
@@ -1276,9 +1515,6 @@ fun NativeVaultScreen(
             }
         }
 
-        // =========================================================================
-        // === NATIVE FULLSCREEN 120HZ LIGHTBOX MODAL
-        // =========================================================================
         val openIdx = lightboxInitialIndex
         if (openIdx != null && activeItems.isNotEmpty()) {
             NativeLightboxModal(
@@ -1314,7 +1550,6 @@ fun NativeVaultScreen(
             )
         }
 
-        // Duplicates Confirmation Dialog
         val dupGroups = duplicateGroups
         if (dupGroups != null) {
             val filesToTrash = remember(dupGroups) {
@@ -1446,7 +1681,6 @@ fun MediaGridTile(
             }
         }
 
-        // Selection Badge
         if (inSelectionMode || isSelected) {
             Surface(
                 shape = CircleShape,
@@ -1469,7 +1703,6 @@ fun MediaGridTile(
             }
         }
 
-        // Trash Item Quick Actions
         if (onRestore != null && onDeletePermanent != null) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -1623,7 +1856,6 @@ fun NativeLightboxModal(
             }
         }
 
-        // Top Floating Counter & Close Button
         Row(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -1662,7 +1894,6 @@ fun NativeLightboxModal(
             }
         }
 
-        // Bottom Floating Pill Action Bar inside Lightbox
         Surface(
             shape = CircleShape,
             color = Color(0xFF1C1C22).copy(alpha = 0.9f),
