@@ -20,8 +20,10 @@ import {
 } from './src/lib/templateRenderer';
 import {
   compileSignedAndroidApk,
+  triggerGitHubActionsBuild,
   publishApkToGitHubRelease,
   GitHubReleaseStatus,
+  GitHubActionsRunStatus,
 } from './src/lib/githubReleasePublisher';
 
 const UPLOAD_FOLDER = path.resolve(process.cwd(), 'user_media');
@@ -178,17 +180,47 @@ async function startServer() {
     });
   });
 
-  // --- APK & GITHUB RELEASE PUBLISHING ENDPOINTS ---
+  // --- APK & GITHUB ACTIONS / RELEASE ENDPOINTS ---
   app.get('/api/release/status', (_req: Request, res: Response) => {
     res.json({
       release: latestReleaseStatus,
     });
   });
 
+  app.get('/api/github-actions/status', async (_req: Request, res: Response) => {
+    try {
+      const status: GitHubActionsRunStatus = await triggerGitHubActionsBuild({
+        githubToken: process.env.GITHUB_TOKEN,
+      });
+      res.json(status);
+    } catch (e: unknown) {
+      res.status(500).json({
+        triggered: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+
+  app.post('/api/github-actions/trigger', async (req: Request, res: Response) => {
+    try {
+      const status: GitHubActionsRunStatus = await triggerGitHubActionsBuild({
+        githubToken: process.env.GITHUB_TOKEN,
+        branch: req.body?.branch,
+        releaseTag: req.body?.release_tag || 'v1.0.0',
+      });
+      res.json(status);
+    } catch (e: unknown) {
+      res.status(500).json({
+        triggered: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+
   app.post('/api/release/publish', async (req: Request, res: Response) => {
     try {
       const compiled = await compileSignedAndroidApk(RELEASE_DIR);
-      const token = req.body?.github_token || process.env.GITHUB_TOKEN;
+      const token = process.env.GITHUB_TOKEN;
       const tagName = req.body?.tag_name || 'v1.0.0';
       const status = await publishApkToGitHubRelease({
         githubToken: token,

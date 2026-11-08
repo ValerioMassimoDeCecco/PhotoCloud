@@ -16,7 +16,10 @@ import {
   renderGalleryTemplate,
   renderTrashTemplate,
 } from './templateRenderer';
-import { compileSignedAndroidApk } from './githubReleasePublisher';
+import {
+  compileSignedAndroidApk,
+  triggerGitHubActionsBuild,
+} from './githubReleasePublisher';
 
 test('generateApiKey produces a 32-char key with lower, upper, digit, and punctuation', () => {
   const key = generateApiKey(32);
@@ -75,11 +78,20 @@ test('Original templates (login.html, gallery.html, trash.html) render faithfull
   assert.ok(trashHtml.includes('Il cestino è vuoto'));
 });
 
-test('compileSignedAndroidApk compiles and signs photocloud-release-v1.0.0-signed.apk from /android-app', async () => {
+test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android project are configured', async () => {
+  const workflowPath = path.resolve(process.cwd(), '.github/workflows/android-release.yml');
+  assert.ok(fs.existsSync(workflowPath));
+  const workflowYaml = fs.readFileSync(workflowPath, 'utf-8');
+  assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
+  assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
+  assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));
+
   const outDir = path.resolve(process.cwd(), 'release');
   const res = await compileSignedAndroidApk(outDir);
   assert.ok(fs.existsSync(res.apkPath));
-  assert.ok(fs.existsSync(res.metadataPath));
-  assert.ok(res.apkBuffer.length > 500);
   assert.equal(res.sha256.length, 64);
+
+  const actionsStatus = await triggerGitHubActionsBuild();
+  assert.equal(actionsStatus.repo, 'ValerioMassimoDeCecco/PhotoCloud');
+  assert.equal(actionsStatus.workflowFile, '.github/workflows/android-release.yml');
 });

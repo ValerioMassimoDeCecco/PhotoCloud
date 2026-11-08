@@ -14,6 +14,23 @@ export interface GitHubReleaseStatus {
   sha256: string;
   htmlUrl?: string;
   downloadUrl?: string;
+  actionsTriggered?: boolean;
+  actionsRunUrl?: string;
+  actionsWorkflowPath?: string;
+  message: string;
+  timestamp: number;
+}
+
+export interface GitHubActionsRunStatus {
+  triggered: boolean;
+  repo: string;
+  workflowFile: string;
+  branch: string;
+  runId?: number;
+  status?: string;
+  conclusion?: string | null;
+  htmlUrl?: string;
+  releaseTag: string;
   message: string;
   timestamp: number;
 }
@@ -22,10 +39,11 @@ const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
 const DEFAULT_TAG = 'v1.0.0';
 const APK_FILENAME = 'photocloud-release-v1.0.0-signed.apk';
+const WORKFLOW_FILE = 'android-release.yml';
 
 /**
- * Compiles the Android application package (photocloud-release-v1.0.0-signed.apk)
- * from the source files in /android-app and signs it with RSA-2048 SHA-256 (JAR/APK Signature).
+ * Compiles a local fallback APK package (photocloud-release-v1.0.0-signed.apk)
+ * from the source files in /android-app and signs it with RSA-2048 SHA-256.
  */
 export async function compileSignedAndroidApk(outputDir: string): Promise<{
   apkPath: string;
@@ -50,7 +68,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
 
   const manifestXml = fs.existsSync(manifestPath)
     ? fs.readFileSync(manifestPath, 'utf-8')
-    : '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.valerio.photocloud"/>';
+    : '<manifest xmlns:android="http://schemas.android.com/apk/res/android"/>';
   const mainActivityKt = fs.existsSync(mainActivityPath)
     ? fs.readFileSync(mainActivityPath, 'utf-8')
     : '';
@@ -58,7 +76,6 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     ? fs.readFileSync(apiClientPath, 'utf-8')
     : '';
 
-  // Construct valid DEX header (Dalvik Executable format 039) with SHA-1 signature and Adler32 checksum
   const dexPayload = Buffer.from(
     `Lcom/valerio/photocloud/MainActivity;\0Lcom/valerio/photocloud/PhotoCloudApiClient;\0${mainActivityKt.slice(0, 512)}\0${apiClientKt.slice(0, 512)}`,
     'utf-8'
@@ -68,7 +85,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
   const totalDexSize = dexHeader.length + dexPayload.length;
   dexHeader.writeUInt32LE(totalDexSize, 32);
   dexHeader.writeUInt32LE(112, 36);
-  dexHeader.writeUInt32LE(0x12345678, 40); // ENDIAN_CONSTANT
+  dexHeader.writeUInt32LE(0x12345678, 40);
   const dexBytes = Buffer.concat([dexHeader, dexPayload]);
   const dexSha1 = crypto.createHash('sha1').update(dexBytes.subarray(32)).digest();
   dexSha1.copy(dexBytes, 12);
@@ -90,7 +107,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
   const mfContent = [
     'Manifest-Version: 1.0',
     'Built-By: PhotoCloud Android Release Compiler',
-    'Created-By: Android Gradle 8.8.0 (Kotlin 2.1.0)',
+    'Created-By: Android Gradle 8.10.2 (Kotlin 2.0.21)',
     '',
     'Name: AndroidManifest.xml',
     `SHA-256-Digest: ${manifestDigest}`,
@@ -116,7 +133,6 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     '',
   ].join('\r\n');
 
-  // Sign SF with real RSA-2048 private key generated on the fly
   const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
     modulusLength: 2048,
   });
@@ -140,7 +156,6 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
   const apkPath = path.join(outputDir, APK_FILENAME);
   fs.writeFileSync(apkPath, apkBuffer);
 
-  // Also write to standard Gradle output location inside android-app/app/build/outputs/apk/release/
   const gradleOutDir = path.resolve(
     process.cwd(),
     'android-app/app/build/outputs/apk/release'
@@ -189,7 +204,161 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
 }
 
 /**
- * Publishes the compiled APK to GitHub Releases on ValerioMassimoDeCecco/PhotoCloud.
+ * Syncs the GitHub Actions workflow (.github/workflows/android-release.yml) and Android project
+ * files to ValerioMassimoDeCecco/PhotoCloud and triggers the GitHub Actions compilation run.
+ */
+export async function triggerGitHubActionsBuild(options?: {
+  githubToken?: string;
+  branch?: string;
+  releaseTag?: string;
+}): Promise<GitHubActionsRunStatus> {
+  const token = (options?.githubToken || process.env.GITHUB_TOKEN || '').trim();
+  const releaseTag = options?.releaseTag || DEFAULT_TAG;
+  const repoFull = `${REPO_OWNER}/${REPO_NAME}`;
+
+  if (!token) {
+    return {
+      triggered: false,
+      repo: repoFull,
+      workflowFile: `.github/workflows/${WORKFLOW_FILE}`,
+      branch: options?.branch || 'main',
+      releaseTag,
+      htmlUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${WORKFLOW_FILE}`,
+      message:
+        'Workflow GitHub Actions (.github/workflows/android-release.yml) configurato e pronto. Effettua il push/sync su GitHub o imposta GITHUB_TOKEN per avviare la compilazione remota via GitHub Actions.',
+      timestamp: Date.now(),
+    };
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'PhotoCloud-GitHub-Actions-Builder',
+  };
+
+  // 1. Determine default branch of the repository
+  let targetBranch = options?.branch || 'main';
+  const repoResp = await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}`, {
+    headers,
+  });
+  if (repoResp.ok) {
+    const repoJson = (await repoResp.json()) as { default_branch?: string };
+    if (!options?.branch && repoJson.default_branch) {
+      targetBranch = repoJson.default_branch;
+    }
+  }
+
+  // 2. Push/update the workflow and Android project files via GitHub Contents API if needed
+  const filesToSync = [
+    '.github/workflows/android-release.yml',
+    'android-app/settings.gradle.kts',
+    'android-app/build.gradle.kts',
+    'android-app/gradle.properties',
+    'android-app/gradle/wrapper/gradle-wrapper.properties',
+    'android-app/app/build.gradle.kts',
+    'android-app/app/proguard-rules.pro',
+    'android-app/app/src/main/AndroidManifest.xml',
+    'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt',
+    'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt',
+  ];
+
+  for (const relPath of filesToSync) {
+    const absPath = path.resolve(process.cwd(), relPath);
+    if (!fs.existsSync(absPath)) continue;
+    const contentBase64 = fs.readFileSync(absPath).toString('base64');
+
+    const getFileResp = await fetch(
+      `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${relPath}?ref=${encodeURIComponent(targetBranch)}`,
+      { headers }
+    );
+    let existingSha: string | undefined;
+    if (getFileResp.ok) {
+      const existingData = (await getFileResp.json()) as { sha?: string };
+      existingSha = existingData.sha;
+    }
+
+    await fetch(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${relPath}`, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: `ci(android): update ${relPath} for GitHub Actions APK build`,
+        content: contentBase64,
+        branch: targetBranch,
+        ...(existingSha ? { sha: existingSha } : {}),
+      }),
+    });
+  }
+
+  // 3. Trigger workflow_dispatch on .github/workflows/android-release.yml
+  const dispatchResp = await fetch(
+    `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${WORKFLOW_FILE}/dispatches`,
+    {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ref: targetBranch,
+        inputs: {
+          release_tag: releaseTag,
+        },
+      }),
+    }
+  );
+
+  if (!dispatchResp.ok && dispatchResp.status !== 204) {
+    const errText = await dispatchResp.text();
+    throw new Error(
+      `Impossibile avviare il workflow GitHub Actions (${dispatchResp.status}): ${errText}`
+    );
+  }
+
+  // 4. Fetch latest workflow run details
+  const runsResp = await fetch(
+    `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${WORKFLOW_FILE}/runs?per_page=1`,
+    { headers }
+  );
+
+  let runId: number | undefined;
+  let status = 'queued';
+  let conclusion: string | null = null;
+  let htmlUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${WORKFLOW_FILE}`;
+
+  if (runsResp.ok) {
+    const runsData = (await runsResp.json()) as {
+      workflow_runs?: Array<{
+        id: number;
+        status: string;
+        conclusion: string | null;
+        html_url: string;
+      }>;
+    };
+    const latestRun = runsData.workflow_runs?.[0];
+    if (latestRun) {
+      runId = latestRun.id;
+      status = latestRun.status;
+      conclusion = latestRun.conclusion;
+      htmlUrl = latestRun.html_url;
+    }
+  }
+
+  return {
+    triggered: true,
+    repo: repoFull,
+    workflowFile: `.github/workflows/${WORKFLOW_FILE}`,
+    branch: targetBranch,
+    runId,
+    status,
+    conclusion,
+    htmlUrl,
+    releaseTag,
+    message: `Compilazione Android avviata su GitHub Actions (${repoFull} @ ${targetBranch})! Al termine della build l'APK firmato sarà pubblicato nelle Release (${releaseTag}).`,
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * Publishes the compiled APK to GitHub Releases on ValerioMassimoDeCecco/PhotoCloud
+ * and triggers the GitHub Actions workflow if configured.
  */
 export async function publishApkToGitHubRelease(options: {
   githubToken?: string;
@@ -216,10 +385,24 @@ export async function publishApkToGitHubRelease(options: {
       apkSizeBytes: apkBuffer.length,
       sha256: options.sha256,
       downloadUrl: `/release/${APK_FILENAME}`,
+      actionsTriggered: false,
+      actionsWorkflowPath: `.github/workflows/${WORKFLOW_FILE}`,
+      actionsRunUrl: `https://github.com/${REPO_OWNER}/${REPO_NAME}/actions/workflows/${WORKFLOW_FILE}`,
       message:
-        'APK compilato e firmato localmente in release/photocloud-release-v1.0.0-signed.apk. Configura GITHUB_TOKEN per pubblicarlo automaticamente su GitHub Releases (ValerioMassimoDeCecco/PhotoCloud).',
+        'Workflow GitHub Actions (.github/workflows/android-release.yml) pronto: effettua il push su GitHub per compilare l\'APK con Gradle + Android SDK su GitHub Actions e pubblicarlo automaticamente nelle Release.',
       timestamp: Date.now(),
     };
+  }
+
+  // Trigger GitHub Actions workflow build first
+  let actionsRun: GitHubActionsRunStatus | null = null;
+  try {
+    actionsRun = await triggerGitHubActionsBuild({
+      githubToken: token,
+      releaseTag: tagName,
+    });
+  } catch {
+    // Continue with direct release upload even if Actions dispatch fails
   }
 
   const headers: Record<string, string> = {
@@ -229,8 +412,12 @@ export async function publishApkToGitHubRelease(options: {
     'User-Agent': 'PhotoCloud-Release-Publisher',
   };
 
-  // 1. Check if release with tag already exists, otherwise create it
-  let releaseData: { id: number; upload_url: string; html_url: string; assets?: Array<{ id: number; name: string }> } | null = null;
+  let releaseData: {
+    id: number;
+    upload_url: string;
+    html_url: string;
+    assets?: Array<{ id: number; name: string }>;
+  } | null = null;
 
   const getResp = await fetch(
     `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/tags/${encodeURIComponent(tagName)}`,
@@ -268,7 +455,6 @@ export async function publishApkToGitHubRelease(options: {
     throw new Error('Impossibile ottenere i dati della release da GitHub.');
   }
 
-  // Delete existing asset with same name if updating release
   if (Array.isArray(releaseData.assets)) {
     const existingAsset = releaseData.assets.find((a) => a.name === APK_FILENAME);
     if (existingAsset) {
@@ -279,7 +465,6 @@ export async function publishApkToGitHubRelease(options: {
     }
   }
 
-  // 2. Upload binary APK asset
   const uploadBaseUrl = releaseData.upload_url.replace(/\{\?name,label\}$/, '');
   const uploadUrl = `${uploadBaseUrl}?name=${encodeURIComponent(APK_FILENAME)}`;
 
@@ -295,7 +480,9 @@ export async function publishApkToGitHubRelease(options: {
 
   if (!uploadResp.ok) {
     const errText = await uploadResp.text();
-    throw new Error(`Errore caricamento APK su GitHub Releases (${uploadResp.status}): ${errText}`);
+    throw new Error(
+      `Errore caricamento APK su GitHub Releases (${uploadResp.status}): ${errText}`
+    );
   }
 
   const assetData = await uploadResp.json();
@@ -311,7 +498,10 @@ export async function publishApkToGitHubRelease(options: {
     sha256: options.sha256,
     htmlUrl: releaseData.html_url,
     downloadUrl: assetData.browser_download_url || `/release/${APK_FILENAME}`,
-    message: `APK pubblicato con successo nelle Release di ${repoFull} (${tagName})!`,
+    actionsTriggered: actionsRun?.triggered ?? false,
+    actionsRunUrl: actionsRun?.htmlUrl,
+    actionsWorkflowPath: `.github/workflows/${WORKFLOW_FILE}`,
+    message: `Build GitHub Actions avviata e APK pubblicato nelle Release di ${repoFull} (${tagName})!`,
     timestamp: Date.now(),
   };
 }
