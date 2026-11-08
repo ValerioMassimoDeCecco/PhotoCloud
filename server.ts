@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import JSZip from 'jszip';
-import { createServer as createViteServer } from 'vite';
 import {
   generateApiKey,
   hashKey,
@@ -15,33 +14,27 @@ import {
   findDuplicateGroups,
 } from './src/lib/crypto';
 import {
-  validateAndroidConfig,
-  createAndroidReleasePackage,
-} from './src/lib/androidBuilder';
-import { AndroidBuildConfig, AndroidReleaseArtifact } from './src/types';
+  renderLoginTemplate,
+  renderGalleryTemplate,
+  renderTrashTemplate,
+} from './src/lib/templateRenderer';
+import {
+  compileSignedAndroidApk,
+  publishApkToGitHubRelease,
+  GitHubReleaseStatus,
+} from './src/lib/githubReleasePublisher';
 
 const UPLOAD_FOLDER = path.resolve(process.cwd(), 'user_media');
 const TEMP_ZIP_FOLDER = path.resolve(process.cwd(), 'temp_zips');
-const RELEASE_FOLDER = path.resolve(process.cwd(), 'release_builds');
+const RELEASE_DIR = path.resolve(process.cwd(), 'release');
 const USERS_FILE = path.resolve(process.cwd(), 'users.txt');
+const STATIC_DIR = path.resolve(process.cwd(), 'static');
 
 fs.mkdirSync(UPLOAD_FOLDER, { recursive: true });
 fs.mkdirSync(TEMP_ZIP_FOLDER, { recursive: true });
-fs.mkdirSync(RELEASE_FOLDER, { recursive: true });
+fs.mkdirSync(RELEASE_DIR, { recursive: true });
 if (!fs.existsSync(USERS_FILE)) {
   fs.writeFileSync(USERS_FILE, '', 'utf-8');
-}
-
-// Copy static wallpapers to public/static if they exist
-const staticDir = path.resolve(process.cwd(), 'static');
-const publicStaticDir = path.resolve(process.cwd(), 'public', 'static');
-fs.mkdirSync(publicStaticDir, { recursive: true });
-for (const wp of ['wp1.jpg', 'wp2.jpg', 'wp3.jpg']) {
-  const src = path.join(staticDir, wp);
-  const dest = path.join(publicStaticDir, wp);
-  if (fs.existsSync(src) && !fs.existsSync(dest)) {
-    fs.copyFileSync(src, dest);
-  }
 }
 
 interface SessionData {
@@ -52,17 +45,15 @@ interface SessionData {
 const SESSIONS = new Map<string, SessionData>();
 const ZIP_TASKS = new Map<
   string,
-  { status: 'starting' | 'processing' | 'complete' | 'error'; progress: number; filename: string | null; error?: string }
->();
-
-const ANDROID_RELEASES = new Map<
-  string,
   {
-    artifact: AndroidReleaseArtifact;
-    apkPath: string;
-    projectZipPath: string;
+    status: 'starting' | 'processing' | 'complete' | 'error';
+    progress: number;
+    filename: string | null;
+    error?: string;
   }
 >();
+
+let latestReleaseStatus: GitHubReleaseStatus | null = null;
 
 function parseCookies(cookieHeader?: string): Record<string, string> {
   const list: Record<string, string> = {};
@@ -99,67 +90,6 @@ function saveUser(username: string, keyHash: string): void {
   fs.appendFileSync(USERS_FILE, `${username}:${keyHash}\n`, 'utf-8');
 }
 
-function ensureDemoVault(): SessionData {
-  const demoUser = 'demo_mobile';
-  const demoKey = 'PhotoCloud_Android_Vault_Key_2026!';
-  let storedHash = findUser(demoUser);
-  const userFolder = path.join(UPLOAD_FOLDER, demoUser);
-  const trashFolder = path.join(userFolder, 'trash');
-  fs.mkdirSync(userFolder, { recursive: true });
-  fs.mkdirSync(trashFolder, { recursive: true });
-
-  if (!storedHash) {
-    saveUser(demoUser, hashKey(demoKey));
-    // Seed initial encrypted photos from static/wp1.jpg, wp2.jpg, wp3.jpg so gallery works immediately
-    const samples = [
-      { src: 'wp1.jpg', mtimeOffsetSec: 0 },
-      { src: 'wp2.jpg', mtimeOffsetSec: -86400 * 3 },
-      { src: 'wp3.jpg', mtimeOffsetSec: -86400 * 35 },
-    ];
-    for (const sample of samples) {
-      const srcPath = path.join(staticDir, sample.src);
-      if (fs.existsSync(srcPath)) {
-        const rawBytes = fs.readFileSync(srcPath);
-        const enc = encryptFile(rawBytes, demoKey);
-        const randName = `${crypto.randomBytes(8).toString('hex')}.jpg`;
-        const destPath = path.join(userFolder, randName);
-        fs.writeFileSync(destPath, enc);
-        const mtime = Date.now() / 1000 + sample.mtimeOffsetSec;
-        fs.utimesSync(destPath, mtime, mtime);
-      }
-    }
-  }
-  return { username: demoUser, apiKey: demoKey };
-}
-
-// Pre-build initial default Release v1.0.0 so the Android Release Studio immediately shows a ready release build and allows rebuilding custom releases
-async function ensureInitialAndroidRelease() {
-  const defaultConfig: AndroidBuildConfig = {
-    appName: 'PhotoCloud',
-    packageName: 'com.valerio.photocloud',
-    versionName: '1.0.0',
-    versionCode: 1,
-    serverUrl: 'http://10.0.2.2:3000',
-    minSdk: 26,
-    targetSdk: 35,
-    enableBiometricLock: true,
-    enableOfflineCache: true,
-    enableAutoBackup: false,
-    signingMode: 'release',
-    keystoreAlias: 'photocloud-release-key',
-  };
-  const { artifact, apkBuffer, projectZipBuffer } = await createAndroidReleasePackage(defaultConfig);
-  const apkPath = path.join(RELEASE_FOLDER, artifact.apkFilename);
-  const projectZipPath = path.join(RELEASE_FOLDER, artifact.projectZipFilename);
-  fs.writeFileSync(apkPath, apkBuffer);
-  fs.writeFileSync(projectZipPath, projectZipBuffer);
-  ANDROID_RELEASES.set(artifact.buildId, {
-    artifact,
-    apkPath,
-    projectZipPath,
-  });
-}
-
 const VALID_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov'];
 
 function listMediaFiles(folderPath: string) {
@@ -185,15 +115,53 @@ function listMediaFiles(folderPath: string) {
 const upload = multer({ storage: multer.memoryStorage() });
 
 async function startServer() {
-  ensureDemoVault();
-  await ensureInitialAndroidRelease();
+  // Compile the native Android APK from /android-app into /release/photocloud-release-v1.0.0-signed.apk
+  // and automatically publish to GitHub Releases if GITHUB_TOKEN is configured
+  try {
+    const compiled = await compileSignedAndroidApk(RELEASE_DIR);
+    latestReleaseStatus = await publishApkToGitHubRelease({
+      apkPath: compiled.apkPath,
+      sha256: compiled.sha256,
+    });
+  } catch (err) {
+    console.error('Errore durante la compilazione/pubblicazione APK:', err);
+  }
 
   const app = express();
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
-  app.use('/static', express.static(staticDir));
+  app.use('/static', express.static(STATIC_DIR));
+  app.use('/release', express.static(RELEASE_DIR));
 
-  // --- SESSION & DEMO API ---
+  // --- ORIGINAL WEB APP ROUTES (1:1 with main.py) ---
+  app.get('/', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(renderLoginTemplate());
+      return;
+    }
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    fs.mkdirSync(userFolder, { recursive: true });
+    const mediaFiles = listMediaFiles(userFolder);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderGalleryTemplate(mediaFiles));
+  });
+
+  app.get('/trash', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.redirect('/');
+      return;
+    }
+    const trashFolder = path.join(UPLOAD_FOLDER, sess.username, 'trash');
+    fs.mkdirSync(trashFolder, { recursive: true });
+    const trashedFiles = listMediaFiles(trashFolder);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderTrashTemplate(trashedFiles));
+  });
+
+  // --- SESSION API (Used by Native Android APK Client) ---
   app.get('/api/session', (req: Request, res: Response) => {
     const sess = getSession(req);
     if (!sess) {
@@ -210,23 +178,32 @@ async function startServer() {
     });
   });
 
-  app.post('/api/demo-login', (_req: Request, res: Response) => {
-    const demoSess = ensureDemoVault();
-    const sid = crypto.randomUUID();
-    SESSIONS.set(sid, demoSess);
-    res.setHeader(
-      'Set-Cookie',
-      `photocloud_sid=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`
-    );
-    const userFolder = path.join(UPLOAD_FOLDER, demoSess.username);
-    const trashFolder = path.join(userFolder, 'trash');
+  // --- APK & GITHUB RELEASE PUBLISHING ENDPOINTS ---
+  app.get('/api/release/status', (_req: Request, res: Response) => {
     res.json({
-      success: true,
-      username: demoSess.username,
-      apiKey: demoSess.apiKey,
-      mediaFiles: listMediaFiles(userFolder),
-      trashedFiles: listMediaFiles(trashFolder),
+      release: latestReleaseStatus,
     });
+  });
+
+  app.post('/api/release/publish', async (req: Request, res: Response) => {
+    try {
+      const compiled = await compileSignedAndroidApk(RELEASE_DIR);
+      const token = req.body?.github_token || process.env.GITHUB_TOKEN;
+      const tagName = req.body?.tag_name || 'v1.0.0';
+      const status = await publishApkToGitHubRelease({
+        githubToken: token,
+        tagName,
+        apkPath: compiled.apkPath,
+        sha256: compiled.sha256,
+      });
+      latestReleaseStatus = status;
+      res.json(status);
+    } catch (e: unknown) {
+      res.status(500).json({
+        published: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   });
 
   // --- REGISTER ---
@@ -258,7 +235,6 @@ async function startServer() {
     fs.mkdirSync(userFolder, { recursive: true });
     fs.mkdirSync(path.join(userFolder, 'trash'), { recursive: true });
 
-    // Seed sample photos for newly registered user if requested or leave clean
     const authData = {
       username: rawUsername,
       api_key: apiKey,
@@ -266,14 +242,6 @@ async function startServer() {
       created_at: Date.now() / 1000,
       hash_of_key: hashKey(apiKey),
     };
-
-    // Also log the user in automatically so mobile UX is seamless
-    const sid = crypto.randomUUID();
-    SESSIONS.set(sid, { username: rawUsername, apiKey });
-    res.setHeader(
-      'Set-Cookie',
-      `photocloud_sid=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`
-    );
 
     const safeName = rawUsername.replace(/[^a-zA-Z0-9_-]/g, '_');
     const downloadName = `photocloud_auth_${safeName}.json`;
@@ -652,7 +620,6 @@ async function startServer() {
     const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
     ZIP_TASKS.set(taskId, { status: 'starting', progress: 0, filename: null });
 
-    // Process zip asynchronously
     (async () => {
       try {
         const zip = new JSZip();
@@ -730,100 +697,9 @@ async function startServer() {
     res.send(zipBytes);
   });
 
-  // --- ANDROID RELEASE STUDIO API ---
-  app.get('/api/android/releases', (_req: Request, res: Response) => {
-    const list = Array.from(ANDROID_RELEASES.values())
-      .map((r) => r.artifact)
-      .sort((a, b) => b.timestamp - a.timestamp);
-    res.json({ releases: list });
-  });
-
-  app.post('/api/android/build-release', async (req: Request, res: Response) => {
-    const config: AndroidBuildConfig = {
-      appName: String(req.body?.appName ?? 'PhotoCloud'),
-      packageName: String(req.body?.packageName ?? 'com.valerio.photocloud'),
-      versionName: String(req.body?.versionName ?? '1.0.0'),
-      versionCode: Number(req.body?.versionCode ?? 1),
-      serverUrl: String(req.body?.serverUrl ?? 'http://10.0.2.2:3000'),
-      minSdk: Number(req.body?.minSdk ?? 26),
-      targetSdk: Number(req.body?.targetSdk ?? 35),
-      enableBiometricLock: Boolean(req.body?.enableBiometricLock ?? true),
-      enableOfflineCache: Boolean(req.body?.enableOfflineCache ?? true),
-      enableAutoBackup: Boolean(req.body?.enableAutoBackup ?? false),
-      signingMode: req.body?.signingMode === 'debug' ? 'debug' : 'release',
-      keystoreAlias: String(req.body?.keystoreAlias ?? 'photocloud-release-key'),
-    };
-
-    const validationError = validateAndroidConfig(config);
-    if (validationError) {
-      res.status(400).json({ error: validationError });
-      return;
-    }
-
-    try {
-      const { artifact, apkBuffer, projectZipBuffer } = await createAndroidReleasePackage(config);
-      const apkPath = path.join(RELEASE_FOLDER, `${artifact.buildId}_${artifact.apkFilename}`);
-      const projectZipPath = path.join(RELEASE_FOLDER, `${artifact.buildId}_${artifact.projectZipFilename}`);
-      fs.writeFileSync(apkPath, apkBuffer);
-      fs.writeFileSync(projectZipPath, projectZipBuffer);
-
-      ANDROID_RELEASES.set(artifact.buildId, {
-        artifact,
-        apkPath,
-        projectZipPath,
-      });
-
-      res.json({
-        success: true,
-        artifact,
-      });
-    } catch (e: unknown) {
-      res.status(500).json({
-        error: e instanceof Error ? e.message : 'Errore durante la build Android Release',
-      });
-    }
-  });
-
-  app.get('/api/android/download/:buildId/:type', (req: Request, res: Response) => {
-    const entry = ANDROID_RELEASES.get(String(req.params.buildId));
-    if (!entry) {
-      res.status(404).send('Build non trovata');
-      return;
-    }
-    const type = String(req.params.type);
-    if (type === 'apk') {
-      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-      res.setHeader('Content-Disposition', `attachment; filename="${entry.artifact.apkFilename}"`);
-      res.send(fs.readFileSync(entry.apkPath));
-      return;
-    }
-    if (type === 'project') {
-      res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Content-Disposition', `attachment; filename="${entry.artifact.projectZipFilename}"`);
-      res.send(fs.readFileSync(entry.projectZipPath));
-      return;
-    }
-    res.status(400).send('Tipo di artefatto non valido');
-  });
-
-  // --- VITE MIDDLEWARE OR STATIC PROD ---
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req: Request, res: Response) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
-
   const port = Number(process.env.PORT) || 3000;
   app.listen(port, '0.0.0.0', () => {
-    console.log(`PhotoCloud Mobile & Android Studio server listening on http://0.0.0.0:${port}`);
+    console.log(`PhotoCloud server listening on http://0.0.0.0:${port}`);
   });
 }
 

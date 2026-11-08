@@ -1,0 +1,52 @@
+name: Build & Publish Android Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Generate Release Keystore
+        working-directory: ./android-app/app
+        run: |
+          keytool -genkeypair -v \
+            -keystore photocloud-release-key.jks \
+            -alias photocloud-release-key \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass photocloud_release_2026 \
+            -keypass photocloud_release_2026 \
+            -dname "CN=ValerioMassimoDeCecco, OU=PhotoCloud, O=PhotoCloud, L=Rome, S=RM, C=IT"
+
+      - name: Build Signed Release APK
+        working-directory: ./android-app
+        run: |
+          gradle assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk ../photocloud-release-v1.0.0-signed.apk
+
+      - name: Publish to GitHub Releases (ValerioMassimoDeCecco/PhotoCloud)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || 'v1.0.0' }}
+          name: PhotoCloud Android Release ${{ github.ref_name || 'v1.0.0' }}
+          files: photocloud-release-v1.0.0-signed.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,272 @@
+:root {
+    /* === TEMA CHIARO (DEFAULT) === */
+    --primary: #1a73e8; /* Google Blue */
+    --on-primary: #ffffff;
+    --primary-container: #d2e3fc;
+    --on-primary-container: #0b429b;
+    
+    --secondary: #5f6368; /* Google Gray */
+    --on-secondary: #ffffff;
+    --secondary-container: #e8eaed;
+    --on-secondary-container: #202124;
+    
+    --tertiary: #188038; /* Google Green */
+    --on-tertiary: #ffffff;
+    --on-tertiary-container: #0d652d;
+    
+    --error: #d93025; /* Google Red */
+    --on-error: #ffffff;
+    --error-container: #fce8e6;
+    --on-error-container: #a50e0e;
+    
+    --background: #f8f9fa;
+    --on-background: #202124;
+    
+    --surface: #ffffff; /* Sfondo di card e componenti */
+    --on-surface: #202124; /* Testo su card e componenti */
+    --surface-variant: #e8eaed;
+    --on-surface-variant: #5f6368; /* Testo secondario */
+    
+    --outline: #dadce0;
+    --outline-variant: #e0e0e0;
+    
+    --shadow: #000000;
+    --surface-dim: #e8eaed;
+    --surface-bright: #ffffff;
+    --surface-container-lowest: #ffffff;
+    --surface-container-low: #f8f9fa;
+    --surface-container: #f1f3f4;
+    --surface-container-high: #e8eaed;
+    --surface-container-highest: #dadce0;
+    
+    --radius-xs: 4px;
+    --radius-s: 8px;
+    --radius-m: 12px;
+    --radius-l: 16px;
+    --radius-xl: 24px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Roboto', 'Google Sans', 'Segoe UI', system-ui, sans-serif;
+    background-color: var(--background);
+    color: var(--on-background);
+    min-height: 100vh;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.6;
+    /* NUOVA AGGIUNTA: Transizione fluida per il cambio di tema */
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.container {
+    max-width: 1600px;
+    width: 100%;
+    margin: 0 auto;
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Lightbox Styles */
+.lightbox {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: #000000;
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+
+.lightbox-content {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    max-width: 98vw;
+    max-height: 98vh;
+    width: 100%;
+}
+
+.media-container {
+    position: relative;
+    max-width: 95%;
+    max-height: 95vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    background: #000;
+}
+
+.media-container img,
+.media-container video {
+    max-width: 100%;
+    max-height: 85vh;
+    display: block;
+    object-fit: contain;
+}
+
+.media-container video {
+    width: auto;
+    height: auto;
+    max-height: 85vh;
+    max-width: 95vw;
+}
+
+.nav-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: rgba(32, 33, 36, 0.6);
+    color: white;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 10;
+    transition: background 0.2s, transform 0.2s;
+    opacity: 0.8;
+}
+
+.nav-btn:hover {
+    background: rgba(32, 33, 36, 0.8);
+    opacity: 1;
+    transform: translateY(-50%) scale(1.05);
+}
+
+.nav-btn .material-icons {
+    font-size: 28px;
+}
+
+.prev-btn { left: 16px; }
+.next-btn { right: 16px; }
+
+.close-btn {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    color: white;
+    background: rgba(32, 33, 36, 0.6);
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    cursor: pointer;
+    z-index: 10;
+    border: none;
+    transition: background 0.2s;
+}
+
+.close-btn:hover { background: rgba(32, 33, 36, 0.8); }
+
+/* Tipografia */
+h1, h2, h3, p {
+    /* NUOVA AGGIUNTA: transizione fluida per il colore del testo */
+    transition: color 0.3s ease;
+}
+
+h1 {
+    font-size: 24px;
+    font-weight: 500;
+    line-height: 32px;
+    letter-spacing: 0;
+    /* MODIFICA CHIAVE: Usiamo una variabile invece di un colore fisso */
+    color: var(--on-surface);
+}
+
+h2 {
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 28px;
+    color: var(--on-surface); /* Coerenza con h1 */
+}
+
+h3 {
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 24px;
+    color: var(--on-surface); /* Coerenza con h1 */
+}
+
+p {
+    font-size: 14px;
+    line-height: 20px;
+    margin-bottom: 16px;
+    color: var(--on-surface-variant);
+}
+
+/* Media Queries */
+@media (min-width: 768px) {
+    h1 { font-size: 28px; line-height: 36px; }
+    h2 { font-size: 24px; line-height: 32px; }
+}
+
+@media (max-width: 768px) {
+    .nav-btn { width: 40px; height: 40px; }
+    .nav-btn .material-icons { font-size: 20px; }
+    .close-btn { width: 40px; height: 40px; top: 10px; right: 10px; }
+}
+
+/* ===================================== */
+/* === NUOVA SEZIONE: TEMA DARK MODE === */
+/* ===================================== */
+
+body.dark-mode {
+    --primary: #8ab4f8;
+    --on-primary: #002d6e;
+    --primary-container: #004a77;
+    --on-primary-container: #d3e4ff;
+
+    --secondary: #bdc1c6;
+    --on-secondary: #202124;
+    --secondary-container: #4d5156;
+    --on-secondary-container: #e8eaed;
+
+    --tertiary: #81c995;
+    --on-tertiary: #0d652d;
+    --on-tertiary-container: #188038;
+
+    --error: #f28b82;
+    --on-error: #601410;
+    --error-container: #8c1d18;
+    --on-error-container: #fce8e6;
+
+    --background: #121212; /* Sfondo principale molto scuro */
+    --on-background: #e6e1e5;
+
+    --surface: #1c1b1f; /* Sfondo per card e componenti scuro */
+    /* MODIFICA CHIAVE PER H1: il testo su 'surface' diventa bianco */
+    --on-surface: #e6e1e5; 
+    --surface-variant: #44474f;
+    --on-surface-variant: #cac4d0; /* Testo secondario chiaro */
+
+    --outline: #49454f;
+    --outline-variant: #3a383d;
+
+    --surface-dim: #141218;
+    --surface-bright: #3a383d;
+    --surface-container-lowest: #0f0d13;
+    --surface-container-low: #1c1b1f;
+    --surface-container: #201f23;
+    --surface-container-high: #2b292d;
+    --surface-container-highest: #363438;
+}

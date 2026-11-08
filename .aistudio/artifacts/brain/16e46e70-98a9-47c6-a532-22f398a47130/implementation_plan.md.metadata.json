@@ -1,0 +1,6 @@
+{
+  "summary":  "Piano di implementazione per ripristinare integralmente la web app originale PhotoCloud (template HTML, fogli di stile CSS e script JS originali), generare e compilare da zero il client Android nativo connesso al server PhotoCloud e pubblicare automaticamente il file APK compilato nelle GitHub Releases del repository ValerioMassimoDeCecco/PhotoCloud.",
+  "updatedAt":  "2026-11-08T12:15:26.783936830Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

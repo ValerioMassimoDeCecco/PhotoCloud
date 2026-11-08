@@ -8,7 +8,8 @@
     "build": "vite build",
     "start": "node --import tsx server.ts",
     "lint": "tsc --noEmit",
-    "test": "npx --yes tsx --test src/lib/crypto.test.ts"
+    "test": "npx --yes tsx --test src/lib/crypto.test.ts",
+    "release:apk": "tsx scripts/publish-github-release.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.5",

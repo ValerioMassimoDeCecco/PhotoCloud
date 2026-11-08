@@ -1,0 +1,123 @@
+.key-display-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+    background: var(--surface-dim);
+}
+
+.key-card {
+    width: 100%;
+    max-width: 500px;
+    background: var(--surface);
+    border-radius: var(--radius-l); /* Softer radius */
+    overflow: hidden;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.1); /* Softer shadow */
+    border: 1px solid var(--outline);
+}
+
+.key-header {
+    padding: 24px; /* Reduced padding */
+    text-align: center;
+    background: var(--surface); /* No colored header */
+    color: var(--on-surface);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border-bottom: 1px solid var(--outline);
+}
+
+.key-header .material-icons {
+    font-size: 48px; /* Smaller icon */
+    margin-bottom: 16px;
+    color: var(--primary); /* Use primary color for the icon */
+}
+
+.key-header h1 {
+    font-weight: 500;
+}
+
+.key-content {
+    padding: 24px;
+}
+
+.key-field {
+    margin-bottom: 24px;
+    position: relative;
+}
+
+.key-field label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: var(--on-surface-variant);
+    font-size: 14px;
+}
+
+.key-value {
+    padding: 14px 16px; /* Adjusted padding */
+    background: var(--surface-container-low);
+    border-radius: var(--radius-s);
+    font-family: 'Roboto Mono', monospace; /* More modern mono font */
+    font-size: 16px;
+    word-break: break-all;
+    padding-right: 52px; /* Ensure space for button */
+    border: 1px solid var(--outline-variant);
+}
+
+.key-field .btn.icon {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    background: transparent;
+    color: var(--on-surface-variant);
+    /* Added transition for smooth animation */
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.key-field .btn.icon .material-icons {
+    /* Ensures icons are vertically aligned inside the button */
+    display: inline-flex;
+    vertical-align: middle;
+}
+
+.key-field .btn.icon.copied {
+    background: var(--primary-container);
+    color: var(--primary);
+}
+
+.key-warning {
+    padding: 16px;
+    background: var(--error-container);
+    color: var(--on-error-container);
+    border-radius: var(--radius-m);
+    display: flex;
+    flex-direction: row; /* Horizontal layout */
+    align-items: center;
+    text-align: left;
+    margin-top: 24px;
+    gap: 16px;
+}
+
+.key-warning .material-icons {
+    font-size: 24px;
+    margin-bottom: 0;
+    flex-shrink: 0; /* Prevents the icon from shrinking */
+}
+
+.key-warning p {
+    margin: 0;
+    font-size: 14px;
+}
+
+.key-actions {
+    padding: 0 24px 24px;
+    display: flex;
+    justify-content: flex-end; /* Align actions to the end */
+}
+
+.key-actions .btn {
+    width: auto;
+    padding: 10px 24px;
+}

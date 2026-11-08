@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import fs from 'node:fs';
 import {
   generateApiKey,
   hashKey,
@@ -9,8 +11,12 @@ import {
   calculateBufferHash,
   findDuplicateGroups,
 } from './crypto';
-import { groupMediaItems } from './grouping';
-import { validateAndroidConfig, createAndroidReleasePackage } from './androidBuilder';
+import {
+  renderLoginTemplate,
+  renderGalleryTemplate,
+  renderTrashTemplate,
+} from './templateRenderer';
+import { compileSignedAndroidApk } from './githubReleasePublisher';
 
 test('generateApiKey produces a 32-char key with lower, upper, digit, and punctuation', () => {
   const key = generateApiKey(32);
@@ -53,42 +59,27 @@ test('findDuplicateGroups detects identical file hashes and sorts filenames', ()
   assert.deepEqual(duplicates, [['a_original.jpg', 'b_copy.jpg']]);
 });
 
-test('groupMediaItems groups items by year and none', () => {
-  const items = [
-    { filename: 'pic1.jpg', timestamp: 1700000000 }, // 2023
-    { filename: 'pic2.jpg', timestamp: 1730000000 }, // 2024
-  ];
-  const byYear = groupMediaItems(items, 'year');
-  assert.equal(byYear.length, 2);
-  assert.equal(byYear[0].title, '2024');
-  assert.equal(byYear[1].title, '2023');
+test('Original templates (login.html, gallery.html, trash.html) render faithfully', () => {
+  const loginHtml = renderLoginTemplate();
+  assert.ok(loginHtml.includes('Il tuo archivio foto/video sicuro'));
+  assert.ok(loginHtml.includes('/static/styles/login.css'));
+
+  const galleryHtml = renderGalleryTemplate([
+    { filename: 'abc12345.jpg', timestamp: 1700000000, size: 1024 },
+  ]);
+  assert.ok(galleryHtml.includes('Il tuo archivio'));
+  assert.ok(galleryHtml.includes('1 elementi'));
+  assert.ok(galleryHtml.includes('/media/abc12345.jpg'));
+
+  const trashHtml = renderTrashTemplate([]);
+  assert.ok(trashHtml.includes('Il cestino è vuoto'));
 });
 
-test('Android Release Builder validates config and creates APK + Android Studio bundle', async () => {
-  const config = {
-    appName: 'PhotoCloud Vault',
-    packageName: 'com.valerio.photocloud',
-    versionName: '1.0.0',
-    versionCode: 1,
-    serverUrl: 'http://10.0.2.2:3000',
-    minSdk: 26,
-    targetSdk: 35,
-    enableBiometricLock: true,
-    enableOfflineCache: true,
-    enableAutoBackup: false,
-    signingMode: 'release' as const,
-    keystoreAlias: 'photocloud-release-key',
-  };
-
-  assert.equal(validateAndroidConfig(config), null);
-  assert.notEqual(
-    validateAndroidConfig({ ...config, packageName: 'invalid_package' }),
-    null
-  );
-
-  const result = await createAndroidReleasePackage(config);
-  assert.equal(result.artifact.apkFilename, 'photocloud-release-v1.0.0-signed.apk');
-  assert.ok(result.apkBuffer.length > 100);
-  assert.ok(result.projectZipBuffer.length > 200);
-  assert.equal(result.artifact.steps.length, 4);
+test('compileSignedAndroidApk compiles and signs photocloud-release-v1.0.0-signed.apk from /android-app', async () => {
+  const outDir = path.resolve(process.cwd(), 'release');
+  const res = await compileSignedAndroidApk(outDir);
+  assert.ok(fs.existsSync(res.apkPath));
+  assert.ok(fs.existsSync(res.metadataPath));
+  assert.ok(res.apkBuffer.length > 500);
+  assert.equal(res.sha256.length, 64);
 });

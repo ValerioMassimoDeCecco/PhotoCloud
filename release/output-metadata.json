@@ -1,0 +1,21 @@
+{
+  "version": 3,
+  "artifactType": {
+    "type": "APK",
+    "kind": "Directory"
+  },
+  "applicationId": "com.valerio.photocloud",
+  "variantName": "release",
+  "elements": [
+    {
+      "type": "SINGLE",
+      "filters": [],
+      "attributes": [],
+      "versionCode": 1,
+      "versionName": "1.0.0",
+      "outputFile": "photocloud-release-v1.0.0-signed.apk",
+      "sha256": "25cdf20e67bd30d2442d30f371fefe881590fe0d38754970c0218b4f725cc379"
+    }
+  ],
+  "elementType": "File"
+}
