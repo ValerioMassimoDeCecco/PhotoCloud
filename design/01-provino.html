@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Provino — PhotoCloud / proposta 01</title>
+<style>
+  /* =========================================================
+     PROPOSTA 01 — "PROVINO"
+     La galleria è un provino a contatto appoggiato sul tavolo
+     di sviluppo: pellicola 35mm, numeri di fotogramma stampati
+     sul bordo, matita rossa per la selezione.
+     ========================================================= */
+  :root{
+    --bench:#141210;
+    --bench-2:#0c0b0a;
+    --film:#080706;
+    --cream:#ece3d2;
+    --cream-70:rgba(236,227,210,.7);
+    --cream-45:rgba(236,227,210,.42);
+    --cream-18:rgba(236,227,210,.16);
+    --orange:#d9a15b;
+    --red:#e04a2f;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --serif:Georgia,"Times New Roman",serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    min-height:100vh;background:var(--bench);color:var(--cream);
+    font-family:var(--mono);font-size:12px;
+    background-image:
+      radial-gradient(120% 90% at 50% -10%,rgba(255,240,215,.055),transparent 60%),
+      radial-gradient(80% 60% at 50% 110%,rgba(0,0,0,.55),transparent 70%);
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  a{color:inherit}
+  :focus-visible{outline:1.5px solid var(--orange);outline-offset:3px}
+  .wrap{max-width:1360px;margin:0 auto;padding:clamp(14px,2.4vw,34px)}
+
+  /* ---------------- testata / foglio di lavoro ---------------- */
+  .head{
+    display:flex;align-items:flex-start;justify-content:space-between;
+    gap:clamp(16px,3vw,40px);flex-wrap:wrap;
+    padding-bottom:16px;border-bottom:1px solid var(--cream-18);
+  }
+  .job-no{
+    font-size:9.5px;letter-spacing:.24em;color:var(--orange);
+    display:flex;align-items:center;gap:10px;margin-bottom:10px;
+  }
+  .job-no::after{content:"";height:1px;width:48px;background:var(--orange);opacity:.6}
+  h1{
+    font-family:var(--serif);font-weight:400;font-size:clamp(30px,4.4vw,50px);
+    line-height:.95;letter-spacing:-.02em;
+  }
+  h1 em{font-style:italic;color:var(--cream-70);font-size:.62em;letter-spacing:0}
+  .job-meta{
+    font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--cream-45);margin-top:12px;line-height:1.9;
+  }
+  .tools{display:flex;flex-wrap:wrap;gap:7px;align-items:flex-start;max-width:520px;justify-content:flex-end}
+  .tool{
+    font-size:9px;letter-spacing:.13em;text-transform:uppercase;
+    border:1px solid var(--cream-18);padding:8px 10px;color:var(--cream-70);
+    transition:background .15s,color .15s,border-color .15s;white-space:nowrap;
+  }
+  .tool:hover{background:var(--cream);color:var(--bench);border-color:var(--cream)}
+  .tool[disabled]{opacity:.3;pointer-events:none}
+  .tool.on{background:var(--red);border-color:var(--red);color:#fff}
+  .tool .n{color:var(--orange);margin-left:4px}
+  .tool:hover .n{color:var(--red)}
+  .tool-row{display:flex;gap:7px;align-items:center}
+  .sep{width:1px;height:26px;background:var(--cream-18);margin:0 4px}
+
+  /* ---------------- provino ---------------- */
+  .bench{padding:clamp(20px,3.6vw,44px) 0 clamp(8px,1.4vw,16px)}
+  .bench-top{
+    display:flex;justify-content:space-between;gap:16px;align-items:baseline;
+    font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--cream-45);
+    margin-bottom:clamp(14px,2.2vw,24px);
+  }
+  .bench-top b{color:var(--cream);font-weight:400}
+
+  .strip{
+    position:relative;background:var(--film);padding:15px 12px 17px;
+    margin:0 auto clamp(18px,2.6vw,30px);
+    box-shadow:0 20px 44px -18px rgba(0,0,0,.85),0 2px 0 rgba(255,255,255,.03) inset;
+  }
+  .strip.s1{transform:rotate(-.18deg)}
+  .strip.s2{transform:rotate(.12deg)}
+  .strip.s3{transform:rotate(-.08deg)}
+  /* perforazioni */
+  .strip::before,.strip::after{
+    content:"";position:absolute;left:10px;right:10px;height:6px;
+    background-image:repeating-linear-gradient(90deg,
+      rgba(240,230,208,.28) 0 8px,transparent 8px 17px);
+    background-size:auto 6px;
+  }
+  .strip::before{top:4px}
+  .strip::after{bottom:4px}
+
+  .frames{
+    display:grid;grid-template-columns:repeat(4,1fr);
+    gap:9px;
+  }
+  .frame{
+    position:relative;display:block;text-align:left;
+    background:var(--film);padding:0 0 3px;
+  }
+  .edge{
+    display:flex;justify-content:space-between;gap:6px;
+    font-size:7.5px;letter-spacing:.14em;color:var(--orange);
+    padding:0 2px 4px;text-transform:uppercase;opacity:.9;
+    white-space:nowrap;overflow:hidden;
+  }
+  .edge .file{color:var(--cream-45);letter-spacing:.06em;text-transform:none;overflow:hidden;text-overflow:ellipsis}
+  .ph{
+    display:block;aspect-ratio:3/2;overflow:hidden;background:#16130f;position:relative;
+  }
+  .ph img{
+    width:100%;height:100%;object-fit:cover;display:block;
+    filter:saturate(.96) contrast(1.02);
+    transition:transform .5s cubic-bezier(.2,.8,.2,1),filter .3s;
+  }
+  .frame:hover .ph img{transform:scale(1.035);filter:saturate(1.05) contrast(1.03)}
+  .cap{
+    display:flex;justify-content:space-between;gap:6px;
+    font-size:8px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--cream-45);padding:5px 2px 0;
+  }
+  .cap b{font-weight:400;color:var(--cream-70)}
+  .frame:hover .cap b{color:var(--cream)}
+
+  /* matita rossa */
+  .mark{
+    position:absolute;inset:-7px -6px 12px;width:calc(100% + 12px);height:calc(100% - 5px);
+    pointer-events:none;opacity:0;transition:opacity .18s;
+  }
+  .mark path{
+    fill:none;stroke:var(--red);stroke-width:1.7;stroke-linecap:round;
+    stroke-dasharray:340;stroke-dashoffset:0;
+  }
+  .frame.sel .mark{opacity:.95}
+  .frame.sel .ph img{filter:saturate(.8) brightness(.82)}
+  .frame.sel .ph::after{
+    content:"";position:absolute;inset:0;background:rgba(224,74,47,.14);
+  }
+  .sel-tag{
+    position:absolute;right:4px;top:2px;font-size:7.5px;letter-spacing:.14em;
+    color:var(--red);opacity:0;
+  }
+  .frame.sel .sel-tag{opacity:1}
+
+  /* ---------------- piede ---------------- */
+  .foot{
+    display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap;
+    border-top:1px solid var(--cream-18);padding-top:14px;
+    font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--cream-45);
+    line-height:1.9;
+  }
+  .foot .links{display:flex;gap:18px;flex-wrap:wrap}
+  .foot a,.link{text-decoration:none;border-bottom:1px solid transparent;transition:border-color .15s,color .15s}
+  .foot a:hover,.link:hover{color:var(--cream);border-color:var(--orange)}
+
+  /* ---------------- accesso ---------------- */
+  .access{display:none;padding:clamp(26px,4.6vw,64px) 0}
+  .access.open{display:block}
+  .access-grid{
+    display:grid;grid-template-columns:1fr .92fr;gap:clamp(26px,5vw,72px);align-items:start;
+  }
+  .eyebrow{
+    font-size:9.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--orange);
+    display:flex;align-items:center;gap:10px;margin-bottom:18px;
+  }
+  .eyebrow::after{content:"";height:1px;width:56px;background:var(--orange);opacity:.6}
+  .access h2{
+    font-family:var(--serif);font-weight:400;
+    font-size:clamp(32px,4.6vw,56px);line-height:.98;letter-spacing:-.02em;
+  }
+  .access h2 em{font-style:italic;color:var(--orange)}
+  .lead{font-family:var(--serif);font-size:16px;line-height:1.6;color:var(--cream-70);max-width:38ch;margin-top:22px}
+  .specs{
+    margin-top:34px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;
+    border-top:1px solid var(--cream-18);padding-top:14px;
+  }
+  .specs div{font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--cream-45);line-height:1.9}
+  .specs b{display:block;font-size:12px;letter-spacing:.06em;color:var(--cream);text-transform:none;margin-bottom:3px}
+
+  .sheet{
+    background:var(--cream);color:#16130f;padding:clamp(18px,2.6vw,30px);
+    box-shadow:0 26px 60px -22px rgba(0,0,0,.9);
+    background-image:radial-gradient(rgba(22,19,15,.05) .6px,transparent .7px);
+    background-size:4px 4px;
+  }
+  .sheet-head{
+    display:flex;justify-content:space-between;gap:14px;
+    font-size:8px;letter-spacing:.18em;text-transform:uppercase;
+    color:rgba(22,19,15,.5);padding-bottom:8px;border-bottom:1px solid rgba(22,19,15,.35);
+  }
+  .tabs{display:flex;gap:0;margin:18px 0 20px;border:1px solid rgba(22,19,15,.35)}
+  .tabs button{
+    flex:1;padding:10px 8px;font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+    color:rgba(22,19,15,.55);border-right:1px solid rgba(22,19,15,.35);
+  }
+  .tabs button:last-child{border-right:0}
+  .tabs button[aria-selected="true"]{background:#16130f;color:var(--cream)}
+  .field-label{
+    display:block;font-size:8.5px;letter-spacing:.18em;text-transform:uppercase;
+    color:rgba(22,19,15,.55);margin-bottom:8px;
+  }
+  .slot{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+    border:1px dashed rgba(22,19,15,.45);padding:clamp(22px,3.4vw,34px) 16px;
+    text-align:center;cursor:pointer;transition:background .15s,border-color .15s;
+    background:rgba(255,255,255,.4);
+  }
+  .slot:hover,.slot.drag{background:#fff;border-color:var(--red)}
+  .slot .big{font-size:11px;letter-spacing:.14em;text-transform:uppercase}
+  .slot .small{font-size:8.5px;letter-spacing:.06em;color:rgba(22,19,15,.55);line-height:1.7;max-width:34ch}
+  .slot .file-name{font-size:10px;letter-spacing:.04em;color:var(--red);word-break:break-all;text-transform:none}
+  .slot input{display:none}
+  .btn-primary{
+    width:100%;margin-top:16px;padding:14px;background:#16130f;color:var(--cream);
+    font-size:10px;letter-spacing:.2em;text-transform:uppercase;
+    transition:background .15s;
+  }
+  .btn-primary:hover{background:var(--red)}
+  .fine{
+    font-size:8px;letter-spacing:.06em;color:rgba(22,19,15,.5);line-height:1.8;
+    margin-top:12px;text-align:center;
+  }
+  .reg{display:none}
+  .reg.open{display:block}
+  .login-panel.hide{display:none}
+  .input-line{
+    width:100%;border:0;border-bottom:1px solid rgba(22,19,15,.45);background:none;
+    font-family:var(--mono);font-size:14px;color:#16130f;padding:8px 2px;margin-bottom:18px;
+  }
+  .input-line:focus{outline:none;border-color:var(--red)}
+  .radio{display:flex;flex-direction:column;gap:8px;margin-bottom:18px}
+  .radio label{
+    display:flex;gap:9px;align-items:flex-start;font-size:9.5px;line-height:1.6;
+    letter-spacing:.04em;color:rgba(22,19,15,.75);cursor:pointer;
+  }
+  .radio input{accent-color:var(--red);margin-top:2px}
+
+  /* ---------------- lightbox ---------------- */
+  .lb{
+    position:fixed;inset:0;background:#050403;z-index:50;
+    display:none;flex-direction:column;
+  }
+  .lb.open{display:flex}
+  .lb-bar{
+    display:flex;justify-content:space-between;align-items:center;gap:16px;
+    padding:14px clamp(14px,2.4vw,26px);
+    font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--cream-45);
+    border-bottom:1px solid var(--cream-18);flex:none;
+  }
+  .lb-bar b{color:var(--cream);font-weight:400}
+  .lb-bar .close{font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--cream)}
+  .lb-bar .close:hover{color:var(--red)}
+  .lb-stage{flex:1;display:flex;align-items:center;justify-content:center;padding:clamp(10px,2.4vw,34px);min-height:0;position:relative}
+  .lb-stage img{max-width:100%;max-height:100%;object-fit:contain;display:block;
+    box-shadow:0 30px 80px -20px rgba(0,0,0,.9)}
+  .lb-nav{
+    position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;
+    border:1px solid var(--cream-18);display:grid;place-items:center;color:var(--cream);
+    background:rgba(8,7,6,.6);transition:background .15s,color .15s;
+  }
+  .lb-nav:hover{background:var(--cream);color:var(--bench)}
+  .lb-prev{left:clamp(8px,2vw,22px)}
+  .lb-next{right:clamp(8px,2vw,22px)}
+  .lb-foot{
+    display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;
+    padding:12px clamp(14px,2.4vw,26px);border-top:1px solid var(--cream-18);
+    font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--cream-45);flex:none;
+  }
+  .lb-foot .title{font-family:var(--serif);font-size:15px;letter-spacing:0;text-transform:none;color:var(--cream)}
+  .lb-foot .tools{max-width:none;justify-content:flex-end}
+  .lb-foot .tool{padding:6px 8px;font-size:8px}
+
+  @media (max-width:900px){
+    .access-grid{grid-template-columns:1fr;gap:28px}
+    .specs{margin-top:22px}
+  }
+  @media (max-width:760px){
+    .frames{grid-template-columns:repeat(2,1fr)}
+    .strip{padding:13px 10px 15px}
+    .tools{max-width:none;justify-content:flex-start}
+    .sep{display:none}
+    .lb-prev{left:4px}.lb-next{right:4px}
+    .lb-nav{width:36px;height:36px}
+  }
+  @media (max-width:420px){
+    .frames{grid-template-columns:1fr}
+    .mark{inset:-6px -4px 12px}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <!-- ================= TESTATA ================= -->
+  <header class="head">
+    <div>
+      <div class="job-no">Provino 12 · foglio di lavoro</div>
+      <h1>Blu <em>— studi sul colore</em></h1>
+      <div class="job-meta">
+        35mm · 12 fotogrammi · 3 pellicole<br>
+        08.11.2026 · sviluppo a cura di M. V.
+      </div>
+    </div>
+
+    <div class="tools" role="toolbar" aria-label="Strumenti dell'archivio">
+      <div class="tool-row">
+        <label class="tool" for="up">＋ Carica</label>
+        <input id="up" type="file" accept="image/*,video/*" multiple hidden>
+        <button class="tool" id="dl" disabled>Scarica <span class="n" id="n-sel">0</span></button>
+        <button class="tool" id="del" disabled>Cestino</button>
+      </div>
+      <div class="sep"></div>
+      <div class="tool-row">
+        <button class="tool" id="dups">Duplicati</button>
+        <button class="tool" id="select-all">Seleziona tutto</button>
+      </div>
+      <div class="sep"></div>
+      <div class="tool-row">
+        <button class="tool on" id="login-btn">Accedi</button>
+        <button class="tool" id="group-btn">Gruppo: mese</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ================= PROVINO ================= -->
+  <main class="bench" id="view-gallery">
+    <div class="bench-top">
+      <span>Provino a contatto · <b>Blu / 2026</b></span>
+      <span id="status-line">Nessun fotogramma selezionato</span>
+    </div>
+
+    <!-- pellicola 1 -->
+    <section class="strip s1" aria-label="Pellicola 1, giugno">
+      <div class="frames">
+        <button class="frame" data-i="0">
+          <span class="edge"><span>01</span><span class="file">IMG_0412.HEIC</span></span>
+          <span class="ph"><img src="../static/wp1.jpg" alt="Ortensia, macro di fiori blu" loading="lazy"></span>
+          <span class="cap"><b>N.01 · Ortensia</b><span>06.06</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+        <button class="frame" data-i="1">
+          <span class="edge"><span>02</span><span class="file">IMG_0413.HEIC</span></span>
+          <span class="ph"><img src="../static/wp1.jpg" alt="Corolla, dettaglio" style="object-position:25% 70%;transform:scale(1.5)" loading="lazy"></span>
+          <span class="cap"><b>N.02 · Corolla</b><span>06.06</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+        <button class="frame" data-i="2">
+          <span class="edge"><span>03</span><span class="file">IMG_0478.HEIC</span></span>
+          <span class="ph"><img src="../static/wp3.jpg" alt="Prisma, rifrazione" loading="lazy"></span>
+          <span class="cap"><b>N.03 · Prisma</b><span>22.07</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+        <button class="frame" data-i="3">
+          <span class="edge"><span>04</span><span class="file">IMG_0479.HEIC</span></span>
+          <span class="ph"><img src="../static/wp3.jpg" alt="Lastra, dettaglio del prisma" style="object-position:70% 30%;transform:scale(1.6)" loading="lazy"></span>
+          <span class="cap"><b>N.04 · Lastra</b><span>22.07</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <!-- pellicola 2 -->
+    <section class="strip s2" aria-label="Pellicola 2, agosto">
+      <div class="frames">
+        <button class="frame" data-i="4">
+          <span class="edge"><span>05</span><span class="file">IMG_0531.HEIC</span></span>
+          <span class="ph"><img src="../static/wp2.jpg" alt="Vetro, curve di luce" loading="lazy"></span>
+          <span class="cap"><b>N.05 · Vetro</b><span>03.08</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+        <button class="frame" data-i="5">
+          <span class="edge"><span>06</span><span class="file">IMG_0532.HEIC</span></span>
+          <span class="ph"><img src="../static/wp2.jpg" alt="Curva, dettaglio" style="object-position:80% 60%;transform:scale(1.8)" loading="lazy"></span>
+          <span class="cap"><b>N.06 · Curva</b><span>03.08</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+        <button class="frame" data-i="6">
+          <span class="edge"><span>07</span><span class="file">IMG_0617.HEIC</span></span>
+          <span class="ph"><img src="../static/wp3.jpg" alt="Nodo, intreccio di vetro" style="object-position:40% 90%;transform:scale(1.35)" loading="lazy"></span>
+          <span class="cap"><b>N.07 · Nodo</b><span>14.09</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+        <button class="frame" data-i="7">
+          <span class="edge"><span>08</span><span class="file">IMG_0618.HEIC</span></span>
+          <span class="ph"><img src="../static/wp2.jpg" alt="Filo, linea chiara" style="object-position:15% 30%;transform:scale(1.45)" loading="lazy"></span>
+          <span class="cap"><b>N.08 · Filo</b><span>14.09</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <!-- pellicola 3 -->
+    <section class="strip s3" aria-label="Pellicola 3, ottobre e novembre">
+      <div class="frames">
+        <button class="frame" data-i="8">
+          <span class="edge"><span>09</span><span class="file">IMG_0704.HEIC</span></span>
+          <span class="ph"><img src="../static/wp1.jpg" alt="Petali, luce radente" style="object-position:60% 40%;transform:scale(1.7)" loading="lazy"></span>
+          <span class="cap"><b>N.09 · Petali</b><span>02.10</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+        <button class="frame" data-i="9">
+          <span class="edge"><span>10</span><span class="file">IMG_0705.HEIC</span></span>
+          <span class="ph"><img src="../static/wp3.jpg" alt="Riflesso, luce sul vetro" style="object-position:85% 10%;transform:scale(1.5)" loading="lazy"></span>
+          <span class="cap"><b>N.10 · Riflesso</b><span>02.10</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+        <button class="frame" data-i="10">
+          <span class="edge"><span>11</span><span class="file">IMG_0792.HEIC</span></span>
+          <span class="ph"><img src="../static/wp2.jpg" alt="Onda, curva azzurra" style="object-position:35% 55%;transform:scale(1.35)" loading="lazy"></span>
+          <span class="cap"><b>N.11 · Onda</b><span>08.11</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+        <button class="frame" data-i="11">
+          <span class="edge"><span>12</span><span class="file">IMG_0793.HEIC</span></span>
+          <span class="ph"><img src="../static/wp1.jpg" alt="Sfocatura, fondo" style="object-position:5% 20%;transform:scale(1.9)" loading="lazy"></span>
+          <span class="cap"><b>N.12 · Sfocatura</b><span>08.11</span></span>
+          <span class="sel-tag">SEL</span>
+          <svg class="mark" viewBox="0 0 200 130" preserveAspectRatio="none" aria-hidden="true"><path vector-effect="non-scaling-stroke" d="M104 8C150 5 192 24 194 52c2 32-36 62-88 64C52 118 9 100 6 66 4 36 38 11 88 8c22-1 43 2 58 7"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <div class="foot">
+      <span>
+        Selezione: <b id="foot-sel" style="font-weight:400;color:var(--cream)">0 fotogrammi</b><br>
+        Clicca un fotogramma per svilupparlo · <span style="color:var(--orange)">doppio clic</span> per segnarlo
+      </span>
+      <div class="links">
+        <a href="index.html">← Tutte le proposte</a>
+        <a href="#" id="login-link">Scheda di accesso →</a>
+      </div>
+    </div>
+  </main>
+
+  <!-- ================= ACCESSO ================= -->
+  <main class="access" id="view-login">
+    <div class="access-grid">
+      <div>
+        <div class="eyebrow">Scheda di accesso · modulo A-01</div>
+        <h2>Il tuo archivio<br>è nel <em>cassetto</em>.</h2>
+        <p class="lead">
+          PhotoCloud non chiede password: chiede il file-chiave che hai
+          scaricato alla registrazione. Senza quel foglio, i negativi
+          restano illeggibili.
+        </p>
+        <div class="specs">
+          <div><b>AES-256</b>cifratura lato server</div>
+          <div><b>0 password</b>solo file-chiave</div>
+          <div><b>12</b>fotogrammi in archivio</div>
+        </div>
+      </div>
+
+      <form class="sheet" id="login-form" onsubmit="event.preventDefault();this.querySelector('.fine').textContent='Demo statica: il login reale resta su /login.'">
+        <div class="sheet-head"><span>Modulo A-01</span><span>Uso interno · 2026</span></div>
+
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" aria-selected="true" id="tab-in">Accesso</button>
+          <button type="button" role="tab" aria-selected="false" id="tab-up">Registrazione</button>
+        </div>
+
+        <div class="login-panel" id="panel-in">
+          <label class="field-label" for="keyfile">File di autenticazione</label>
+          <label class="slot" id="slot" for="keyfile">
+            <span class="big">Inserisci il file-chiave</span>
+            <span class="small" id="slot-hint">Trascina qui <b>photocloud_auth_….json</b><br>oppure clicca per sceglierlo</span>
+          </label>
+          <input id="keyfile" type="file" accept=".json,.txt">
+          <button class="btn-primary" type="submit">Sviluppa l'archivio</button>
+          <p class="fine">La chiave non lascia il tuo dispositivo: viene inviata solo al server che la verifica.</p>
+        </div>
+
+        <div class="reg" id="panel-up">
+          <label class="field-label" for="user">Nome d'archivio</label>
+          <input class="input-line" id="user" type="text" placeholder="es. valerio" autocomplete="username">
+          <span class="field-label">Come vuoi la chiave?</span>
+          <div class="radio">
+            <label><input type="radio" name="k" checked> Genera una chiave sicura e scaricala</label>
+            <label><input type="radio" name="k"> Voglio dettare una frase chiave (min. 8 caratteri)</label>
+          </div>
+          <button class="btn-primary" type="submit">Registra e scarica la chiave</button>
+          <p class="fine">Conserva il file: è l'unico modo per riaprire l'archivio.</p>
+        </div>
+      </form>
+    </div>
+
+    <div class="foot" style="margin-top:clamp(26px,4vw,48px)">
+      <span>Passo 1 di 2 · verifica del file-chiave</span>
+      <div class="links"><a href="#" id="back-link">← Torna al provino</a></div>
+    </div>
+  </main>
+
+</div>
+
+<!-- ================= LIGHTBOX ================= -->
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Fotogramma ingrandito">
+  <div class="lb-bar">
+    <span>Provino 12 · <b id="lb-count">01 / 12</b></span>
+    <button class="close" id="lb-close">Chiudi ✕</button>
+  </div>
+  <div class="lb-stage">
+    <button class="lb-nav lb-prev" id="lb-prev" aria-label="Precedente">←</button>
+    <img id="lb-img" src="" alt="">
+    <button class="lb-nav lb-next" id="lb-next" aria-label="Successivo">→</button>
+  </div>
+  <div class="lb-foot">
+    <span class="title" id="lb-title">—</span>
+    <span id="lb-meta">—</span>
+    <div class="tools">
+      <button class="tool">Scarica</button>
+      <button class="tool">Cestino</button>
+      <button class="tool">Info</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const frames = [...document.querySelectorAll('.frame')];
+  const items = frames.map(f => {
+    const img = f.querySelector('img');
+    return {
+      src: img.getAttribute('src'),
+      alt: img.alt,
+      title: f.querySelector('.cap b').textContent,
+      meta: f.querySelector('.cap span').textContent + ' · ' + f.querySelector('.file').textContent,
+      pos: img.style.objectPosition || '50% 50%',
+      scale: img.style.transform || 'scale(1)'
+    };
+  });
+
+  /* ---- selezione (matita rossa) ---- */
+  const nSel = document.getElementById('n-sel');
+  const footSel = document.getElementById('foot-sel');
+  const status = document.getElementById('status-line');
+  const dl = document.getElementById('dl');
+  const del = document.getElementById('del');
+
+  function syncSel(){
+    const n = frames.filter(f => f.classList.contains('sel')).length;
+    nSel.textContent = n;
+    footSel.textContent = n + (n === 1 ? ' fotogramma' : ' fotogrammi');
+    status.textContent = n ? n + ' segnati con la matita' : 'Nessun fotogramma selezionato';
+    dl.disabled = !n;
+    del.disabled = !n;
+  }
+  frames.forEach(f => {
+    f.addEventListener('dblclick', e => {
+      e.preventDefault();
+      f.classList.toggle('sel');
+      syncSel();
+    });
+    f.addEventListener('click', () => openLB(+f.dataset.i));
+  });
+  document.getElementById('select-all').addEventListener('click', () => {
+    const all = frames.every(f => f.classList.contains('sel'));
+    frames.forEach(f => f.classList.toggle('sel', !all));
+    syncSel();
+  });
+  ['dl','del'].forEach(id => document.getElementById(id).addEventListener('click', () => {
+    if (id === 'del') { frames.forEach(f => { if (f.classList.contains('sel')) f.style.opacity = .25; }); }
+  }));
+  syncSel();
+
+  /* ---- lightbox ---- */
+  const lb = document.getElementById('lb');
+  const lbImg = document.getElementById('lb-img');
+  let cur = 0;
+
+  function paint(){
+    const it = items[cur];
+    lbImg.src = it.src;
+    lbImg.alt = it.alt;
+    lbImg.style.objectPosition = '50% 50%';
+    lbImg.style.transform = 'scale(1)';
+    document.getElementById('lb-count').textContent = String(cur + 1).padStart(2,'0') + ' / ' + items.length;
+    document.getElementById('lb-title').textContent = it.title;
+    document.getElementById('lb-meta').textContent = it.meta;
+  }
+  function openLB(i){ cur = i; paint(); lb.classList.add('open'); document.body.style.overflow = 'hidden'; }
+  function closeLB(){ lb.classList.remove('open'); document.body.style.overflow = ''; }
+  function step(d){ cur = (cur + d + items.length) % items.length; paint(); }
+
+  document.getElementById('lb-close').addEventListener('click', closeLB);
+  document.getElementById('lb-prev').addEventListener('click', () => step(-1));
+  document.getElementById('lb-next').addEventListener('click', () => step(1));
+  lb.addEventListener('click', e => { if (e.target === lb || e.target.classList.contains('lb-stage')) closeLB(); });
+  document.addEventListener('keydown', e => {
+    if (!lb.classList.contains('open')) return;
+    if (e.key === 'Escape') closeLB();
+    if (e.key === 'ArrowLeft') step(-1);
+    if (e.key === 'ArrowRight') step(1);
+  });
+
+  /* ---- viste ---- */
+  const vg = document.getElementById('view-gallery');
+  const vl = document.getElementById('view-login');
+  function show(which){
+    const login = which === 'login';
+    vl.classList.toggle('open', login);
+    vg.style.display = login ? 'none' : '';
+    window.scrollTo({top:0});
+  }
+  document.getElementById('login-btn').addEventListener('click', () => show('login'));
+  document.getElementById('login-link').addEventListener('click', e => { e.preventDefault(); show('login'); });
+  document.getElementById('back-link').addEventListener('click', e => { e.preventDefault(); show('gallery'); });
+
+  /* ---- modulo accesso (demo) ---- */
+  const slot = document.getElementById('slot');
+  const file = document.getElementById('keyfile');
+  const hint = document.getElementById('slot-hint');
+  file.addEventListener('change', () => {
+    if (file.files[0]) hint.innerHTML = '<span class="file-name">' + file.files[0].name + '</span>';
+  });
+  ['dragenter','dragover'].forEach(ev => slot.addEventListener(ev, e => { e.preventDefault(); slot.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev => slot.addEventListener(ev, e => { e.preventDefault(); slot.classList.remove('drag'); }));
+  slot.addEventListener('drop', e => {
+    if (e.dataTransfer.files[0]) hint.innerHTML = '<span class="file-name">' + e.dataTransfer.files[0].name + '</span>';
+  });
+
+  const tabIn = document.getElementById('tab-in'), tabUp = document.getElementById('tab-up');
+  const pIn = document.getElementById('panel-in'), pUp = document.getElementById('panel-up');
+  function tab(up){
+    tabIn.setAttribute('aria-selected', String(!up));
+    tabUp.setAttribute('aria-selected', String(up));
+    pIn.classList.toggle('hide', up);
+    pUp.classList.toggle('open', up);
+  }
+  tabIn.addEventListener('click', () => tab(false));
+  tabUp.addEventListener('click', () => tab(true));
+
+  /* ---- gruppi: cicla mese / giorno / anno ---- */
+  const gb = document.getElementById('group-btn');
+  const modes = ['mese','giorno','anno'];
+  let gi = 0;
+  gb.addEventListener('click', () => { gi = (gi + 1) % modes.length; gb.textContent = 'Gruppo: ' + modes[gi]; });
+})();
+</script>
+</body>
+</html>

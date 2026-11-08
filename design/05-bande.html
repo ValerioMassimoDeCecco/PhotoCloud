@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bande — PhotoCloud / proposta 05</title>
+<style>
+  /* =========================================================
+     PROPOSTA 05 — "BANDE"
+     La collezione è una pila di bande orizzontali: chiuse
+     mostrano una fessura di foto, si aprono una alla volta.
+     Nessuna cornice, nessuna ombra, nessun angolo tondo.
+     ========================================================= */
+  :root{
+    --bg:#0b0b0a;
+    --bg-2:#0f0f0d;
+    --ink:#f0ede6;
+    --ink-55:rgba(240,237,230,.55);
+    --ink-35:rgba(240,237,230,.35);
+    --line:rgba(240,237,230,.13);
+    --line-soft:rgba(240,237,230,.07);
+    --accent:#ff4d2e;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  a{color:inherit}
+  :focus-visible{outline:1px solid var(--accent);outline-offset:3px}
+
+  .app{display:grid;grid-template-columns:minmax(260px,.29fr) minmax(0,1fr);min-height:100vh}
+
+  /* ---------------- colonna sinistra ---------------- */
+  .side{
+    border-right:1px solid var(--line);padding:clamp(18px,2.4vw,34px);
+    display:flex;flex-direction:column;gap:clamp(20px,3vw,44px);
+    position:sticky;top:0;height:100vh;
+  }
+  .mark{
+    display:flex;align-items:center;gap:9px;font-family:var(--mono);
+    font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-55);
+  }
+  .mark i{width:5px;height:5px;background:var(--accent);display:block;border-radius:50%}
+  .ident h1{
+    font-size:clamp(48px,7.2vw,94px);font-weight:200;line-height:.82;
+    letter-spacing:-.055em;margin-left:-.05em;
+  }
+  .ident .series{
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.24em;text-transform:uppercase;
+    color:var(--ink-35);margin-top:16px;display:flex;gap:12px;flex-wrap:wrap;
+  }
+  .ident p{
+    font-size:13px;line-height:1.65;color:var(--ink-55);max-width:32ch;margin-top:18px;
+  }
+
+  .nav{display:flex;flex-direction:column}
+  .nav button,.nav a{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:9px 0;border-top:1px solid var(--line-soft);
+    font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ink-55);text-decoration:none;transition:color .15s,padding-left .15s;
+  }
+  .nav>:last-child{border-bottom:1px solid var(--line-soft)}
+  .nav button:hover,.nav a:hover{color:var(--ink);padding-left:5px}
+  .nav .v{color:var(--ink-35);font-size:8.5px}
+  .nav button:hover .v{color:var(--accent)}
+  .nav .v b{color:var(--accent);font-weight:400}
+
+  .side-foot{
+    margin-top:auto;font-family:var(--mono);font-size:8px;letter-spacing:.12em;
+    line-height:1.9;text-transform:uppercase;color:var(--ink-35);
+  }
+  .side-foot a{text-decoration:none;border-bottom:1px solid var(--line)}
+  .side-foot a:hover{color:var(--ink)}
+
+  /* ---------------- bande ---------------- */
+  .main{display:flex;flex-direction:column;min-width:0}
+  .strip-head{
+    display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:10px clamp(14px,2vw,26px);border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ink-35);
+  }
+  .filters{display:flex;gap:16px;flex-wrap:wrap}
+  .filters button{font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-35);
+    padding-bottom:2px;border-bottom:1px solid transparent;transition:color .15s,border-color .15s}
+  .filters button:hover{color:var(--ink)}
+  .filters button[aria-selected="true"]{color:var(--ink);border-color:var(--accent)}
+  .strip-head .count b{color:var(--ink);font-weight:400}
+
+  .bands{display:flex;flex-direction:column;flex:1}
+
+  .band{
+    position:relative;overflow:hidden;height:50px;flex:none;
+    border-bottom:1px solid var(--line-soft);cursor:pointer;
+    transition:height .44s cubic-bezier(.4,0,.15,1),background .3s;
+    background:var(--bg);
+    display:flex;align-items:flex-end;
+  }
+  .band img{
+    position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+    opacity:.22;filter:saturate(.65) brightness(.8);
+    transition:opacity .45s,filter .45s,transform .8s cubic-bezier(.2,.8,.2,1);
+    will-change:opacity;
+  }
+  .band::after{
+    content:"";position:absolute;inset:0;background:linear-gradient(to top,var(--bg) 6%,rgba(11,11,10,.35) 60%,rgba(11,11,10,.55));
+    transition:opacity .4s;pointer-events:none;
+  }
+  .band.open,.band:focus-visible{height:clamp(220px,34vh,330px);background:var(--bg-2)}
+  .band.open img,.band:focus-visible img{opacity:1;filter:none;transform:scale(1.01)}
+  .band.open::after,.band:focus-visible::after{opacity:.85}
+  /* su desktop l'hover accende la foto ma non apre la banda:
+     l'apertura è al clic (o da tastiera), così la lista non balla */
+  @media (hover:hover){
+    .band:hover{background:var(--bg-2)}
+    .band:hover img{opacity:.62;filter:saturate(.9) brightness(.95);transform:scale(1.01)}
+    .band:hover::after{opacity:.95}
+    .band:hover .line-2{opacity:1;transform:none;transition-delay:.04s}
+    .band:hover .go{opacity:1;transform:none}
+  }
+  .band.open .line-2,.band.open .go{opacity:1;transform:none;transition-delay:.05s}
+  .band.open .row{padding-bottom:18px}
+
+  .row{
+    position:relative;z-index:2;width:100%;text-shadow:0 1px 16px rgba(0,0,0,.55);
+    display:grid;grid-template-columns:58px minmax(0,1fr) auto auto;
+    align-items:center;gap:clamp(8px,1.6vw,20px);
+    padding:0 clamp(14px,2vw,26px) 13px;
+    transition:padding .35s;
+  }
+  .idx{font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:var(--ink-35);align-self:start}
+  .band.open .idx{color:var(--accent)}
+  .titles{min-width:0}
+  .line-1{
+    display:flex;align-items:baseline;gap:12px;min-width:0;
+  }
+  .line-1 .t{
+    font-size:14px;font-weight:400;letter-spacing:.01em;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;
+  }
+  .line-1 .s{
+    font-family:var(--mono);font-size:7.5px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--ink-35);white-space:nowrap;
+  }
+  .line-2{
+    font-family:var(--mono);font-size:8px;letter-spacing:.12em;text-transform:uppercase;
+    color:rgba(240,237,230,.7);margin-top:7px;opacity:0;transform:translateY(4px);
+    transition:opacity .35s,transform .35s;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .dt{font-family:var(--mono);font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink-55);white-space:nowrap;align-self:start;padding-top:1px}
+  .pick{
+    width:17px;height:17px;border:1px solid rgba(240,237,230,.4);flex:none;
+    display:grid;place-items:center;transition:background .15s,border-color .15s;
+    align-self:start;margin-top:0;
+  }
+  .pick::after{content:"";width:7px;height:7px;background:transparent;transition:background .15s}
+  .band.sel .pick{border-color:var(--accent);background:var(--accent)}
+  .band.sel .pick::after{background:#0b0b0a}
+  .band.sel{background:rgba(255,77,46,.05)}
+  .band.sel .idx{color:var(--accent)}
+  .go{
+    position:absolute;right:clamp(14px,2vw,26px);bottom:8px;z-index:3;
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--ink);display:flex;align-items:center;gap:7px;
+    opacity:0;transform:translateY(4px);transition:opacity .3s,transform .3s;
+    padding:6px 9px;border:1px solid rgba(240,237,230,.28);background:rgba(11,11,10,.4);
+  }
+  .go:hover{background:var(--ink);color:#0b0b0a;border-color:var(--ink)}
+  .band.sel .go{border-color:rgba(255,77,46,.5)}
+
+  .add-band{
+    height:58px;display:flex;align-items:center;gap:12px;padding:0 clamp(14px,2vw,26px);
+    border-bottom:1px solid var(--line-soft);color:var(--ink-35);
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;
+    cursor:pointer;transition:color .15s,background .15s;margin-top:auto;
+  }
+  .add-band:hover{color:var(--ink);background:var(--bg-2)}
+  .add-band .plus{font-size:14px;line-height:1}
+
+  /* ---------------- lightbox ---------------- */
+  .lb{position:fixed;inset:0;background:#050504;z-index:60;display:none;flex-direction:column}
+  .lb.open{display:flex}
+  .lb-top,.lb-bot{
+    display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:12px clamp(14px,2.4vw,30px);font-family:var(--mono);
+    font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-35);
+    border-color:var(--line);
+  }
+  .lb-top{border-bottom:1px solid var(--line)}
+  .lb-bot{border-top:1px solid var(--line)}
+  .lb-top b,.lb-bot b{color:var(--ink);font-weight:400}
+  .lb-top button:hover,.lb-bot button:hover{color:var(--accent)}
+  .lb-mid{flex:1;display:flex;align-items:center;justify-content:center;gap:16px;
+    padding:clamp(10px,2vw,28px);min-height:0;position:relative}
+  .lb-mid img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+  .lb-arrow{
+    position:absolute;top:50%;transform:translateY(-50%);width:46px;height:46px;
+    display:grid;place-items:center;color:var(--ink-35);font-size:18px;
+    transition:color .15s;background:transparent;
+  }
+  .lb-arrow:hover{color:var(--ink)}
+  .lb-prev{left:4px}.lb-next{right:4px}
+  .lb-bot .name{font-family:var(--sans);font-size:16px;letter-spacing:-.01em;color:var(--ink);text-transform:none}
+
+  /* ---------------- accesso ---------------- */
+  .access{display:none;min-height:100vh;padding:clamp(18px,3vw,40px);position:relative}
+  .access.open{display:flex;flex-direction:column}
+  .access-top{
+    display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--ink-35);padding-bottom:14px;border-bottom:1px solid var(--line);
+  }
+  .access-top b{color:var(--ink);font-weight:400}
+  .access-top button:hover{color:var(--accent)}
+  .access-mid{flex:1;display:flex;align-items:center;justify-content:center;padding:clamp(24px,5vw,60px) 0}
+  .access-box{width:min(520px,100%)}
+  .access-box .kicker{
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.24em;text-transform:uppercase;
+    color:var(--accent);margin-bottom:18px;
+  }
+  .access-box h2{
+    font-size:clamp(34px,5.4vw,58px);font-weight:200;line-height:.95;letter-spacing:-.04em;
+    margin-left:-.03em;
+  }
+  .access-box h2 em{font-style:normal;color:var(--ink-35)}
+  .access-box .sub{font-size:13.5px;line-height:1.7;color:var(--ink-55);max-width:40ch;margin-top:16px}
+  .tabs{display:flex;gap:22px;margin:28px 0 20px;border-bottom:1px solid var(--line)}
+  .tabs button{
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--ink-35);padding-bottom:8px;border-bottom:1px solid transparent;margin-bottom:-1px;
+  }
+  .tabs button[aria-selected="true"]{color:var(--ink);border-color:var(--accent)}
+  .keyrow{
+    display:flex;align-items:center;justify-content:space-between;gap:14px;
+    padding:16px 0;border-bottom:1px dashed rgba(240,237,230,.3);cursor:pointer;
+    transition:border-color .2s;
+  }
+  .keyrow:hover,.keyrow.drag,.keyrow.ready{border-color:var(--accent)}
+  .keyrow .lbl{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase}
+  .keyrow .fn{font-family:var(--mono);font-size:9.5px;color:var(--ink-35);letter-spacing:.02em;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;text-align:right}
+  .keyrow.ready .fn{color:var(--accent)}
+  .keyrow input{display:none}
+  .actions{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:22px;flex-wrap:wrap}
+  .go-btn{
+    display:flex;align-items:center;gap:14px;font-family:var(--mono);font-size:9.5px;
+    letter-spacing:.2em;text-transform:uppercase;color:var(--ink);padding-bottom:5px;
+    border-bottom:1px solid var(--ink);transition:color .15s,border-color .15s,gap .2s;
+  }
+  .go-btn:hover{color:var(--accent);border-color:var(--accent);gap:22px}
+  .fine{font-family:var(--mono);font-size:8px;line-height:1.8;color:var(--ink-35);margin-top:16px}
+  .reg{display:none}
+  .reg.open{display:block}
+  .p-in.hide{display:none}
+  .field{border-bottom:1px solid rgba(240,237,230,.25);margin-bottom:22px;padding-bottom:2px}
+  .field label{display:block;font-family:var(--mono);font-size:8px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--ink-35);margin-bottom:4px}
+  .field input{width:100%;border:0;background:none;color:var(--ink);padding:6px 0;
+    font-family:var(--sans);font-size:19px;font-weight:300;letter-spacing:-.01em}
+  .field input:focus{outline:none}
+  .field:focus-within{border-color:var(--accent)}
+  .choice{display:flex;flex-direction:column;gap:12px;margin-bottom:24px}
+  .choice label{display:flex;gap:10px;align-items:flex-start;font-size:12px;line-height:1.6;
+    color:var(--ink-55);cursor:pointer}
+  .choice input{accent-color:var(--accent);margin-top:3px}
+  .access-foot{
+    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
+    padding-top:14px;border-top:1px solid var(--line);
+    font-family:var(--mono);font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-35);
+  }
+  .access-foot a{text-decoration:none}
+  .access-foot a:hover{color:var(--accent)}
+
+  /* ---------------- responsive ---------------- */
+  @media (max-width:900px){
+    .app{grid-template-columns:1fr;min-height:0}
+    .side{
+      position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);
+      padding:18px clamp(14px,4vw,24px);gap:18px;
+    }
+    .ident h1{font-size:clamp(44px,13vw,72px)}
+    .ident p{max-width:44ch;margin-top:12px}
+    .nav{flex-direction:row;flex-wrap:wrap;gap:0;border-top:1px solid var(--line-soft)}
+    .nav button,.nav a{border-top:0;padding:8px 14px 8px 0;border-right:1px solid var(--line-soft);gap:8px}
+    .nav>:last-child{border-bottom:0}
+    .side-foot{display:none}
+    .band{height:52px}
+    .band.open,.band:focus-visible{height:clamp(190px,30vh,260px)}
+    .row{grid-template-columns:36px minmax(0,1fr) auto auto;padding-bottom:14px}
+    .line-1 .s{display:none}
+    .dt{display:none}
+    .add-band{height:54px}
+  }
+  @media (max-width:520px){
+    .strip-head .filters{gap:12px}
+    .filters button:nth-child(n+4){display:none}
+    .line-1 .t{font-size:13px}
+    .line-2{white-space:normal;line-height:1.5;max-height:2.6em}
+    .go{bottom:6px}
+  }
+</style>
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <!-- ================= COLONNA ================= -->
+  <aside class="side">
+    <div class="mark"><i></i> PhotoCloud / archivio 01</div>
+
+    <div class="ident">
+      <h1>Blu</h1>
+      <div class="series"><span>12 fotogrammi</span><span>2026</span><span>AES-256</span></div>
+      <p>Studi sul colore fra giugno e novembre. Ortensie, vetro, prismi: la stessa luce vista da vicino.</p>
+    </div>
+
+    <nav class="nav" aria-label="Strumenti">
+      <label for="up" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid var(--line-soft);font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-55);cursor:pointer">Carica <span class="v">＋</span></label>
+      <input id="up" type="file" accept="image/*,video/*" multiple hidden>
+      <button id="dl" disabled>Scarica <span class="v"><b id="n-sel">0</b></span></button>
+      <button id="del" disabled>Cestino <span class="v">⇢</span></button>
+      <button id="dups">Duplicati <span class="v">⌕</span></button>
+      <button id="login-btn">Accedi <span class="v">→</span></button>
+      <a href="index.html">Proposte <span class="v">05/05</span></a>
+    </nav>
+
+    <div class="side-foot">
+      08 novembre 2026<br>
+      PhotoCloud · prototipo statico
+    </div>
+  </aside>
+
+  <!-- ================= BANDE ================= -->
+  <main class="main" id="view-bands">
+    <div class="strip-head">
+      <div class="filters" role="tablist" aria-label="Filtra per mese">
+        <button role="tab" aria-selected="true">Tutte</button>
+        <button role="tab" aria-selected="false">Giugno</button>
+        <button role="tab" aria-selected="false">Luglio</button>
+        <button role="tab" aria-selected="false">Agosto</button>
+        <button role="tab" aria-selected="false">Settembre</button>
+        <button role="tab" aria-selected="false">Ottobre</button>
+        <button role="tab" aria-selected="false">Novembre</button>
+      </div>
+      <div class="count"><b>12</b> elementi · <span id="sel-text">0 selezionati</span></div>
+    </div>
+
+    <div class="bands" id="bands">
+
+      <article class="band" tabindex="0" data-i="0" aria-expanded="false">
+        <img src="../static/wp1.jpg" alt="">
+        <div class="row">
+          <span class="idx">01</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Ortensia</span><span class="s">serie blu</span></div>
+            <div class="line-2">06.06.2026 · IMG_0412.HEIC · 6240 × 4160 · 14,2 MB</div>
+          </div>
+          <span class="dt">06 giu</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Ortensia"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <article class="band" tabindex="0" data-i="1" aria-expanded="false">
+        <img src="../static/wp1.jpg" alt="" style="object-position:25% 70%;transform:scale(1.5)">
+        <div class="row">
+          <span class="idx">02</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Corolla</span><span class="s">serie blu</span></div>
+            <div class="line-2">06.06.2026 · IMG_0413.HEIC · 6240 × 4160 · 11,8 MB</div>
+          </div>
+          <span class="dt">06 giu</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Corolla"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <article class="band" tabindex="0" data-i="2" aria-expanded="false">
+        <img src="../static/wp3.jpg" alt="">
+        <div class="row">
+          <span class="idx">03</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Prisma</span><span class="s">serie vetro</span></div>
+            <div class="line-2">22.07.2026 · IMG_0478.HEIC · 6240 × 4160 · 9,4 MB</div>
+          </div>
+          <span class="dt">22 lug</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Prisma"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <article class="band" tabindex="0" data-i="3" aria-expanded="false">
+        <img src="../static/wp3.jpg" alt="" style="object-position:70% 30%;transform:scale(1.6)">
+        <div class="row">
+          <span class="idx">04</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Lastra</span><span class="s">serie vetro</span></div>
+            <div class="line-2">22.07.2026 · IMG_0479.HEIC · 6240 × 4160 · 13,1 MB</div>
+          </div>
+          <span class="dt">22 lug</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Lastra"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <article class="band" tabindex="0" data-i="4" aria-expanded="false">
+        <img src="../static/wp2.jpg" alt="">
+        <div class="row">
+          <span class="idx">05</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Vetro</span><span class="s">serie luce</span></div>
+            <div class="line-2">03.08.2026 · IMG_0531.HEIC · 6240 × 4160 · 8,7 MB</div>
+          </div>
+          <span class="dt">03 ago</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Vetro"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <article class="band" tabindex="0" data-i="5" aria-expanded="false">
+        <img src="../static/wp2.jpg" alt="" style="object-position:80% 60%;transform:scale(1.8)">
+        <div class="row">
+          <span class="idx">06</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Curva</span><span class="s">serie luce</span></div>
+            <div class="line-2">03.08.2026 · IMG_0532.HEIC · 6240 × 4160 · 16,3 MB</div>
+          </div>
+          <span class="dt">03 ago</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Curva"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <article class="band" tabindex="0" data-i="6" aria-expanded="false">
+        <img src="../static/wp3.jpg" alt="" style="object-position:40% 90%;transform:scale(1.4)">
+        <div class="row">
+          <span class="idx">07</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Nodo</span><span class="s">serie vetro</span></div>
+            <div class="line-2">14.09.2026 · IMG_0617.HEIC · 6240 × 4160 · 7,9 MB</div>
+          </div>
+          <span class="dt">14 set</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Nodo"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <article class="band" tabindex="0" data-i="7" aria-expanded="false">
+        <img src="../static/wp2.jpg" alt="" style="object-position:15% 30%;transform:scale(1.5)">
+        <div class="row">
+          <span class="idx">08</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Filo</span><span class="s">serie luce</span></div>
+            <div class="line-2">14.09.2026 · IMG_0618.HEIC · 6240 × 4160 · 12,5 MB</div>
+          </div>
+          <span class="dt">14 set</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Filo"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <article class="band" tabindex="0" data-i="8" aria-expanded="false">
+        <img src="../static/wp1.jpg" alt="" style="object-position:60% 40%;transform:scale(1.7)">
+        <div class="row">
+          <span class="idx">09</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Petali</span><span class="s">serie blu</span></div>
+            <div class="line-2">02.10.2026 · IMG_0704.HEIC · 6240 × 4160 · 10,2 MB</div>
+          </div>
+          <span class="dt">02 ott</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Petali"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <article class="band" tabindex="0" data-i="9" aria-expanded="false">
+        <img src="../static/wp3.jpg" alt="" style="object-position:85% 10%;transform:scale(1.5)">
+        <div class="row">
+          <span class="idx">10</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Riflesso</span><span class="s">serie vetro</span></div>
+            <div class="line-2">02.10.2026 · IMG_0705.HEIC · 6240 × 4160 · 15,0 MB</div>
+          </div>
+          <span class="dt">02 ott</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Riflesso"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <article class="band" tabindex="0" data-i="10" aria-expanded="false">
+        <img src="../static/wp2.jpg" alt="" style="object-position:35% 55%;transform:scale(1.4)">
+        <div class="row">
+          <span class="idx">11</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Onda</span><span class="s">serie luce</span></div>
+            <div class="line-2">08.11.2026 · IMG_0792.HEIC · 6240 × 4160 · 9,8 MB</div>
+          </div>
+          <span class="dt">08 nov</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Onda"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <article class="band" tabindex="0" data-i="11" aria-expanded="false">
+        <img src="../static/wp1.jpg" alt="" style="object-position:5% 20%;transform:scale(1.9)">
+        <div class="row">
+          <span class="idx">12</span>
+          <div class="titles">
+            <div class="line-1"><span class="t">Sfocatura</span><span class="s">serie blu</span></div>
+            <div class="line-2">08.11.2026 · IMG_0793.HEIC · 6240 × 4160 · 11,1 MB</div>
+          </div>
+          <span class="dt">08 nov</span>
+          <span class="pick" role="checkbox" aria-checked="false" aria-label="Seleziona Sfocatura"></span>
+        </div>
+        <button class="go">Apri <span>↗</span></button>
+      </article>
+
+      <label class="add-band" for="up" style="margin-top:0">
+        <span class="plus">＋</span> Aggiungi fotografie a questa serie
+      </label>
+    </div>
+  </main>
+
+  <!-- ================= ACCESSO ================= -->
+  <main class="access" id="view-access">
+    <div class="access-top">
+      <span><b>PhotoCloud</b> · accesso all'archivio</span>
+      <button id="access-close">Chiudi ✕</button>
+    </div>
+
+    <div class="access-mid">
+      <div class="access-box">
+        <div class="kicker">Blu / 2026</div>
+        <h2>La chiave<br><em>apre tutto il resto.</em></h2>
+        <p class="sub">Nessuna password. L'archivio si apre presentando il file scaricato alla registrazione.</p>
+
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true" id="tab-in">Accesso</button>
+          <button role="tab" aria-selected="false" id="tab-up">Registrazione</button>
+        </div>
+
+        <form id="f-in" class="p-in" onsubmit="event.preventDefault();const r=document.getElementById('keyrow');if(r.classList.contains('ready'))document.getElementById('fine-in').textContent='Demo statica: la rotta reale è /login.';">
+          <label class="keyrow" id="keyrow" for="keyfile">
+            <span class="lbl">File-chiave</span>
+            <span class="fn" id="fn">Scegli un file…</span>
+          </label>
+          <input id="keyfile" type="file" accept=".json,.txt">
+          <div class="actions">
+            <button class="go-btn" type="submit"><span>Entra nell'archivio</span><span>→</span></button>
+            <span class="fine" style="margin:0">json · txt</span>
+          </div>
+          <p class="fine" id="fine-in">Il file viene verificato e non conservato. Puoi anche trascinarlo sulla riga.</p>
+        </form>
+
+        <form id="f-up" class="reg" onsubmit="event.preventDefault();">
+          <div class="field">
+            <label for="uname">Nome d'archivio</label>
+            <input id="uname" type="text" placeholder="valerio" autocomplete="username">
+          </div>
+          <div class="choice">
+            <label><input type="radio" name="k" checked> Genera una chiave sicura e scaricala</label>
+            <label><input type="radio" name="k"> Dettare una frase chiave (min. 8 caratteri)</label>
+          </div>
+          <div class="actions">
+            <button class="go-btn" type="submit"><span>Crea archivio e scarica la chiave</span><span>↓</span></button>
+          </div>
+          <p class="fine">Conserva il file: senza di esso l'archivio non è recuperabile.</p>
+        </form>
+      </div>
+    </div>
+
+    <div class="access-foot">
+      <span>Passo 1 di 2 · verifica del file</span>
+      <span><a href="#" id="access-back">← Torna alle bande</a> &nbsp;/&nbsp; <a href="index.html">Tutte le proposte</a></span>
+    </div>
+  </main>
+
+</div>
+
+<!-- ================= LIGHTBOX ================= -->
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Fotografia ingrandita">
+  <div class="lb-top">
+    <span>Bande · <b id="lb-count">01 / 12</b></span>
+    <button id="lb-close">Chiudi ✕</button>
+  </div>
+  <div class="lb-mid">
+    <button class="lb-arrow lb-prev" id="lb-prev" aria-label="Precedente">←</button>
+    <img id="lb-img" src="" alt="">
+    <button class="lb-arrow lb-next" id="lb-next" aria-label="Successiva">→</button>
+  </div>
+  <div class="lb-bot">
+    <span class="name" id="lb-name">—</span>
+    <span id="lb-meta">—</span>
+  </div>
+</div>
+
+<script>
+(function(){
+  const bands = [...document.querySelectorAll('.band')];
+  const app = document.getElementById('app');
+
+  const data = bands.map((b,i) => {
+    const img = b.querySelector('img');
+    return {
+      src: img.getAttribute('src'),
+      pos: img.style.objectPosition || '50% 50%',
+      side: img.style.transform || '',
+      title: b.querySelector('.t').textContent,
+      meta: b.querySelector('.line-2').textContent,
+      n: String(i+1).padStart(2,'0')
+    };
+  });
+
+  /* ---- apertura banda ---- */
+  function closeAll(except){
+    bands.forEach(b => {
+      if (b !== except){ b.classList.remove('open'); b.setAttribute('aria-expanded','false'); }
+    });
+  }
+  bands.forEach(b => {
+    b.addEventListener('click', e => {
+      if (e.target.closest('.pick') || e.target.closest('.go')) return;
+      const willOpen = !b.classList.contains('open');
+      closeAll(b);
+      b.classList.toggle('open', willOpen);
+      b.setAttribute('aria-expanded', String(willOpen));
+    });
+    b.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' '){
+        e.preventDefault();
+        b.click();
+      }
+      if (e.key === 'ArrowDown' && bands[+b.dataset.i + 1]) bands[+b.dataset.i + 1].focus();
+      if (e.key === 'ArrowUp' && bands[+b.dataset.i - 1]) bands[+b.dataset.i - 1].focus();
+    });
+    b.querySelector('.go').addEventListener('click', e => {
+      e.stopPropagation();
+      openLB(+b.dataset.i);
+    });
+  });
+
+  /* ---- selezione ---- */
+  const pick = b => b.querySelector('.pick');
+  const nSel = document.getElementById('n-sel');
+  const selText = document.getElementById('sel-text');
+  const dl = document.getElementById('dl'), del = document.getElementById('del');
+
+  function sync(){
+    const n = bands.filter(b => b.classList.contains('sel')).length;
+    nSel.textContent = n;
+    selText.textContent = n + ' selezionat' + (n === 1 ? 'o' : 'i');
+    dl.disabled = del.disabled = n === 0;
+  }
+  bands.forEach(b => {
+    pick(b).addEventListener('click', e => {
+      e.stopPropagation();
+      b.classList.toggle('sel');
+      pick(b).setAttribute('aria-checked', String(b.classList.contains('sel')));
+      sync();
+    });
+  });
+  sync();
+
+  /* ---- filtri (dimostrativi: evidenziano il mese) ---- */
+  const filters = [...document.querySelectorAll('.filters button')];
+  const months = ['06.06','06.06','22.07','22.07','03.08','03.08','14.09','14.09','02.10','02.10','08.11','08.11'];
+  filters.forEach((f, fi) => f.addEventListener('click', () => {
+    filters.forEach(x => x.setAttribute('aria-selected','false'));
+    f.setAttribute('aria-selected','true');
+    const target = fi === 0 ? null : ['06','07','08','09','10','11'][fi-1];
+    bands.forEach((b,i) => {
+      const visible = !target || months[i].startsWith(target);
+      b.style.display = visible ? '' : 'none';
+    });
+  }));
+
+  /* ---- download / cestino ---- */
+  dl.addEventListener('click', () => {});
+  del.addEventListener('click', () => {
+    bands.filter(b => b.classList.contains('sel')).forEach(b => {
+      b.style.transition = 'opacity .3s, height .3s';
+      b.style.opacity = '0';
+      b.style.height = '0px';
+      setTimeout(() => b.style.display = 'none', 320);
+    });
+  });
+
+  /* ---- lightbox ---- */
+  const lb = document.getElementById('lb');
+  const lbImg = document.getElementById('lb-img');
+  let cur = 0;
+  function paint(){
+    const d = data[cur];
+    lbImg.src = d.src;
+    lbImg.style.objectPosition = '50% 50%';
+    document.getElementById('lb-count').textContent = d.n + ' / 12';
+    document.getElementById('lb-name').textContent = d.title;
+    document.getElementById('lb-meta').textContent = d.meta;
+  }
+  function openLB(i){ cur = i; paint(); lb.classList.add('open'); document.body.style.overflow='hidden'; }
+  function closeLB(){ lb.classList.remove('open'); document.body.style.overflow=''; }
+  function step(d){ cur = (cur+d+12)%12; paint(); }
+
+  document.getElementById('lb-close').onclick = closeLB;
+  document.getElementById('lb-prev').onclick = () => step(-1);
+  document.getElementById('lb-next').onclick = () => step(1);
+  document.addEventListener('keydown', e => {
+    if (!lb.classList.contains('open')) return;
+    if (e.key === 'Escape') closeLB();
+    if (e.key === 'ArrowLeft') step(-1);
+    if (e.key === 'ArrowRight') step(1);
+  });
+
+  /* ---- viste ---- */
+  const vb = document.getElementById('view-bands');
+  const va = document.getElementById('view-access');
+  function show(login){
+    va.classList.toggle('open', login);
+    vb.style.display = login ? 'none' : '';
+    document.querySelector('.side').style.display = login ? 'none' : '';
+    app.style.gridTemplateColumns = login ? '1fr' : '';
+    window.scrollTo({top:0});
+  }
+  document.getElementById('login-btn').onclick = () => show(true);
+  document.getElementById('access-close').onclick = () => show(false);
+  document.getElementById('access-back').onclick = e => { e.preventDefault(); show(false); };
+
+  /* ---- file-chiave ---- */
+  const kf = document.getElementById('keyfile');
+  const keyrow = document.getElementById('keyrow');
+  const fn = document.getElementById('fn');
+  function setName(name){
+    fn.textContent = name;
+    keyrow.classList.add('ready');
+  }
+  kf.addEventListener('change', () => { if (kf.files[0]) setName(kf.files[0].name); });
+  ['dragenter','dragover'].forEach(ev => keyrow.addEventListener(ev, e => { e.preventDefault(); keyrow.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev => keyrow.addEventListener(ev, e => { e.preventDefault(); keyrow.classList.remove('drag'); }));
+  keyrow.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) setName(f.name); });
+
+  const tIn = document.getElementById('tab-in'), tUp = document.getElementById('tab-up');
+  const fIn = document.getElementById('f-in'), fUp = document.getElementById('f-up');
+  function tab(up){
+    tIn.setAttribute('aria-selected', String(!up));
+    tUp.setAttribute('aria-selected', String(up));
+    fIn.classList.toggle('hide', up);
+    fUp.classList.toggle('open', up);
+  }
+  tIn.onclick = () => tab(false);
+  tUp.onclick = () => tab(true);
+})();
+</script>
+</body>
+</html>

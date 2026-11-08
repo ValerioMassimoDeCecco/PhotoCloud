@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Indice — PhotoCloud / proposta 02</title>
+<style>
+  /* =========================================================
+     PROPOSTA 02 — "INDICE"
+     Il catalogo ragionato di un archivio: elenco numerato di
+     opere, filetti sottili, una tavola grande che si rivela
+     al passaggio del cursore. Niente card, niente griglia.
+     ========================================================= */
+  :root{
+    --paper:#f4f1e9;
+    --ink:#14130f;
+    --ink-60:rgba(20,19,15,.6);
+    --ink-42:rgba(20,19,15,.42);
+    --rule:rgba(20,19,15,.24);
+    --rule-hard:#14130f;
+    --accent:#c8452c;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --grotesk:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
+    --serif:"Times New Roman",Times,Georgia,serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    background:var(--paper);color:var(--ink);font-family:var(--grotesk);
+    background-image:radial-gradient(rgba(20,19,15,.04) .6px,transparent .7px);
+    background-size:4px 4px;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  a{color:inherit}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+  .page{max-width:1440px;margin:0 auto;padding:clamp(14px,2.6vw,36px) clamp(14px,3vw,44px)}
+
+  /* ---------------- testata ---------------- */
+  .top{
+    display:flex;justify-content:space-between;align-items:baseline;gap:20px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;
+    padding-bottom:8px;
+  }
+  .top .brand{letter-spacing:.04em;font-weight:600;font-size:12px;text-transform:none;font-family:var(--grotesk)}
+  .top .r{display:flex;gap:clamp(12px,2.4vw,32px);color:var(--ink-60);flex-wrap:wrap}
+
+  .mast{
+    display:grid;grid-template-columns:minmax(0,1fr) minmax(240px,.46fr);
+    gap:clamp(16px,3vw,40px);align-items:end;
+    border-top:2px solid var(--rule-hard);border-bottom:1px solid var(--rule);
+    padding:clamp(14px,2.2vw,26px) 0 clamp(14px,2vw,22px);
+  }
+  h1{
+    font-size:clamp(44px,8.4vw,116px);font-weight:400;line-height:.85;
+    letter-spacing:-.045em;margin-left:-.04em;
+  }
+  h1 span{display:block;font-size:.139em;letter-spacing:.2em;text-transform:uppercase;
+    font-family:var(--mono);color:var(--accent);margin-bottom:clamp(8px,1.4vw,16px);margin-left:.34em}
+  .mast-note{
+    font-family:var(--serif);font-size:clamp(13px,1.1vw,15.5px);line-height:1.6;
+    color:var(--ink-60);max-width:38ch;padding-bottom:6px;
+  }
+  .mast-note b{font-weight:700;color:var(--ink)}
+  .mast-note .stat{
+    display:flex;gap:22px;flex-wrap:wrap;margin-top:16px;font-family:var(--mono);
+    font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-42);
+  }
+  .mast-note .stat b{display:block;font-family:var(--grotesk);font-size:20px;font-weight:400;
+    letter-spacing:-.02em;color:var(--ink);margin-bottom:2px}
+
+  /* ---------------- barra strumenti ---------------- */
+  .tools{
+    display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;
+    padding:9px 0;border-bottom:1px solid var(--rule);
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+  }
+  .tools .set{display:flex;align-items:center;gap:0;flex-wrap:wrap}
+  .tools button,.tools a{
+    text-decoration:none;padding:5px 12px;border-right:1px solid var(--rule);
+    color:var(--ink-60);transition:color .15s,background .15s;white-space:nowrap;
+  }
+  .tools .set>:first-child{padding-left:0}
+  .tools .set>:last-child{border-right:0}
+  .tools button:hover,.tools a:hover{color:var(--accent);background:rgba(200,69,44,.05)}
+  .tools .num{color:var(--accent)}
+  .tools button[disabled]{opacity:.35;pointer-events:none}
+  .tools .on{color:var(--ink)}
+  .tools .on::before{content:"●";color:var(--accent);font-size:7px;margin-right:6px;vertical-align:2px}
+
+  /* ---------------- catalogo ---------------- */
+  .catalogue{
+    display:grid;grid-template-columns:minmax(0,1.22fr) minmax(0,1fr);
+    gap:clamp(20px,4vw,64px);padding-top:clamp(10px,1.6vw,18px);
+  }
+  .index{border-top:1px solid var(--rule)}
+  .work{
+    display:grid;grid-template-columns:42px minmax(0,1fr) 92px 62px;
+    align-items:center;gap:clamp(8px,1.4vw,18px);width:100%;
+    padding:clamp(9px,1.3vw,14px) 0;border-bottom:1px solid var(--rule);
+    text-align:left;position:relative;transition:padding .2s ease;
+  }
+  .work::before{
+    content:"";position:absolute;left:-10px;top:50%;width:3px;height:0;background:var(--accent);
+    transform:translateY(-50%);transition:height .2s ease;
+  }
+  .w-num{
+    font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--ink-42);
+    transition:color .15s;
+  }
+  .w-main{display:flex;align-items:baseline;gap:12px;min-width:0}
+  .w-title{
+    font-size:clamp(17px,2.05vw,25px);font-weight:400;letter-spacing:-.02em;line-height:1.1;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .w-sub{
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-42);white-space:nowrap;
+  }
+  .w-date{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-60);text-align:right}
+  .w-thumb{
+    width:62px;height:40px;overflow:hidden;background:#ddd8cc;flex:none;
+    filter:grayscale(.6) contrast(1.05);transition:filter .25s,transform .25s;
+  }
+  .w-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .work:hover,.work.active{padding-left:14px}
+  .work:hover::before,.work.active::before{height:calc(100% - 12px)}
+  .work:hover .w-num,.work.active .w-num{color:var(--accent)}
+  .work:hover .w-thumb,.work.active .w-thumb{filter:none;transform:scale(1.04)}
+  .work:hover .w-title,.work.active .w-title{font-style:italic;font-family:var(--serif);letter-spacing:-.01em}
+
+  /* ---------------- tavola ---------------- */
+  .plate{position:sticky;top:clamp(12px,2vw,26px);align-self:start}
+  .plate-frame{
+    position:relative;aspect-ratio:4/5;background:#e3ded1;overflow:hidden;
+    box-shadow:0 24px 50px -34px rgba(20,19,15,.65);
+  }
+  .plate-frame img{
+    position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+    clip-path:inset(0 0 0 0);will-change:clip-path;
+  }
+  .plate-frame .crop{
+    position:absolute;width:12px;height:12px;border:1px solid rgba(255,255,255,.75);
+    z-index:3;opacity:.85;
+  }
+  .plate-frame .crop.a{top:10px;left:10px;border-right:0;border-bottom:0}
+  .plate-frame .crop.b{top:10px;right:10px;border-left:0;border-bottom:0}
+  .plate-frame .crop.c{bottom:10px;left:10px;border-right:0;border-top:0}
+  .plate-frame .crop.d{bottom:10px;right:10px;border-left:0;border-top:0}
+  .plate-count{
+    position:absolute;left:12px;bottom:12px;z-index:3;
+    font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:#fff;
+    mix-blend-mode:difference;
+  }
+  .plate-cap{padding-top:12px;border-top:1px solid var(--rule-hard);margin-top:12px}
+  .plate-cap .kicker{
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--accent);margin-bottom:6px;
+  }
+  .plate-cap h2{
+    font-family:var(--serif);font-weight:400;font-style:italic;
+    font-size:clamp(22px,2.6vw,32px);letter-spacing:-.015em;line-height:1.05;
+  }
+  .plate-meta{
+    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px;margin-top:16px;
+  }
+  .plate-meta div{font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--ink-42);line-height:1.7;border-top:1px solid var(--rule);padding-top:5px}
+  .plate-meta b{display:block;font-family:var(--grotesk);font-size:12px;letter-spacing:0;
+    text-transform:none;color:var(--ink);font-weight:400}
+
+  /* ---------------- accesso ---------------- */
+  .access{display:none;padding:clamp(18px,3vw,36px) 0 0}
+  .access.open{display:block}
+  .access-grid{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1fr);gap:clamp(22px,5vw,80px)}
+  .access h2{
+    font-size:clamp(38px,6.4vw,82px);font-weight:400;line-height:.86;letter-spacing:-.045em;
+  }
+  .access h2 em{font-family:var(--serif);font-style:italic;color:var(--accent);letter-spacing:-.02em}
+  .access .lead{
+    font-family:var(--serif);font-size:16px;line-height:1.55;color:var(--ink-60);
+    max-width:36ch;margin-top:20px;
+  }
+  .access .steps{margin-top:28px;border-top:1px solid var(--rule)}
+  .access .steps div{
+    display:flex;gap:14px;padding:9px 0;border-bottom:1px solid var(--rule);
+    font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-60);
+  }
+  .access .steps b{color:var(--accent);font-weight:400}
+
+  .form-card{border-top:2px solid var(--rule-hard);padding-top:14px}
+  .tabs{display:flex;border-bottom:1px solid var(--rule);margin-bottom:22px;gap:0}
+  .tabs button{
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+    padding:10px 18px 10px 0;margin-right:18px;border-bottom:2px solid transparent;
+    color:var(--ink-42);margin-bottom:-1px;
+  }
+  .tabs button[aria-selected="true"]{color:var(--ink);border-color:var(--accent)}
+  .flabel{
+    display:flex;justify-content:space-between;gap:10px;
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--ink-42);margin-bottom:7px;
+  }
+  .filefield{
+    display:flex;align-items:center;justify-content:space-between;gap:14px;
+    border-bottom:1px solid var(--rule-hard);padding:12px 0;cursor:pointer;
+    transition:background .15s;
+  }
+  .filefield:hover,.filefield.drag{background:rgba(200,69,44,.05)}
+  .filefield .fn{font-size:13px;color:var(--ink-60);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .filefield .fn.set{color:var(--ink)}
+  .filefield .pick{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);flex:none}
+  .filefield input{display:none}
+  .note{font-family:var(--mono);font-size:8.5px;line-height:1.8;letter-spacing:.03em;color:var(--ink-42);margin-top:10px;max-width:46ch}
+  .submit{
+    width:100%;margin-top:24px;padding:16px;background:var(--ink);color:var(--paper);
+    font-family:var(--mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;
+    display:flex;align-items:center;justify-content:space-between;transition:background .15s;
+  }
+  .submit:hover{background:var(--accent)}
+  .textfield{width:100%;border:0;border-bottom:1px solid var(--rule-hard);background:none;
+    font-family:var(--grotesk);font-size:19px;letter-spacing:-.01em;padding:10px 0;color:var(--ink)}
+  .textfield:focus{outline:none;border-color:var(--accent)}
+  .radio{margin:4px 0 22px;border-top:1px solid var(--rule)}
+  .radio label{
+    display:flex;gap:10px;align-items:baseline;padding:9px 0;border-bottom:1px solid var(--rule);
+    font-size:12.5px;color:var(--ink-60);cursor:pointer;
+  }
+  .radio label:hover{color:var(--ink)}
+  .radio input{accent-color:var(--accent)}
+  .reg{display:none}
+  .reg.open{display:block}
+  .panel-in.hide{display:none}
+
+  .foot{
+    display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:baseline;
+    margin-top:clamp(28px,4vw,52px);padding-top:10px;border-top:2px solid var(--rule-hard);
+    font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-42);
+  }
+  .foot a{text-decoration:none;border-bottom:1px solid var(--rule)}
+  .foot a:hover{color:var(--accent);border-color:var(--accent)}
+
+  /* ---------------- lightbox ---------------- */
+  .lb{position:fixed;inset:0;background:var(--paper);z-index:60;display:none;flex-direction:column}
+  .lb.open{display:flex}
+  .lb-top{
+    display:flex;justify-content:space-between;align-items:baseline;gap:20px;
+    padding:12px clamp(14px,3vw,44px);border-bottom:1px solid var(--rule);
+    font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-60);
+  }
+  .lb-top b{color:var(--ink);font-weight:400}
+  .lb-top button{letter-spacing:.14em;text-transform:uppercase;font-size:9px}
+  .lb-top button:hover{color:var(--accent)}
+  .lb-body{flex:1;display:flex;align-items:center;justify-content:center;padding:clamp(12px,3vw,40px);min-height:0}
+  .lb-body img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+  .lb-bot{
+    display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap;
+    padding:10px clamp(14px,3vw,44px);border-top:1px solid var(--rule);
+  }
+  .lb-bot .t{font-family:var(--serif);font-style:italic;font-size:20px}
+  .lb-bot .m{font-family:var(--mono);font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-42)}
+  .lb-arrow{width:42px;height:42px;border:1px solid var(--rule);display:grid;place-items:center;color:var(--ink);flex:none}
+  .lb-arrow:hover{background:var(--ink);color:var(--paper)}
+
+  @media (max-width:960px){
+    .catalogue{grid-template-columns:1fr}
+    .plate{position:static;order:-1;padding-bottom:8px}
+    .plate-frame{aspect-ratio:16/10}
+    .plate-meta{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .access-grid{grid-template-columns:1fr;gap:26px}
+  }
+  @media (max-width:760px){
+    .mast{grid-template-columns:1fr;align-items:start}
+    .work{grid-template-columns:30px minmax(0,1fr) 56px 46px}
+    .w-thumb{width:46px;height:32px}
+    .w-date{font-size:8px}
+    .plate-meta{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .tools .set>:first-child{padding-left:12px}
+  }
+  @media (max-width:430px){
+    .work{grid-template-columns:24px minmax(0,1fr) 40px}
+    .w-date{display:none}
+    .w-sub{display:none}
+    .w-thumb{width:40px;height:28px}
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <div class="top">
+    <span class="brand">PhotoCloud</span>
+    <div class="r">
+      <span>Archivio privato</span>
+      <span>08 novembre 2026</span>
+      <span>Proposta 02 / 05</span>
+    </div>
+  </div>
+
+  <header class="mast">
+    <h1><span>Catalogo</span>Indice</h1>
+    <div class="mast-note">
+      <b>Blu — studi sul colore.</b> Dodici fotografie realizzate fra giugno
+      e novembre 2026, conservate in cifratura AES-256. L'archivio è privato:
+      ogni opera è consultabile solo con il proprio file-chiave.
+      <div class="stat">
+        <div><b>12</b>opere</div>
+        <div><b>3</b>serie</div>
+        <div><b>148</b>MB cifrati</div>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tools" aria-label="Strumenti">
+    <div class="set">
+      <label for="up" style="padding:5px 12px 5px 0;border-right:1px solid var(--rule);cursor:pointer">＋ Carica</label>
+      <input id="up" type="file" accept="image/*,video/*" multiple hidden>
+      <button id="dl" disabled>Scarica <span class="num" id="n-sel">0</span></button>
+      <button id="del" disabled>Cestino</button>
+      <button>Duplicati</button>
+      <button id="grp">Gruppi: mese</button>
+    </div>
+    <div class="set">
+      <button id="login-btn" class="on">Accedi</button>
+      <a href="index.html">Proposte</a>
+    </div>
+  </nav>
+
+  <!-- ================= CATALOGO ================= -->
+  <main id="view-catalogue">
+    <div class="catalogue">
+      <section class="index" aria-label="Elenco delle opere">
+
+        <button class="work active" data-i="0">
+          <span class="w-num">01</span>
+          <span class="w-main"><span class="w-title">Ortensia</span><span class="w-sub">serie blu</span></span>
+          <span class="w-date">06 giu 2026</span>
+          <span class="w-thumb"><img src="../static/wp1.jpg" alt="" loading="lazy"></span>
+        </button>
+
+        <button class="work" data-i="1">
+          <span class="w-num">02</span>
+          <span class="w-main"><span class="w-title">Corolla</span><span class="w-sub">serie blu</span></span>
+          <span class="w-date">06 giu 2026</span>
+          <span class="w-thumb"><img src="../static/wp1.jpg" alt="" style="object-position:25% 70%;transform:scale(1.6)" loading="lazy"></span>
+        </button>
+
+        <button class="work" data-i="2">
+          <span class="w-num">03</span>
+          <span class="w-main"><span class="w-title">Prisma</span><span class="w-sub">serie vetro</span></span>
+          <span class="w-date">22 lug 2026</span>
+          <span class="w-thumb"><img src="../static/wp3.jpg" alt="" loading="lazy"></span>
+        </button>
+
+        <button class="work" data-i="3">
+          <span class="w-num">04</span>
+          <span class="w-main"><span class="w-title">Lastra</span><span class="w-sub">serie vetro</span></span>
+          <span class="w-date">22 lug 2026</span>
+          <span class="w-thumb"><img src="../static/wp3.jpg" alt="" style="object-position:70% 30%;transform:scale(1.7)" loading="lazy"></span>
+        </button>
+
+        <button class="work" data-i="4">
+          <span class="w-num">05</span>
+          <span class="w-main"><span class="w-title">Vetro</span><span class="w-sub">serie luce</span></span>
+          <span class="w-date">03 ago 2026</span>
+          <span class="w-thumb"><img src="../static/wp2.jpg" alt="" loading="lazy"></span>
+        </button>
+
+        <button class="work" data-i="5">
+          <span class="w-num">06</span>
+          <span class="w-main"><span class="w-title">Curva</span><span class="w-sub">serie luce</span></span>
+          <span class="w-date">03 ago 2026</span>
+          <span class="w-thumb"><img src="../static/wp2.jpg" alt="" style="object-position:80% 60%;transform:scale(1.8)" loading="lazy"></span>
+        </button>
+
+        <button class="work" data-i="6">
+          <span class="w-num">07</span>
+          <span class="w-main"><span class="w-title">Nodo</span><span class="w-sub">serie vetro</span></span>
+          <span class="w-date">14 set 2026</span>
+          <span class="w-thumb"><img src="../static/wp3.jpg" alt="" style="object-position:40% 90%;transform:scale(1.4)" loading="lazy"></span>
+        </button>
+
+        <button class="work" data-i="7">
+          <span class="w-num">08</span>
+          <span class="w-main"><span class="w-title">Filo</span><span class="w-sub">serie luce</span></span>
+          <span class="w-date">14 set 2026</span>
+          <span class="w-thumb"><img src="../static/wp2.jpg" alt="" style="object-position:15% 30%;transform:scale(1.5)" loading="lazy"></span>
+        </button>
+
+        <button class="work" data-i="8">
+          <span class="w-num">09</span>
+          <span class="w-main"><span class="w-title">Petali</span><span class="w-sub">serie blu</span></span>
+          <span class="w-date">02 ott 2026</span>
+          <span class="w-thumb"><img src="../static/wp1.jpg" alt="" style="object-position:60% 40%;transform:scale(1.7)" loading="lazy"></span>
+        </button>
+
+        <button class="work" data-i="9">
+          <span class="w-num">10</span>
+          <span class="w-main"><span class="w-title">Riflesso</span><span class="w-sub">serie vetro</span></span>
+          <span class="w-date">02 ott 2026</span>
+          <span class="w-thumb"><img src="../static/wp3.jpg" alt="" style="object-position:85% 10%;transform:scale(1.5)" loading="lazy"></span>
+        </button>
+
+        <button class="work" data-i="10">
+          <span class="w-num">11</span>
+          <span class="w-main"><span class="w-title">Onda</span><span class="w-sub">serie luce</span></span>
+          <span class="w-date">08 nov 2026</span>
+          <span class="w-thumb"><img src="../static/wp2.jpg" alt="" style="object-position:35% 55%;transform:scale(1.4)" loading="lazy"></span>
+        </button>
+
+        <button class="work" data-i="11">
+          <span class="w-num">12</span>
+          <span class="w-main"><span class="w-title">Sfocatura</span><span class="w-sub">serie blu</span></span>
+          <span class="w-date">08 nov 2026</span>
+          <span class="w-thumb"><img src="../static/wp1.jpg" alt="" style="object-position:5% 20%;transform:scale(1.9)" loading="lazy"></span>
+        </button>
+
+      </section>
+
+      <aside class="plate" aria-label="Tavola dell'opera selezionata">
+        <div class="plate-frame" id="plate-frame">
+          <img id="p-a" class="plate-img" src="../static/wp1.jpg" alt="Ortensia">
+          <img id="p-b" class="plate-img" src="" alt="" aria-hidden="true" style="opacity:0">
+          <span class="crop a"></span><span class="crop b"></span>
+          <span class="crop c"></span><span class="crop d"></span>
+          <span class="plate-count" id="p-count">TAV. 01 / 12</span>
+        </div>
+        <div class="plate-cap">
+          <div class="kicker">Serie Blu · opera 01</div>
+          <h2 id="p-title">Ortensia</h2>
+          <div class="plate-meta">
+            <div>Data<b id="p-date">6 giugno 2026</b></div>
+            <div>Formato<b>6240 × 4160</b></div>
+            <div>File<b id="p-file">IMG_0412.HEIC</b></div>
+            <div>Peso<b id="p-size">14,2 MB</b></div>
+            <div>Fotocamera<b>Sony α7 IV</b></div>
+            <div>Cifratura<b>AES-256 · verificata</b></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="foot">
+      <span>01 — 12 su 12 opere · ordine cronologico</span>
+      <span><a href="index.html">← Tutte le proposte</a> &nbsp;/&nbsp; <a href="#" id="login-link">Scheda di accesso →</a></span>
+    </div>
+  </main>
+
+  <!-- ================= ACCESSO ================= -->
+  <main class="access" id="view-access">
+    <div class="access-grid">
+      <div>
+        <h2>Accesso<br><em>all'archivio</em></h2>
+        <p class="lead">
+          Nessuna password da ricordare. L'archivio si apre con il file-chiave
+          generato alla registrazione: un foglio che vale come una firma.
+        </p>
+        <div class="steps">
+          <div><b>01</b><span>Scegli il file photocloud_auth_….json</span></div>
+          <div><b>02</b><span>Il server verifica l'impronta della chiave</span></div>
+          <div><b>03</b><span>Le opere vengono decifrate in memoria</span></div>
+        </div>
+      </div>
+
+      <form class="form-card" id="login-form" onsubmit="event.preventDefault();this.querySelector('.note').textContent='Demo statica: il login reale resta sulla rotta /login.'">
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" aria-selected="true" id="tab-in">01 Accesso</button>
+          <button type="button" role="tab" aria-selected="false" id="tab-up">02 Registrazione</button>
+        </div>
+
+        <div class="panel-in" id="panel-in">
+          <div class="flabel"><span>File di autenticazione</span><span>obbligatorio</span></div>
+          <label class="filefield" id="filefield" for="keyfile">
+            <span class="fn" id="fn">Nessun file selezionato</span>
+            <span class="pick">Sfoglia →</span>
+          </label>
+          <input id="keyfile" type="file" accept=".json,.txt">
+          <p class="note">Il file non viene conservato: viene letto, verificato e dimenticato. Puoi anche trascinarlo qui sopra.</p>
+          <button class="submit" type="submit"><span>Entra nell'archivio</span><span>→</span></button>
+        </div>
+
+        <div class="reg" id="panel-up">
+          <div class="flabel"><span>Nome d'archivio</span><span>una volta sola</span></div>
+          <input class="textfield" type="text" placeholder="valerio" autocomplete="username">
+          <div class="flabel" style="margin-top:24px"><span>Tipo di chiave</span><span>scegline una</span></div>
+          <div class="radio">
+            <label><input type="radio" name="k" checked> Genera una chiave sicura e scaricala</label>
+            <label><input type="radio" name="k"> Dettare una frase chiave (min. 8 caratteri)</label>
+          </div>
+          <button class="submit" type="submit"><span>Crea archivio e scarica chiave</span><span>↓</span></button>
+          <p class="note">Conserva il file: senza di esso l'archivio non è recuperabile, nemmeno da noi.</p>
+        </div>
+      </form>
+    </div>
+
+    <div class="foot">
+      <span>Passo 01 di 02 — verifica del file-chiave</span>
+      <span><a href="#" id="back-link">← Torna all'indice</a></span>
+    </div>
+  </main>
+
+</div>
+
+<!-- ================= LIGHTBOX ================= -->
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="Opera ingrandita">
+  <div class="lb-top">
+    <span>Catalogo · <b id="lb-count">Tav. 01 / 12</b></span>
+    <button id="lb-close">Chiudi ✕</button>
+  </div>
+  <div class="lb-body">
+    <button class="lb-arrow" id="lb-prev" aria-label="Opera precedente" style="margin-right:14px">←</button>
+    <img id="lb-img" src="" alt="">
+    <button class="lb-arrow" id="lb-next" aria-label="Opera successiva" style="margin-left:14px">→</button>
+  </div>
+  <div class="lb-bot">
+    <span class="t" id="lb-title">—</span>
+    <span class="m" id="lb-meta">—</span>
+    <button class="lb-arrow" id="lb-close2" aria-label="Chiudi">✕</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  const works = [...document.querySelectorAll('.work')];
+  const data = works.map((w,i) => {
+    const img = w.querySelector('img');
+    return {
+      src: img.currentSrc || img.getAttribute('src'),
+      pos: img.style.objectPosition || '50% 50%',
+      scale: (img.style.transform || 'scale(1)').match(/scale\(([\d.]+)\)/),
+      title: w.querySelector('.w-title').textContent,
+      date: w.querySelector('.w-date').textContent,
+      file: ['IMG_0412.HEIC','IMG_0413.HEIC','IMG_0478.HEIC','IMG_0479.HEIC','IMG_0531.HEIC','IMG_0532.HEIC','IMG_0617.HEIC','IMG_0618.HEIC','IMG_0704.HEIC','IMG_0705.HEIC','IMG_0792.HEIC','IMG_0793.HEIC'][i],
+      size: ['14,2','11,8','9,4','13,1','8,7','16,3','7,9','12,5','10,2','15,0','9,8','11,1'][i] + ' MB',
+      /* posizioni ritagliate per la tavola 4:5 */
+      platePos: img.style.objectPosition || '50% 50%'
+    };
+  });
+  data.forEach(d => { if (d.scale) d.zoom = parseFloat(d.scale[1]); else d.zoom = 1; });
+
+  const pA = document.getElementById('p-a');
+  const pB = document.getElementById('p-b');
+  let front = pA, back = pB, current = 0;
+
+  function setPlate(i){
+    if (i === current && front.src) return;
+    current = i;
+    const d = data[i];
+    back.src = d.src;
+    back.alt = d.title;
+    back.style.objectPosition = d.platePos;
+    back.style.transform = 'scale(' + d.zoom + ')';
+    back.style.zIndex = 2;
+    back.style.clipPath = 'inset(100% 0 0 0)';
+    back.style.opacity = 1;
+    requestAnimationFrame(() => {
+      back.style.transition = 'clip-path .55s cubic-bezier(.76,0,.24,1)';
+      back.style.clipPath = 'inset(0 0 0 0)';
+    });
+    const old = front;
+    setTimeout(() => {
+      old.style.transition = 'none';
+      old.style.opacity = 0;
+      old.style.zIndex = 1;
+      old.style.clipPath = 'inset(0 0 0 0)';
+    }, 560);
+    front = back;
+    back = old;
+
+    document.getElementById('p-count').textContent = 'TAV. ' + String(i+1).padStart(2,'0') + ' / 12';
+    document.getElementById('p-title').textContent = d.title;
+    document.getElementById('p-date').textContent = d.date;
+    document.getElementById('p-file').textContent = d.file;
+    document.getElementById('p-size').textContent = d.size;
+    document.querySelector('.plate-cap .kicker').textContent = 'Serie Blu · opera ' + String(i+1).padStart(2,'0');
+    works.forEach((w,j) => w.classList.toggle('active', j === i));
+  }
+
+  works.forEach((w,i) => {
+    w.addEventListener('mouseenter', () => setPlate(i));
+    w.addEventListener('focus', () => setPlate(i));
+    w.addEventListener('click', e => { if (e.shiftKey) return; setPlate(i); openLB(i); });
+  });
+
+  /* ---- selezione ---- */
+  let selected = new Set();
+  const nSel = document.getElementById('n-sel');
+  const dl = document.getElementById('dl'), del = document.getElementById('del');
+  function sync(){
+    nSel.textContent = selected.size;
+    dl.disabled = del.disabled = selected.size === 0;
+  }
+  /* shift+clic segna l'opera, come in un catalogo di lavoro */
+  works.forEach((w,i) => w.addEventListener('click', e => {
+    if (!e.shiftKey) return;
+    e.preventDefault();
+    if (selected.has(i)) selected.delete(i); else selected.add(i);
+    w.classList.toggle('marked', selected.has(i));
+    w.querySelector('.w-num').textContent = selected.has(i) ? '●' : String(i+1).padStart(2,'0');
+    sync();
+  }));
+  sync();
+
+  /* ---- lightbox ---- */
+  const lb = document.getElementById('lb'), lbImg = document.getElementById('lb-img');
+  let cur = 0;
+  function paint(){
+    const d = data[cur];
+    lbImg.src = d.src;
+    lbImg.style.objectPosition = d.pos;
+    lbImg.style.transform = 'scale(1)';
+    document.getElementById('lb-count').textContent = 'Tav. ' + String(cur+1).padStart(2,'0') + ' / 12';
+    document.getElementById('lb-title').textContent = d.title;
+    document.getElementById('lb-meta').textContent = d.date + ' · ' + d.file + ' · ' + d.size;
+  }
+  function openLB(i){ cur = i; paint(); lb.classList.add('open'); document.body.style.overflow='hidden'; }
+  function closeLB(){ lb.classList.remove('open'); document.body.style.overflow=''; }
+  function step(d){ cur = (cur+d+12)%12; paint(); setPlate(cur); }
+  document.getElementById('lb-close').onclick = closeLB;
+  document.getElementById('lb-close2').onclick = closeLB;
+  document.getElementById('lb-prev').onclick = () => step(-1);
+  document.getElementById('lb-next').onclick = () => step(1);
+  document.addEventListener('keydown', e => {
+    if (!lb.classList.contains('open')) return;
+    if (e.key === 'Escape') closeLB();
+    if (e.key === 'ArrowLeft') step(-1);
+    if (e.key === 'ArrowRight') step(1);
+  });
+
+  /* ---- viste ---- */
+  const vc = document.getElementById('view-catalogue');
+  const va = document.getElementById('view-access');
+  function show(login){
+    va.classList.toggle('open', login);
+    vc.style.display = login ? 'none' : '';
+    window.scrollTo({top:0});
+  }
+  document.getElementById('login-btn').onclick = () => show(true);
+  document.getElementById('login-link').onclick = e => { e.preventDefault(); show(true); };
+  document.getElementById('back-link').onclick = e => { e.preventDefault(); show(false); };
+
+  /* ---- modulo ---- */
+  const kf = document.getElementById('keyfile'), fn = document.getElementById('fn'), ff = document.getElementById('filefield');
+  function setName(n){ fn.textContent = n; fn.classList.toggle('set', !!n); }
+  kf.addEventListener('change', () => setName(kf.files[0] ? kf.files[0].name : ''));
+  ['dragenter','dragover'].forEach(ev => ff.addEventListener(ev, e => { e.preventDefault(); ff.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev => ff.addEventListener(ev, e => { e.preventDefault(); ff.classList.remove('drag'); }));
+  ff.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) setName(f.name); });
+
+  const tIn = document.getElementById('tab-in'), tUp = document.getElementById('tab-up');
+  const pIn = document.getElementById('panel-in'), pUp = document.getElementById('panel-up');
+  function tab(up){
+    tIn.setAttribute('aria-selected', String(!up));
+    tUp.setAttribute('aria-selected', String(up));
+    pIn.classList.toggle('hide', up);
+    pUp.classList.toggle('open', up);
+  }
+  tIn.onclick = () => tab(false);
+  tUp.onclick = () => tab(true);
+
+  const grp = document.getElementById('grp');
+  const modes = ['mese','giorno','anno','nessuno'];
+  let gi = 0;
+  grp.onclick = () => { gi = (gi+1)%modes.length; grp.textContent = 'Gruppi: ' + modes[gi]; };
+
+  setPlate(0);
+})();
+</script>
+</body>
+</html>

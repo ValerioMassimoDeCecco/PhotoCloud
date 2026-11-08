@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PhotoCloud — Foglio di prove</title>
+<style>
+  /* =========================================================
+     FOGLIO DI PROVE — indice delle proposte di design
+     Sistema tipografico: grotesk di sistema + mono per i dati.
+     Carta calda, inchiostro nero, un solo accento (vermiglio).
+     Nessun font esterno, nessuna dipendenza.
+     ========================================================= */
+  :root{
+    --paper:#f2efe8;
+    --paper-2:#eae6dc;
+    --ink:#14130f;
+    --ink-70:rgba(20,19,15,.7);
+    --ink-45:rgba(20,19,15,.45);
+    --rule:rgba(20,19,15,.22);
+    --accent:#c8452c;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --grotesk:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--grotesk);
+    min-height:100vh;
+    padding:clamp(16px,3.2vw,44px);
+    /* leggera grana di carta, senza immagini */
+    background-image:radial-gradient(rgba(20,19,15,.045) .6px,transparent .7px);
+    background-size:4px 4px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .sheet{max-width:1180px;margin:0 auto}
+
+  /* --- testata --- */
+  .masthead{
+    display:flex;align-items:flex-end;justify-content:space-between;gap:24px;
+    border-bottom:2px solid var(--ink);padding-bottom:10px;
+  }
+  .brand{font-size:clamp(19px,2.1vw,24px);font-weight:700;letter-spacing:-.02em}
+  .brand span{font-weight:400;letter-spacing:0}
+  .meta{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+    text-transform:uppercase;text-align:right;line-height:1.7;color:var(--ink-70);
+  }
+  .intro{
+    display:grid;grid-template-columns:1.35fr .65fr;gap:clamp(20px,4vw,64px);
+    padding:clamp(26px,4.4vw,52px) 0 clamp(22px,3vw,34px);
+    border-bottom:1px solid var(--rule);
+  }
+  .intro h1{
+    font-size:clamp(30px,5.4vw,64px);font-weight:400;line-height:.98;
+    letter-spacing:-.035em;max-width:16ch;
+  }
+  .intro h1 em{font-style:normal;color:var(--accent)}
+  .intro p{
+    font-size:14.5px;line-height:1.62;color:var(--ink-70);max-width:38ch;
+    align-self:end;
+  }
+  .intro p b{font-weight:600;color:var(--ink)}
+
+  /* --- elenco proposte --- */
+  .list{margin-top:6px}
+  .row{
+    display:grid;
+    grid-template-columns:56px 108px minmax(0,1.15fr) minmax(0,1fr) 88px;
+    align-items:center;gap:clamp(10px,2vw,28px);
+    padding:clamp(14px,1.9vw,22px) 0;
+    border-bottom:1px solid var(--rule);
+    text-decoration:none;color:inherit;position:relative;
+  }
+  .row::after{
+    content:"";position:absolute;left:0;bottom:-1px;height:1px;width:0;
+    background:var(--accent);transition:width .32s cubic-bezier(.2,.8,.2,1);
+  }
+  .row:hover::after{width:100%}
+  .num{
+    font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--ink-45);
+    transition:color .18s;
+  }
+  .row h2{
+    font-size:clamp(20px,2.5vw,30px);font-weight:500;letter-spacing:-.025em;line-height:1;
+    transition:transform .22s ease, color .18s;
+  }
+  .row h2 small{
+    display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--ink-45);margin-top:7px;font-weight:400;
+  }
+  .row .idea{font-size:13.5px;line-height:1.55;color:var(--ink-70);max-width:34ch}
+  .go{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+    justify-self:end;display:flex;align-items:center;gap:7px;color:var(--ink);
+  }
+  .go i{
+    display:block;width:22px;height:1px;background:currentColor;position:relative;
+    transition:width .22s ease;
+  }
+  .go i::after{
+    content:"";position:absolute;right:0;top:-3px;width:6px;height:6px;
+    border-top:1px solid currentColor;border-right:1px solid currentColor;
+    transform:rotate(45deg);
+  }
+  .row:hover h2{transform:translateX(6px);color:var(--accent)}
+  .row:hover .go i{width:34px}
+  .row:hover .num{color:var(--accent)}
+  .row:focus-visible{outline:2px solid var(--accent);outline-offset:6px}
+
+  /* --- miniature schematiche --- */
+  .thumb{
+    width:108px;height:68px;border:1px solid var(--rule);
+    position:relative;overflow:hidden;background:var(--paper-2);
+    transition:transform .22s ease,border-color .2s;
+    flex:none;
+  }
+  .row:hover .thumb{transform:scale(1.045) rotate(-.8deg);border-color:var(--ink)}
+  .t-dark{background:#131210}
+  .t-paper{background:#fbf8f1}
+  .t-warm{background:#f4eddc}
+
+  /* 01 provino: tre strisce con perforazioni */
+  .t01 .strip{position:absolute;left:8px;right:8px;height:13px;background:#000;display:flex;gap:2px;padding:3px 4px}
+  .t01 .strip::before,.t01 .strip::after{
+    content:"";position:absolute;left:0;right:0;height:2px;
+    background:repeating-linear-gradient(90deg,#6b6257 0 2px,transparent 2px 5px);
+  }
+  .t01 .strip::before{top:1px}.t01 .strip::after{bottom:1px}
+  .t01 .strip b{flex:1;background:linear-gradient(120deg,#3f6f9c,#9fc0d8);opacity:.9}
+  .t01 .s1{top:12px}.t01 .s2{top:29px}.t01 .s3{top:46px}
+  /* 02 indice */
+  .t02 .lines{position:absolute;left:8px;top:10px;bottom:10px;width:44px;
+    background:repeating-linear-gradient(#1b1a16 0 2px,transparent 2px 8px);opacity:.55}
+  .t02 .plate{position:absolute;right:8px;top:8px;width:38px;height:52px;background:#274a6d}
+  /* 03 piano luminoso: slide inclinate */
+  .t03 .slide{position:absolute;width:30px;height:22px;background:#fff;border:1px solid #ddd5c4;
+    box-shadow:0 2px 5px rgba(120,100,60,.28);padding:2px}
+  .t03 .slide i{display:block;width:100%;height:100%;background:linear-gradient(140deg,#6d97c0,#c6dced)}
+  .t03 .a{left:10px;top:12px;transform:rotate(-5deg)}
+  .t03 .b{left:40px;top:9px;transform:rotate(3deg)}
+  .t03 .c{left:23px;top:39px;transform:rotate(1.5deg)}
+  .t03 .d{left:56px;top:35px;transform:rotate(-3deg)}
+  /* 04 mirino */
+  .t04 .frame{position:absolute;inset:5px;background:linear-gradient(150deg,#2b5c86,#a5c6dc)}
+  .t04 .br{position:absolute;width:9px;height:9px;border:1px solid #d8ff3e}
+  .t04 .br.a{top:7px;left:7px;border-right:0;border-bottom:0}
+  .t04 .br.b{top:7px;right:7px;border-left:0;border-bottom:0}
+  .t04 .br.c{bottom:7px;left:7px;border-right:0;border-top:0}
+  .t04 .br.d{bottom:7px;right:7px;border-left:0;border-top:0}
+  .t04 .film{position:absolute;left:7px;right:7px;bottom:4px;height:7px;display:flex;gap:2px}
+  .t04 .film b{flex:1;background:#4b7899}
+  .t04 .film b.on{background:#d8ff3e}
+  /* 05 bande */
+  .t05 .band{position:absolute;left:0;right:0;height:5px;background:linear-gradient(90deg,#31567a,#93b7d2)}
+  .t05 .band.dim{opacity:.38}
+  .t05 .b1{top:9px}.t05 .b2{top:18px;height:14px;opacity:1}
+  .t05 .b3{top:36px}.t05 .b4{top:45px}.t05 .b5{top:54px}
+  .t05 .tag{position:absolute;right:6px;top:22px;width:14px;height:1px;background:#f2efe8;opacity:.8}
+
+  .foot{
+    display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;
+    margin-top:clamp(26px,3.4vw,44px);padding-top:12px;border-top:1px solid var(--rule);
+    font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-45);line-height:1.8;
+  }
+  .foot span{max-width:52ch}
+
+  @media (max-width:860px){
+    .intro{grid-template-columns:1fr;gap:18px}
+    .intro p{align-self:start}
+    .row{grid-template-columns:36px 76px 1fr;grid-template-areas:"n t h" "n t i" ". . g";row-gap:8px}
+    .num{grid-area:n;align-self:start;padding-top:4px}
+    .thumb{grid-area:t;width:76px;height:50px}
+    .row h2{grid-area:h}
+    .row .idea{grid-area:i}
+    .go{grid-area:g;justify-self:start}
+    .row .go i{width:16px}
+  }
+  @media (max-width:420px){
+    .row{grid-template-columns:28px 1fr;grid-template-areas:"n h" "n i" "n g"}
+    .thumb{display:none}
+  }
+</style>
+</head>
+<body>
+<main class="sheet">
+
+  <header class="masthead">
+    <div class="brand">PhotoCloud <span>— foglio di prove</span></div>
+    <div class="meta">
+      Archivio privato crittografato<br>
+      Cinque proposte · 08.11.2026
+    </div>
+  </header>
+
+  <section class="intro">
+    <h1>Cinque modi di <em>guardare</em> un archivio.</h1>
+    <p>
+      Stessa applicazione, stessa struttura, cinque linguaggi visivi.
+      Ogni proposta è una pagina HTML autonoma — nessun font esterno,
+      nessuna libreria — con la galleria e la schermata di accesso
+      con file-chiave già funzionanti. <b>Scegline una e la portiamo nei template Flask.</b>
+    </p>
+  </section>
+
+  <nav class="list" aria-label="Proposte">
+
+    <a class="row" href="01-provino.html">
+      <span class="num">01</span>
+      <span class="thumb t-dark t01" aria-hidden="true">
+        <span class="strip s1"><b></b><b></b><b></b></span>
+        <span class="strip s2"><b></b><b></b><b></b></span>
+        <span class="strip s3"><b></b><b></b><b></b></span>
+      </span>
+      <h2>Provino<small>Tavolo di sviluppo · pellicola</small></h2>
+      <p class="idea">La galleria è un provino a contatto: strisce, numeri di fotogramma, matita rossa sulla selezione.</p>
+      <span class="go">Apri <i></i></span>
+    </a>
+
+    <a class="row" href="02-indice.html">
+      <span class="num">02</span>
+      <span class="thumb t-paper t02" aria-hidden="true">
+        <span class="lines"></span><span class="plate"></span>
+      </span>
+      <h2>Indice<small>Catalogo ragionato · editoria</small></h2>
+      <p class="idea">Niente griglia: un indice numerato di opere e una tavola grande che cambia al passaggio del cursore.</p>
+      <span class="go">Apri <i></i></span>
+    </a>
+
+    <a class="row" href="03-piano-luminoso.html">
+      <span class="num">03</span>
+      <span class="thumb t-warm t03" aria-hidden="true">
+        <span class="slide a"><i></i></span><span class="slide b"><i></i></span>
+        <span class="slide c"><i></i></span><span class="slide d"><i></i></span>
+      </span>
+      <h2>Piano luminoso<small>Diapositive appoggiate · luce</small></h2>
+      <p class="idea">Le foto sono diapositive appoggiate su un tavolo luminoso, con montatura, etichetta e un tasto per raddrizzarle.</p>
+      <span class="go">Apri <i></i></span>
+    </a>
+
+    <a class="row" href="04-mirino.html">
+      <span class="num">04</span>
+      <span class="thumb t-dark t04" aria-hidden="true">
+        <span class="frame"></span>
+        <span class="br a"></span><span class="br b"></span>
+        <span class="br c"></span><span class="br d"></span>
+        <span class="film"><b></b><b class="on"></b><b></b><b></b><b></b></span>
+      </span>
+      <h2>Mirino<small>Vista a schermo intero · HUD</small></h2>
+      <p class="idea">Un'unica foto a pieno schermo, i dati di scatto agli angoli, il rullino in basso. Tutto il resto in un pannello.</p>
+      <span class="go">Apri <i></i></span>
+    </a>
+
+    <a class="row" href="05-bande.html">
+      <span class="num">05</span>
+      <span class="thumb t-dark t05" aria-hidden="true">
+        <span class="band dim b1"></span><span class="band b2"></span>
+        <span class="band dim b3"></span><span class="band dim b4"></span>
+        <span class="band dim b5"></span><span class="tag"></span>
+      </span>
+      <h2>Bande<small>Archivio in sequenza · accordion</small></h2>
+      <p class="idea">La collezione è una pila di bande orizzontali: si aprono una alla volta, senza cornici e senza ombre.</p>
+      <span class="go">Apri <i></i></span>
+    </a>
+
+  </nav>
+
+  <footer class="foot">
+    <span>Prototipi statici · immagini di esempio dal repository · nessun dato reale</span>
+    <span>PhotoCloud / 2026</span>
+  </footer>
+
+</main>
+</body>
+</html>

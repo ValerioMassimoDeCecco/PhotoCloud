@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Piano luminoso — PhotoCloud / proposta 03</title>
+<style>
+  /* =========================================================
+     PROPOSTA 03 — "PIANO LUMINOSO"
+     Le fotografie sono diapositive appoggiate a mano su un
+     tavolo luminoso: montatura di cartoncino, etichetta
+     stampata, ombre vere. Un tasto le raddrizza.
+     ========================================================= */
+  :root{
+    --desk:#e3ddcf;
+    --desk-dark:#d6cfbe;
+    --glass:#fdfbf3;
+    --mount:#fffef9;
+    --ink:#211e19;
+    --ink-55:rgba(33,30,25,.55);
+    --ink-38:rgba(33,30,25,.38);
+    --line:rgba(33,30,25,.16);
+    --red:#c0392b;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:"Helvetica Neue",Helvetica,Arial,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    min-height:100vh;background:var(--desk);color:var(--ink);font-family:var(--sans);
+    background-image:
+      radial-gradient(120% 80% at 50% 0%,#efe9dc,transparent 55%),
+      radial-gradient(rgba(33,30,25,.05) .6px,transparent .7px);
+    background-size:auto,3.5px 3.5px;
+    -webkit-font-smoothing:antialiased;
+    padding:clamp(10px,2vw,26px);
+  }
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  a{color:inherit}
+  :focus-visible{outline:2px solid var(--red);outline-offset:3px}
+  .shell{max-width:1480px;margin:0 auto}
+
+  /* ---------------- etichetta e vassoio ---------------- */
+  .head{
+    display:flex;justify-content:space-between;align-items:flex-start;gap:18px;
+    flex-wrap:wrap;margin-bottom:clamp(10px,1.6vw,18px);
+  }
+  .label-paper{
+    background:#fffdf6;padding:10px 16px 11px;position:relative;
+    box-shadow:0 6px 14px -8px rgba(60,48,28,.6);
+    transform:rotate(-.7deg);
+  }
+  .label-paper::before{
+    content:"";position:absolute;left:50%;top:-9px;width:66px;height:18px;
+    transform:translateX(-50%) rotate(1.6deg);
+    background:rgba(214,190,120,.55);
+    box-shadow:0 1px 2px rgba(80,60,20,.15);
+  }
+  .label-paper .k{font-family:var(--mono);font-size:8px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-38)}
+  .label-paper h1{
+    font-size:clamp(17px,2vw,22px);font-weight:600;letter-spacing:-.02em;margin:3px 0 2px;
+  }
+  .label-paper .m{font-family:var(--mono);font-size:8.5px;letter-spacing:.09em;color:var(--ink-55)}
+
+  .tray{
+    display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:flex-end;
+  }
+  .paper-btn{
+    background:rgba(255,253,246,.92);border:1px solid rgba(33,30,25,.14);
+    padding:9px 12px;font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--ink-55);
+    box-shadow:0 2px 5px -3px rgba(60,48,28,.55);
+    transition:background .15s,color .15s,transform .12s;
+  }
+  .paper-btn:hover{background:#fff;color:var(--ink);transform:translateY(-1px)}
+  .paper-btn[disabled]{opacity:.4;pointer-events:none;box-shadow:none}
+  .paper-btn.on{background:var(--ink);color:#fffdf6;border-color:var(--ink)}
+  .paper-btn .n{color:var(--red)}
+  .paper-btn.on .n{color:#fff}
+
+  /* ---------------- linguette dei mesi ---------------- */
+  .tabs{
+    display:flex;gap:4px;align-items:flex-end;padding-left:clamp(8px,1.6vw,20px);
+    position:relative;z-index:2;overflow-x:auto;scrollbar-width:none;
+  }
+  .tabs::-webkit-scrollbar{display:none}
+  .tabs button{
+    background:#f4efe1;border:1px solid rgba(33,30,25,.13);border-bottom:0;
+    padding:8px 14px 7px;font-family:var(--mono);font-size:8px;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--ink-38);border-radius:2px 2px 0 0;
+    box-shadow:0 -2px 5px -4px rgba(60,48,28,.7);
+    transition:background .15s,color .15s,padding .15s;white-space:nowrap;
+  }
+  .tabs button:hover{background:#faf6ea;color:var(--ink-55)}
+  .tabs button[aria-selected="true"]{
+    background:var(--glass);color:var(--ink);padding-top:11px;padding-bottom:9px;
+    margin-bottom:-1px;
+  }
+
+  /* ---------------- il piano ---------------- */
+  .piano{
+    position:relative;border:1px solid rgba(33,30,25,.16);border-radius:3px;
+    padding:clamp(12px,2.4vw,34px);padding-top:clamp(18px,2.6vw,34px);
+    background:
+      radial-gradient(90% 120% at 50% 0%,#fffef8 0%,#fdfaf0 45%,#f6f1e2 100%);
+    box-shadow:
+      0 0 0 6px rgba(255,253,246,.35),
+      0 30px 70px -40px rgba(60,48,28,.75),
+      inset 0 0 120px rgba(226,214,180,.35);
+  }
+  /* riflesso del vetro */
+  .piano::after{
+    content:"";position:absolute;inset:0;pointer-events:none;border-radius:3px;
+    background:linear-gradient(118deg,rgba(255,255,255,.55) 0%,transparent 34%,transparent 66%,rgba(255,255,255,.25) 100%);
+    mix-blend-mode:soft-light;
+  }
+
+  .grid{
+    display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:clamp(14px,2.4vw,32px) clamp(12px,2vw,26px);
+    position:relative;z-index:1;
+  }
+
+  .slide{
+    --r:0deg;--y:0px;
+    position:relative;background:var(--mount);padding:7px 7px 0;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.9) inset,
+      0 10px 20px -12px rgba(60,48,28,.55),
+      0 2px 4px -2px rgba(60,48,28,.35);
+    transform:rotate(var(--r)) translateY(var(--y));
+    transition:transform .3s cubic-bezier(.2,.8,.2,1),box-shadow .3s,background .3s;
+    cursor:zoom-in;
+  }
+  .piano.tidy .slide{transform:none}
+  .piano.tidy .grid{gap:clamp(12px,1.6vw,20px)}
+  .piano:not(.tidy) .slide:hover{
+    transform:rotate(0deg) translateY(-8px) scale(1.015);z-index:5;
+    box-shadow:0 26px 34px -20px rgba(60,48,28,.7),0 3px 8px -3px rgba(60,48,28,.4);
+  }
+  .piano.tidy .slide:hover{transform:translateY(-4px)}
+
+  .slide .photo{position:relative;overflow:hidden;background:#ded8c8;aspect-ratio:3/2}
+  .slide .photo img{width:100%;height:100%;object-fit:cover;display:block;filter:saturate(.97)}
+  .slide .num{
+    position:absolute;top:4px;right:5px;font-family:var(--mono);font-size:7.5px;
+    letter-spacing:.1em;color:rgba(255,255,255,.9);mix-blend-mode:difference;
+  }
+  .slide .label{
+    display:flex;justify-content:space-between;align-items:center;gap:6px;
+    padding:5px 1px 6px;font-family:var(--mono);font-size:7.5px;
+    letter-spacing:.09em;text-transform:uppercase;color:var(--ink-38);
+  }
+  .slide .label b{font-weight:400;color:var(--ink);letter-spacing:.07em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .slide .label .d{white-space:nowrap}
+
+  /* spillatura per la selezione */
+  .pin{
+    position:absolute;right:-7px;top:-7px;width:20px;height:20px;border-radius:50%;
+    background:#fffef9;border:1px solid rgba(33,30,25,.25);z-index:4;
+    display:grid;place-items:center;box-shadow:0 2px 4px -2px rgba(0,0,0,.4);
+    transition:background .15s,border-color .15s,transform .15s;
+  }
+  .pin::after{content:"";width:6px;height:6px;border-radius:50%;background:rgba(33,30,25,.18);transition:background .15s}
+  .pin:hover{transform:scale(1.12)}
+  .slide.selected{background:#fff7f1;box-shadow:0 0 0 2px var(--red),0 12px 22px -14px rgba(60,48,28,.7)}
+  .slide.selected .pin{background:var(--red);border-color:var(--red)}
+  .slide.selected .pin::after{background:#fff}
+
+  /* etichetta di serie in fondo al piano */
+  .piano-foot{
+    display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;
+    margin-top:clamp(16px,2.4vw,30px);padding-top:12px;border-top:1px dashed rgba(33,30,25,.22);
+    font-family:var(--mono);font-size:8px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-38);
+    position:relative;z-index:1;
+  }
+  .piano-foot .stat b{color:var(--ink);font-weight:400}
+  .piano-foot a{text-decoration:none;border-bottom:1px solid var(--line)}
+  .piano-foot a:hover{color:var(--red);border-color:var(--red)}
+
+  /* ---------------- accesso: modulo di consegna ---------------- */
+  .access{display:none;padding:clamp(10px,2vw,26px) 0}
+  .access.open{display:block}
+  .access-intro{max-width:56ch;margin-bottom:clamp(18px,3vw,34px)}
+  .access-intro .k{font-family:var(--mono);font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--red);margin-bottom:10px}
+  .access-intro h2{font-size:clamp(28px,4.6vw,52px);font-weight:600;letter-spacing:-.03em;line-height:.98}
+  .access-intro h2 em{font-style:normal;color:var(--ink-38);font-weight:400}
+  .access-intro p{font-size:14.5px;line-height:1.6;color:var(--ink-55);margin-top:14px}
+
+  .forms{display:grid;grid-template-columns:1fr 1fr;gap:clamp(18px,3vw,38px);align-items:start}
+  .slip{
+    background:#fffdf6;padding:clamp(16px,2.2vw,24px);
+    box-shadow:0 16px 34px -22px rgba(60,48,28,.75);
+    transform:rotate(-.5deg);position:relative;
+  }
+  .slip:nth-child(2){transform:rotate(.6deg);background:#fffaf0}
+  /* smerlatura del foglio (bordo strappato) */
+  .slip::before{
+    content:"";position:absolute;left:0;right:0;top:-5px;height:5px;
+    background-image:radial-gradient(circle 5px at 5px 5px,transparent 4.2px,#fffdf6 4.4px);
+    background-size:10px 10px;background-repeat:repeat-x;
+  }
+  .slip-head{
+    display:flex;justify-content:space-between;gap:12px;padding-bottom:8px;
+    border-bottom:1px solid rgba(33,30,25,.4);font-family:var(--mono);
+    font-size:8px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-38);
+    margin-bottom:18px;
+  }
+  .slip h3{font-size:clamp(20px,2.4vw,27px);font-weight:600;letter-spacing:-.025em;margin-bottom:6px}
+  .slip .sub{font-size:12.5px;line-height:1.55;color:var(--ink-55);margin-bottom:20px}
+  .fl{font-family:var(--mono);font-size:8px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-38);margin-bottom:6px;display:block}
+  .slot{
+    border:1px dashed rgba(33,30,25,.42);padding:18px 14px;text-align:center;cursor:pointer;
+    background:rgba(255,255,255,.5);transition:background .15s,border-color .15s;
+    margin-bottom:18px;
+  }
+  .slot:hover,.slot.drag{background:#fff;border-color:var(--red)}
+  .slot .s1{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;display:block;margin-bottom:4px}
+  .slot .s2{font-size:11px;color:var(--ink-38);line-height:1.6;display:block}
+  .slot .fn{font-family:var(--mono);font-size:10.5px;color:var(--red);word-break:break-all}
+  .slot input{display:none}
+  .dotted{
+    width:100%;border:0;border-bottom:1px dotted rgba(33,30,25,.5);background:none;
+    font-family:var(--sans);font-size:16px;padding:6px 0;margin-bottom:20px;color:var(--ink);
+  }
+  .dotted:focus{outline:none;border-bottom:1px solid var(--red)}
+  .choice{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}
+  .choice label{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;line-height:1.5;color:var(--ink-55);cursor:pointer}
+  .choice input{accent-color:var(--red);margin-top:2px}
+  .stamp{
+    width:100%;padding:13px;border:2px solid var(--ink);background:none;
+    font-family:var(--mono);font-size:9px;letter-spacing:.2em;text-transform:uppercase;
+    display:flex;justify-content:center;gap:10px;align-items:center;
+    transition:background .15s,color .15s,border-color .15s;
+  }
+  .stamp:hover{background:var(--ink);color:#fffdf6}
+  .stamp.red{border-color:var(--red);color:var(--red)}
+  .stamp.red:hover{background:var(--red);color:#fff}
+  .fine{font-family:var(--mono);font-size:8px;line-height:1.7;color:var(--ink-38);margin-top:12px}
+  .access-foot{
+    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:clamp(20px,3vw,34px);
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-38);
+  }
+  .access-foot a{text-decoration:none;border-bottom:1px solid var(--line)}
+  .access-foot a:hover{color:var(--red);border-color:var(--red)}
+
+  /* ---------------- loupe ---------------- */
+  .loupe{
+    position:fixed;inset:0;z-index:60;display:none;
+    background:radial-gradient(120% 100% at 50% 0%,#fdfbf3,#eae4d5);
+    flex-direction:column;
+  }
+  .loupe.open{display:flex}
+  .loupe-top,.loupe-bot{
+    display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:12px clamp(14px,3vw,40px);font-family:var(--mono);font-size:8.5px;
+    letter-spacing:.13em;text-transform:uppercase;color:var(--ink-38);
+  }
+  .loupe-top{border-bottom:1px solid rgba(33,30,25,.18)}
+  .loupe-bot{border-top:1px solid rgba(33,30,25,.18)}
+  .loupe-top b,.loupe-bot b{color:var(--ink);font-weight:400}
+  .loupe-mid{flex:1;display:flex;align-items:center;justify-content:center;gap:clamp(8px,2vw,24px);padding:clamp(12px,2.4vw,30px);min-height:0}
+  .loupe img{
+    max-width:100%;max-height:100%;display:block;object-fit:contain;
+    background:#fff;padding:10px 10px 22px;
+    box-shadow:0 18px 40px -24px rgba(60,48,28,.8);
+  }
+  .nav-round{
+    width:44px;height:44px;border-radius:50%;border:1px solid rgba(33,30,25,.25);
+    background:rgba(255,253,246,.9);display:grid;place-items:center;color:var(--ink);
+    box-shadow:0 4px 10px -6px rgba(60,48,28,.7);flex:none;transition:background .15s,color .15s;
+  }
+  .nav-round:hover{background:var(--ink);color:#fffdf6}
+  .loupe-top button:hover{color:var(--red)}
+
+  @media (max-width:1100px){ .grid{grid-template-columns:repeat(3,minmax(0,1fr))} }
+  @media (max-width:820px){
+    .forms{grid-template-columns:1fr}
+    .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .slip{transform:none}
+    .slip:nth-child(2){transform:none}
+  }
+  @media (max-width:420px){
+    .grid{grid-template-columns:1fr;gap:18px}
+    .tray{width:100%;justify-content:flex-start}
+    .label-paper{transform:none}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="head">
+    <div class="label-paper">
+      <div class="k">Proposta 03 · piano luminoso</div>
+      <h1>Blu — dodici diapositive</h1>
+      <div class="m">Archivio PhotoCloud · 06.2026 — 11.2026 · AES-256</div>
+    </div>
+    <div class="tray" role="toolbar" aria-label="Strumenti">
+      <label class="paper-btn" for="up" style="cursor:pointer">＋ Carica</label>
+      <input id="up" type="file" accept="image/*,video/*" multiple hidden>
+      <button class="paper-btn" id="dl" disabled>Scarica <span class="n" id="n-sel">0</span></button>
+      <button class="paper-btn" id="del" disabled>Cestino</button>
+      <button class="paper-btn">Duplicati</button>
+      <button class="paper-btn" id="tidy">Raddrizza</button>
+      <button class="paper-btn on" id="login-btn">Accedi</button>
+    </div>
+  </div>
+
+  <!-- ================= PIANO ================= -->
+  <main id="view-piano">
+    <div class="tabs" role="tablist" aria-label="Filtra per mese">
+      <button role="tab" aria-selected="true">Tutte · 12</button>
+      <button role="tab" aria-selected="false">Giugno · 2</button>
+      <button role="tab" aria-selected="false">Luglio · 2</button>
+      <button role="tab" aria-selected="false">Agosto · 2</button>
+      <button role="tab" aria-selected="false">Settembre · 2</button>
+      <button role="tab" aria-selected="false">Ottobre · 2</button>
+      <button role="tab" aria-selected="false">Novembre · 2</button>
+    </div>
+
+    <section class="piano" id="piano" aria-label="Diapositive appoggiate sul piano luminoso">
+      <div class="grid">
+
+        <article class="slide" data-i="0" style="--r:-1.1deg;--y:6px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Ortensia" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp1.jpg" alt="Ortensia"><span class="num">01</span></div>
+          <div class="label"><b>Ortensia</b><span class="d">06.06</span></div>
+        </article>
+
+        <article class="slide" data-i="1" style="--r:.8deg;--y:0px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Corolla" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp1.jpg" alt="Corolla" style="object-position:25% 70%;transform:scale(1.5)"><span class="num">02</span></div>
+          <div class="label"><b>Corolla</b><span class="d">06.06</span></div>
+        </article>
+
+        <article class="slide" data-i="2" style="--r:-.5deg;--y:11px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Prisma" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp3.jpg" alt="Prisma"><span class="num">03</span></div>
+          <div class="label"><b>Prisma</b><span class="d">22.07</span></div>
+        </article>
+
+        <article class="slide" data-i="3" style="--r:1.2deg;--y:3px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Lastra" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp3.jpg" alt="Lastra" style="object-position:70% 30%;transform:scale(1.6)"><span class="num">04</span></div>
+          <div class="label"><b>Lastra</b><span class="d">22.07</span></div>
+        </article>
+
+        <article class="slide" data-i="4" style="--r:.6deg;--y:9px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Vetro" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp2.jpg" alt="Vetro"><span class="num">05</span></div>
+          <div class="label"><b>Vetro</b><span class="d">03.08</span></div>
+        </article>
+
+        <article class="slide" data-i="5" style="--r:-1.3deg;--y:1px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Curva" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp2.jpg" alt="Curva" style="object-position:80% 60%;transform:scale(1.8)"><span class="num">06</span></div>
+          <div class="label"><b>Curva</b><span class="d">03.08</span></div>
+        </article>
+
+        <article class="slide" data-i="6" style="--r:.9deg;--y:5px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Nodo" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp3.jpg" alt="Nodo" style="object-position:40% 90%;transform:scale(1.4)"><span class="num">07</span></div>
+          <div class="label"><b>Nodo</b><span class="d">14.09</span></div>
+        </article>
+
+        <article class="slide" data-i="7" style="--r:-.7deg;--y:12px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Filo" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp2.jpg" alt="Filo" style="object-position:15% 30%;transform:scale(1.5)"><span class="num">08</span></div>
+          <div class="label"><b>Filo</b><span class="d">14.09</span></div>
+        </article>
+
+        <article class="slide" data-i="8" style="--r:1deg;--y:4px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Petali" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp1.jpg" alt="Petali" style="object-position:60% 40%;transform:scale(1.7)"><span class="num">09</span></div>
+          <div class="label"><b>Petali</b><span class="d">02.10</span></div>
+        </article>
+
+        <article class="slide" data-i="9" style="--r:-1deg;--y:8px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Riflesso" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp3.jpg" alt="Riflesso" style="object-position:85% 10%;transform:scale(1.5)"><span class="num">10</span></div>
+          <div class="label"><b>Riflesso</b><span class="d">02.10</span></div>
+        </article>
+
+        <article class="slide" data-i="10" style="--r:.5deg;--y:0px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Onda" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp2.jpg" alt="Onda" style="object-position:35% 55%;transform:scale(1.4)"><span class="num">11</span></div>
+          <div class="label"><b>Onda</b><span class="d">08.11</span></div>
+        </article>
+
+        <article class="slide" data-i="11" style="--r:-.4deg;--y:7px" tabindex="0">
+          <span class="pin" role="checkbox" aria-checked="false" aria-label="Seleziona Sfocatura" tabindex="0"></span>
+          <div class="photo"><img src="../static/wp1.jpg" alt="Sfocatura" style="object-position:5% 20%;transform:scale(1.9)"><span class="num">12</span></div>
+          <div class="label"><b>Sfocatura</b><span class="d">08.11</span></div>
+        </article>
+
+      </div>
+
+      <div class="piano-foot">
+        <span class="stat">Sul piano: <b>12</b> diapositive · selezionate <b id="foot-sel">0</b></span>
+        <span>Clicca una diapositiva per la lente · spilla in alto a destra per selezionare</span>
+      </div>
+    </section>
+
+    <div class="access-foot">
+      <span>Blu / 2026 · PhotoCloud</span>
+      <span><a href="index.html">← Tutte le proposte</a> &nbsp;/&nbsp; <a href="#" id="login-link">Modulo di accesso →</a></span>
+    </div>
+  </main>
+
+  <!-- ================= ACCESSO ================= -->
+  <main class="access" id="view-access">
+    <div class="access-intro">
+      <div class="k">Modulo di consegna · PC/A1</div>
+      <h2>La chiave non si scrive,<br><em>si consegna.</em></h2>
+      <p>
+        L'archivio si apre presentando il file-chiave scaricato alla registrazione.
+        Due moduli: uno per entrare, uno per creare un archivio nuovo.
+      </p>
+    </div>
+
+    <div class="forms">
+
+      <form class="slip" id="login-form" onsubmit="event.preventDefault();this.querySelector('.fine').textContent='Demo statica: la rotta reale è /login.'">
+        <div class="slip-head"><span>Modulo 1 / accesso</span><span>Da compilare in ogni sua parte</span></div>
+        <h3>Entra nell'archivio</h3>
+        <p class="sub">Presenta il file che hai ricevuto alla registrazione.</p>
+
+        <span class="fl">File di autenticazione</span>
+        <label class="slot" id="slot" for="keyfile">
+          <span class="s1">Inserisci qui il file-chiave</span>
+          <span class="s2" id="slot-hint">photocloud_auth_….json · trascina o clicca</span>
+        </label>
+        <input id="keyfile" type="file" accept=".json,.txt">
+
+        <button class="stamp" type="submit">Apri l'archivio →</button>
+        <p class="fine">Il file viene verificato e non conservato. Nessuna password, nessuna copia.</p>
+      </form>
+
+      <form class="slip" id="register-form" onsubmit="event.preventDefault();this.querySelector('.fine').textContent='Demo statica: la rotta reale è /register.'">
+        <div class="slip-head"><span>Modulo 2 / registrazione</span><span>Uso riservato all'intestatario</span></div>
+        <h3>Nuovo archivio</h3>
+        <p class="sub">Scegli un nome e come proteggere la chiave.</p>
+
+        <span class="fl">Nome d'archivio</span>
+        <input class="dotted" type="text" placeholder="valerio" autocomplete="username">
+
+        <span class="fl">Tipo di chiave</span>
+        <div class="choice">
+          <label><input type="radio" name="k2" checked> Genera una chiave sicura e scaricala</label>
+          <label><input type="radio" name="k2"> Dettare una frase chiave (min. 8 caratteri)</label>
+        </div>
+
+        <button class="stamp red" type="submit">Registra e scarica la chiave ↓</button>
+        <p class="fine">Conserva il file: senza di esso l'archivio non è recuperabile.</p>
+      </form>
+
+    </div>
+
+    <div class="access-foot">
+      <span>Verifica del file-chiave · passaggio 1 di 2</span>
+      <span><a href="#" id="back-link">← Torna al piano luminoso</a></span>
+    </div>
+  </main>
+
+</div>
+
+<!-- ================= LENTE ================= -->
+<div class="loupe" id="loupe" role="dialog" aria-modal="true" aria-label="Diapositiva ingrandita">
+  <div class="loupe-top">
+    <span>Lente d'ingrandimento · <b id="l-count">Dia 01 / 12</b></span>
+    <button id="l-close">Chiudi ✕</button>
+  </div>
+  <div class="loupe-mid">
+    <button class="nav-round" id="l-prev" aria-label="Precedente">←</button>
+    <img id="l-img" src="" alt="">
+    <button class="nav-round" id="l-next" aria-label="Successiva">→</button>
+  </div>
+  <div class="loupe-bot">
+    <span><b id="l-title">—</b></span>
+    <span id="l-meta">—</span>
+  </div>
+</div>
+
+<script>
+(function(){
+  const piano = document.getElementById('piano');
+  const slides = [...document.querySelectorAll('.slide')];
+
+  /* ---- selezione con le spille ---- */
+  const nSel = document.getElementById('n-sel');
+  const footSel = document.getElementById('foot-sel');
+  const dl = document.getElementById('dl');
+  const del = document.getElementById('del');
+
+  function sync(){
+    const n = slides.filter(s => s.classList.contains('selected')).length;
+    nSel.textContent = n;
+    footSel.textContent = n;
+    dl.disabled = del.disabled = n === 0;
+  }
+  slides.forEach(s => {
+    const pin = s.querySelector('.pin');
+    function toggle(e){
+      e.stopPropagation(); e.preventDefault();
+      s.classList.toggle('selected');
+      pin.setAttribute('aria-checked', String(s.classList.contains('selected')));
+      sync();
+    }
+    pin.addEventListener('click', toggle);
+    pin.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') toggle(e); });
+    s.addEventListener('click', e => { if (e.target === pin) return; openLoupe(+s.dataset.i); });
+    s.addEventListener('keydown', e => { if (e.key === 'Enter') openLoupe(+s.dataset.i); });
+  });
+  sync();
+
+  /* ---- raddrizza ---- */
+  const tidy = document.getElementById('tidy');
+  tidy.addEventListener('click', () => {
+    const on = piano.classList.toggle('tidy');
+    tidy.textContent = on ? 'Sparpaglia' : 'Raddrizza';
+    tidy.classList.toggle('on', on);
+  });
+
+  /* ---- linguette mese: filtro reale sulle diapositive ---- */
+  const tabs = [...document.querySelectorAll('.tabs button')];
+  const monthOf = s => s.querySelector('.label .d').textContent.slice(3); // 'MM'
+  tabs.forEach((t, ti) => t.addEventListener('click', () => {
+    tabs.forEach(x => x.setAttribute('aria-selected', 'false'));
+    t.setAttribute('aria-selected', 'true');
+    const mese = ti === 0 ? null : ['06','07','08','09','10','11'][ti - 1];
+    slides.forEach(s => {
+      s.style.display = (!mese || monthOf(s) === mese) ? '' : 'none';
+    });
+    piano.style.minHeight = '';
+  }));
+
+  /* ---- lente ---- */
+  const loupe = document.getElementById('loupe');
+  const lImg = document.getElementById('l-img');
+  let cur = 0;
+
+  function dataOf(i){
+    const s = slides[i];
+    const img = s.querySelector('img');
+    return {
+      src: img.getAttribute('src'),
+      pos: img.style.objectPosition || '50% 50%',
+      zoom: img.style.transform || 'scale(1)',
+      title: s.querySelector('.label b').textContent,
+      date: s.querySelector('.label .d').textContent,
+      n: String(i+1).padStart(2,'0')
+    };
+  }
+  function paint(){
+    const d = dataOf(cur);
+    lImg.src = d.src;
+    lImg.alt = d.title;
+    lImg.style.objectPosition = '50% 50%';
+    document.getElementById('l-count').textContent = 'Dia ' + d.n + ' / 12';
+    document.getElementById('l-title').textContent = d.title;
+    document.getElementById('l-meta').textContent = d.date + ' · IMG_04' + (12 + cur) + '.HEIC · cifrata';
+  }
+  function openLoupe(i){ cur = i; paint(); loupe.classList.add('open'); document.body.style.overflow='hidden'; }
+  function closeLoupe(){ loupe.classList.remove('open'); document.body.style.overflow=''; }
+  function step(d){ cur = (cur+d+12)%12; paint(); }
+
+  document.getElementById('l-close').onclick = closeLoupe;
+  document.getElementById('l-prev').onclick = () => step(-1);
+  document.getElementById('l-next').onclick = () => step(1);
+  document.addEventListener('keydown', e => {
+    if (!loupe.classList.contains('open')) return;
+    if (e.key === 'Escape') closeLoupe();
+    if (e.key === 'ArrowLeft') step(-1);
+    if (e.key === 'ArrowRight') step(1);
+  });
+
+  /* ---- viste ---- */
+  const vp = document.getElementById('view-piano');
+  const va = document.getElementById('view-access');
+  function show(login){
+    va.classList.toggle('open', login);
+    vp.style.display = login ? 'none' : '';
+    window.scrollTo({top:0});
+  }
+  document.getElementById('login-btn').onclick = () => show(true);
+  document.getElementById('login-link').onclick = e => { e.preventDefault(); show(true); };
+  document.getElementById('back-link').onclick = e => { e.preventDefault(); show(false); };
+
+  /* ---- slot del file ---- */
+  const slot = document.getElementById('slot');
+  const kf = document.getElementById('keyfile');
+  const hint = document.getElementById('slot-hint');
+  kf.addEventListener('change', () => {
+    if (kf.files[0]) hint.innerHTML = '<span class="fn">' + kf.files[0].name + '</span>';
+  });
+  ['dragenter','dragover'].forEach(ev => slot.addEventListener(ev, e => { e.preventDefault(); slot.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev => slot.addEventListener(ev, e => { e.preventDefault(); slot.classList.remove('drag'); }));
+  slot.addEventListener('drop', e => {
+    const f = e.dataTransfer.files[0];
+    if (f) hint.innerHTML = '<span class="fn">' + f.name + '</span>';
+  });
+})();
+</script>
+</body>
+</html>

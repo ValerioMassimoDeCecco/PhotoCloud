@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mirino — PhotoCloud / proposta 04</title>
+<style>
+  /* =========================================================
+     PROPOSTA 04 — "MIRINO"
+     L'applicazione è un mirino: una foto a pieno schermo,
+     i dati agli angoli, il rullino in basso, tutto il resto
+     in un pannello. Nero, bianco, un solo verde acido.
+     ========================================================= */
+  :root{
+    --black:#060605;
+    --ink:#f4f2ec;
+    --ink-60:rgba(244,242,236,.6);
+    --ink-40:rgba(244,242,236,.4);
+    --ink-14:rgba(244,242,236,.14);
+    --lime:#d8ff3e;
+    --red:#ff4d2e;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{background:var(--black);color:var(--ink);font-family:var(--mono);overflow-x:hidden}
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  a{color:inherit}
+  :focus-visible{outline:1.5px solid var(--lime);outline-offset:3px}
+
+  .app{height:100dvh;min-height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+  /* ---------------- palcoscenico ---------------- */
+  .stage{position:relative;flex:1;min-height:0;overflow:hidden;background:#0a0a08;isolation:isolate}
+  .layer{
+    position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+    opacity:0;transition:opacity .5s ease,transform 8s linear;
+    transform:scale(1.02);
+  }
+  .layer.on{opacity:1;transform:scale(1.06)}
+  .scrim{
+    position:absolute;inset:0;pointer-events:none;z-index:2;
+    background:
+      linear-gradient(to bottom,rgba(0,0,0,.55),transparent 22%,transparent 62%,rgba(0,0,0,.72)),
+      radial-gradient(120% 100% at 50% 50%,transparent 55%,rgba(0,0,0,.35) 100%);
+  }
+
+  /* angoli del mirino */
+  .br{position:absolute;width:26px;height:26px;border:1.5px solid var(--lime);z-index:5;opacity:.85;pointer-events:none}
+  .br.tl{top:18px;left:18px;border-right:0;border-bottom:0}
+  .br.tr{top:18px;right:18px;border-left:0;border-bottom:0}
+  .br.bl{bottom:18px;left:18px;border-right:0;border-top:0}
+  .br.brr{bottom:18px;right:18px;border-left:0;border-top:0}
+
+  .hud{position:absolute;z-index:6;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+    text-shadow:0 1px 10px rgba(0,0,0,.65)}
+  .hud-top{
+    top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:flex-start;
+    gap:16px;padding:clamp(24px,3.4vw,40px) clamp(26px,3.4vw,44px);
+  }
+  .hud-top .l{display:flex;align-items:center;gap:10px;color:var(--ink-60)}
+  .hud-top .l b{color:var(--ink);font-weight:400}
+  .rec{width:7px;height:7px;border-radius:50%;background:var(--red);flex:none;
+    animation:blink 2.4s steps(1) infinite}
+  @keyframes blink{0%,72%{opacity:1}73%,100%{opacity:.15}}
+  .hud-top .r{color:var(--ink-60);text-align:right;line-height:1.9}
+  .hud-top .r span{display:inline-block;margin-left:12px}
+  .menu-btn{
+    position:absolute;left:50%;top:clamp(24px,3.4vw,40px);transform:translateX(-50%);
+    border:1px solid var(--ink-14);padding:8px 12px;font-size:8.5px;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--ink);background:rgba(0,0,0,.28);backdrop-filter:blur(6px);
+    transition:background .15s,color .15s,border-color .15s;
+  }
+  .menu-btn:hover{background:var(--lime);color:#000;border-color:var(--lime)}
+
+  /* etichette verticali ai lati */
+  .side{
+    position:absolute;top:50%;z-index:6;transform:translateY(-50%) rotate(180deg);
+    writing-mode:vertical-rl;font-size:8.5px;letter-spacing:.32em;text-transform:uppercase;
+    color:var(--ink-40);padding:0 6px;
+  }
+  .side.l{left:6px}
+  .side.r{right:6px;transform:translateY(-50%)}
+
+  .hud-bottom{
+    left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:flex-end;
+    gap:20px;padding:clamp(22px,3.2vw,38px) clamp(26px,3.4vw,44px);
+  }
+  .hud-bottom .t{min-width:0}
+  .hud-bottom h1{
+    font-size:clamp(26px,3.4vw,44px);font-weight:400;line-height:1;letter-spacing:-.02em;
+    text-transform:none;text-shadow:0 2px 24px rgba(0,0,0,.5);
+  }
+  .hud-bottom .meta{
+    color:var(--ink-60);font-size:9px;letter-spacing:.14em;margin-top:9px;line-height:1.8;
+  }
+  .hud-bottom .meta b{color:var(--lime);font-weight:400}
+  .hud-bottom .count{
+    text-align:right;font-size:10px;letter-spacing:.16em;color:var(--ink-60);line-height:1.9;flex:none;
+  }
+  .hud-bottom .count b{display:block;font-size:26px;color:var(--ink);letter-spacing:.02em;line-height:1;font-weight:400}
+
+  /* zone di navigazione */
+  .zone{
+    position:absolute;top:0;bottom:0;width:14%;z-index:4;display:flex;align-items:center;
+    color:rgba(255,255,255,0);transition:color .2s,background .2s;font-size:20px;
+  }
+  .zone.prev{left:0;justify-content:flex-start;padding-left:18px}
+  .zone.next{right:0;justify-content:flex-end;padding-right:18px}
+  .zone:hover{color:rgba(255,255,255,.85);background:linear-gradient(to right,rgba(0,0,0,.28),transparent)}
+  .zone.next:hover{background:linear-gradient(to left,rgba(0,0,0,.28),transparent)}
+
+  /* punto di messa a fuoco */
+  .focus{
+    position:absolute;left:50%;top:46%;width:54px;height:54px;z-index:5;pointer-events:none;
+    border:1px solid rgba(216,255,62,.85);opacity:0;transform:translate(-50%,-50%) scale(1.35);
+    transition:opacity .25s,transform .25s;
+  }
+  .focus::before,.focus::after{content:"";position:absolute;background:rgba(216,255,62,.85)}
+  .focus::before{left:50%;top:-6px;width:1px;height:10px}
+  .focus::after{left:50%;bottom:-6px;width:1px;height:10px}
+  .focus.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+
+  /* ---------------- rullino ---------------- */
+  .filmstrip{
+    flex:none;background:#0b0b09;border-top:1px solid var(--ink-14);
+    display:flex;align-items:center;gap:14px;padding:10px 14px;min-height:0;
+  }
+  .filmstrip .tag{
+    font-size:8px;letter-spacing:.24em;text-transform:uppercase;color:var(--ink-40);
+    writing-mode:vertical-rl;transform:rotate(180deg);flex:none;align-self:stretch;
+    display:flex;align-items:center;justify-content:center;gap:6px;
+  }
+  .thumbs{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;flex:1;padding:3px 0}
+  .thumbs::-webkit-scrollbar{display:none}
+  .thumb{
+    position:relative;flex:none;width:92px;height:60px;overflow:hidden;background:#151512;
+    border:1px solid transparent;opacity:.5;transition:opacity .2s,border-color .2s,transform .2s;
+  }
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .thumb .n{
+    position:absolute;left:3px;bottom:2px;font-size:7.5px;letter-spacing:.08em;color:#fff;
+    text-shadow:0 1px 3px rgba(0,0,0,.9);
+  }
+  .thumb:hover{opacity:.85}
+  .thumb.on{opacity:1;border-color:var(--lime);transform:translateY(-2px)}
+  .thumb.on::before{
+    content:"";position:absolute;left:50%;top:-5px;width:1px;height:4px;background:var(--lime);
+  }
+
+  /* ---------------- pannello ---------------- */
+  .panel{
+    position:fixed;top:0;right:0;bottom:0;width:min(360px,100%);z-index:40;
+    background:#0c0c0a;border-left:1px solid var(--ink-14);
+    transform:translateX(101%);transition:transform .38s cubic-bezier(.6,0,.2,1);
+    display:flex;flex-direction:column;
+  }
+  .panel.open{transform:none}
+  .panel-head{
+    display:flex;justify-content:space-between;align-items:center;gap:14px;
+    padding:20px;border-bottom:1px solid var(--ink-14);
+    font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-60);
+  }
+  .panel-head button{color:var(--ink);font-size:9px;letter-spacing:.16em}
+  .panel-head button:hover{color:var(--lime)}
+  .panel-body{flex:1;overflow-y:auto;padding:8px 0}
+  .pgroup{margin-bottom:12px}
+  .pgroup .gl{
+    padding:12px 20px 8px;font-size:7.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--ink-40);
+  }
+  .prow{
+    width:100%;display:flex;justify-content:space-between;align-items:center;gap:14px;
+    padding:12px 20px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink);border-top:1px solid rgba(244,242,236,.07);text-align:left;
+  }
+  .prow:hover{background:var(--lime);color:#000}
+  .prow .v{color:var(--ink-40);font-size:9px;letter-spacing:.1em}
+  .prow:hover .v{color:rgba(0,0,0,.6)}
+  .prow .v b{color:var(--lime);font-weight:400}
+  .prow:hover .v b{color:#000}
+  .panel-foot{padding:16px 20px;border-top:1px solid var(--ink-14);
+    font-size:8px;letter-spacing:.12em;line-height:1.8;color:var(--ink-40)}
+  .scrim-panel{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:39;opacity:0;pointer-events:none;transition:opacity .3s}
+  .scrim-panel.on{opacity:1;pointer-events:auto}
+
+  /* ---------------- accesso ---------------- */
+  .access{
+    position:fixed;inset:0;z-index:30;background:#080806;display:none;
+    flex-direction:column;overflow-y:auto;
+  }
+  .access.open{display:flex}
+  .access-top{
+    display:flex;justify-content:space-between;align-items:center;gap:16px;
+    padding:clamp(20px,3vw,32px) clamp(20px,3.4vw,44px);
+    font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-60);
+  }
+  .access-top b{color:var(--ink);font-weight:400}
+  .access-top button:hover{color:var(--lime)}
+  .access-mid{
+    flex:1;display:flex;align-items:center;justify-content:center;
+    padding:clamp(16px,3vw,40px);
+  }
+  .access-box{width:min(560px,100%)}
+  .access-box .k{font-size:9px;letter-spacing:.24em;text-transform:uppercase;color:var(--lime);margin-bottom:14px}
+  .access-box h2{
+    font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;
+    font-size:clamp(30px,5vw,54px);font-weight:300;letter-spacing:-.03em;line-height:.98;margin-bottom:12px;
+  }
+  .access-box p.sub{font-size:12.5px;line-height:1.7;color:var(--ink-60);letter-spacing:.02em;max-width:44ch;margin-bottom:26px}
+  .tabs{display:flex;gap:0;border-bottom:1px solid var(--ink-14);margin-bottom:26px}
+  .tabs button{
+    padding:10px 18px 10px 0;margin-right:20px;font-size:9px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--ink-40);border-bottom:2px solid transparent;margin-bottom:-1px;
+  }
+  .tabs button[aria-selected="true"]{color:var(--ink);border-color:var(--lime)}
+  .dropframe{
+    border:1px dashed rgba(244,242,236,.32);padding:clamp(26px,4.4vw,42px) 20px;text-align:center;
+    cursor:pointer;transition:border-color .2s,background .2s;display:block;
+  }
+  .dropframe:hover,.dropframe.drag{border-color:var(--lime);background:rgba(216,255,62,.04)}
+  .dropframe.ready{border-style:solid;border-color:var(--lime);background:rgba(216,255,62,.06)}
+  .dropframe .i{display:block;font-size:22px;color:var(--lime);margin-bottom:14px}
+  .dropframe .s1{display:block;font-size:10px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:8px}
+  .dropframe .s2{display:block;font-size:10px;color:var(--ink-40);line-height:1.8;letter-spacing:.03em;word-break:break-all}
+  .dropframe input{display:none}
+  .go{
+    width:100%;margin-top:14px;padding:16px;background:var(--lime);color:#000;
+    font-size:10px;letter-spacing:.24em;text-transform:uppercase;
+    display:flex;align-items:center;justify-content:space-between;transition:filter .15s;
+  }
+  .go:hover{filter:brightness(1.12)}
+  .fine{font-size:8px;letter-spacing:.08em;line-height:1.8;color:var(--ink-40);margin-top:12px}
+  .reg{display:none}
+  .reg.open{display:block}
+  .p-in.hide{display:none}
+  .field{border-bottom:1px solid rgba(244,242,236,.28);margin-bottom:24px}
+  .field label{display:block;font-size:8px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-40);margin-bottom:6px}
+  .field input{
+    width:100%;border:0;background:none;color:var(--ink);padding:8px 0 10px;
+    font-family:var(--mono);font-size:16px;letter-spacing:.02em;
+  }
+  .field input:focus{outline:none}
+  .field:focus-within{border-color:var(--lime)}
+  .choice{display:flex;flex-direction:column;gap:10px;margin-bottom:24px}
+  .choice label{display:flex;gap:10px;align-items:flex-start;font-size:11px;line-height:1.7;
+    color:var(--ink-60);letter-spacing:.03em;cursor:pointer}
+  .choice input{accent-color:var(--lime);margin-top:2px}
+  .access-foot{
+    display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
+    padding:14px clamp(20px,3.4vw,44px);border-top:1px solid var(--ink-14);
+    font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-40);
+  }
+  .access-foot a{text-decoration:none}
+  .access-foot a:hover{color:var(--lime)}
+
+  @media (max-width:780px){
+    .side{display:none}
+    .hud-top .r{display:none}
+    .hud-top .ser{display:none}
+    .menu-btn{top:20px}
+    .hud-top{padding:22px 20px}
+    .hud-bottom{padding:18px 20px}
+    .br{width:20px;height:20px;top:12px;left:12px}
+    .br.tr{left:auto;right:12px}.br.bl{top:auto;bottom:12px;left:12px}.br.brr{top:auto;left:auto;bottom:12px;right:12px}
+    .thumb{width:72px;height:48px}
+    .zone{width:22%}
+    .filmstrip .tag{display:none}
+    .hud-bottom h1{font-size:24px}
+    .hud-bottom .count b{font-size:20px}
+    .filmstrip{padding:8px 10px}
+  }
+  @media (max-width:480px){
+    .hud-top .l{font-size:8px;letter-spacing:.12em}
+    .menu-btn{padding:6px 9px;font-size:8px}
+    .thumb{width:62px;height:42px}
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= APPLICAZIONE ================= -->
+<div class="app" id="app">
+  <div class="stage" id="stage">
+    <img class="layer on" id="lay-a" src="../static/wp1.jpg" alt="Ortensia">
+    <img class="layer" id="lay-b" src="" alt="" aria-hidden="true">
+    <div class="scrim"></div>
+
+    <span class="br tl"></span><span class="br tr"></span>
+    <span class="br bl"></span><span class="br brr"></span>
+
+    <header class="hud hud-top">
+      <div class="l"><span class="rec"></span> <b>PC / 01</b> <span class="ser">· BLU — SERIE</span></div>
+      <button class="menu-btn" id="menu-btn" aria-expanded="false" aria-controls="panel">Menu</button>
+      <div class="r">
+        <span id="exif1">ISO 200</span><span id="exif2">1/250 s</span><span id="exif3">f/1.8</span>
+      </div>
+    </header>
+
+    <span class="side l">Archivio privato · AES-256</span>
+    <span class="side r">PhotoCloud / 2026</span>
+
+    <button class="zone prev" id="prev" aria-label="Foto precedente">←</button>
+    <button class="zone next" id="next" aria-label="Foto successiva">→</button>
+
+    <div class="focus" id="focus"></div>
+
+    <div class="hud hud-bottom">
+      <div class="t">
+        <h1 id="title">Ortensia</h1>
+        <p class="meta" id="meta">06.06.2026 · IMG_0412.HEIC · 14,2 MB · <b>cifrata</b></p>
+      </div>
+      <div class="count">
+        <b id="counter">01</b>
+        <span>di 12 fotogrammi</span>
+      </div>
+    </div>
+  </div>
+
+  <nav class="filmstrip" aria-label="Rullino">
+    <span class="tag">Rullino · 12</span>
+    <div class="thumbs" id="thumbs"></div>
+  </nav>
+</div>
+
+<!-- ================= PANNELLO ================= -->
+<div class="scrim-panel" id="scrim-panel"></div>
+<aside class="panel" id="panel" aria-label="Strumenti dell'archivio">
+  <div class="panel-head">
+    <span>Archivio · strumenti</span>
+    <button id="panel-close">Chiudi ✕</button>
+  </div>
+  <div class="panel-body">
+    <div class="pgroup">
+      <div class="gl">Contenuto</div>
+      <label class="prow" for="up">Carica foto e video <span class="v">＋</span></label>
+      <input id="up" type="file" accept="image/*,video/*" multiple hidden>
+      <button class="prow" id="sel-mode">Seleziona più foto <span class="v">off</span></button>
+      <button class="prow" id="dl">Scarica selezionate <span class="v"><b id="n-sel">0</b></span></button>
+      <button class="prow" id="del">Sposta nel cestino <span class="v">⇢</span></button>
+      <button class="prow">Trova duplicati <span class="v">⌕</span></button>
+    </div>
+    <div class="pgroup">
+      <div class="gl">Ordinamento</div>
+      <button class="prow" id="grp">Raggruppa per mese <span class="v" id="grp-v">mese</span></button>
+      <button class="prow" id="theme">Tema scuro <span class="v" id="theme-v">auto</span></button>
+    </div>
+    <div class="pgroup">
+      <div class="gl">Archivio</div>
+      <button class="prow" id="open-access">File-chiave / accesso <span class="v">→</span></button>
+      <button class="prow">Cestino <span class="v">2</span></button>
+      <button class="prow">Esci <span class="v">⏻</span></button>
+      <a class="prow" href="index.html" style="text-decoration:none">Tutte le proposte <span class="v">04 / 05</span></a>
+    </div>
+  </div>
+  <div class="panel-foot">
+    PhotoCloud · 12 elementi · 148 MB<br>
+    Prototipo statico — nessun dato reale
+  </div>
+</aside>
+
+<!-- ================= ACCESSO ================= -->
+<div class="access" id="access" role="dialog" aria-modal="true" aria-label="Accesso all'archivio">
+  <div class="access-top">
+    <span><b>PC / 01</b> · Accesso all'archivio</span>
+    <button id="access-close">Chiudi ✕</button>
+  </div>
+
+  <div class="access-mid">
+    <div class="access-box">
+      <div class="k">Verifica del file-chiave</div>
+      <h2>Nessuna password.<br>Solo la tua chiave.</h2>
+      <p class="sub">PhotoCloud apre l'archivio presentando il file scaricato alla registrazione. Se non ce l'hai, i fotogrammi restano al buio.</p>
+
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" id="tab-in">Accesso</button>
+        <button role="tab" aria-selected="false" id="tab-up">Registrazione</button>
+      </div>
+
+      <form id="f-in" class="p-in" onsubmit="event.preventDefault();const d=document.getElementById('dropframe');if(d.classList.contains('ready'))location.reload();">
+        <label class="dropframe" id="dropframe" for="keyfile">
+          <span class="i">⌖</span>
+          <span class="s1" id="drop-s1">Inserisci il file-chiave</span>
+          <span class="s2" id="drop-s2">photocloud_auth_….json — trascina qui o clicca</span>
+        </label>
+        <input id="keyfile" type="file" accept=".json,.txt">
+        <button class="go" type="submit"><span>Entra nell'archivio</span><span>→</span></button>
+        <p class="fine">Il file viene letto e verificato, mai conservato. La chiave di cifratura non lascia il server.</p>
+      </form>
+
+      <form id="f-up" class="reg" onsubmit="event.preventDefault();">
+        <div class="field">
+          <label for="uname">Nome d'archivio</label>
+          <input id="uname" type="text" placeholder="valerio" autocomplete="username">
+        </div>
+        <div class="choice">
+          <label><input type="radio" name="k" checked> Genera una chiave sicura e scaricala</label>
+          <label><input type="radio" name="k"> Dettare una frase chiave (min. 8 caratteri)</label>
+        </div>
+        <button class="go" type="submit"><span>Registra e scarica la chiave</span><span>↓</span></button>
+        <p class="fine">Conserva il file: senza di esso l'archivio non è recuperabile.</p>
+      </form>
+    </div>
+  </div>
+
+  <div class="access-foot">
+    <span>Passo 1 di 2 · verifica del file</span>
+    <span><a href="#" id="access-back">← Torna al rullino</a> &nbsp;/&nbsp; <a href="index.html">Tutte le proposte</a></span>
+  </div>
+</div>
+
+<script>
+(function(){
+  const shots = [
+    {src:'../static/wp1.jpg', pos:'50% 50%', z:1, title:'Ortensia', date:'06.06.2026', file:'IMG_0412.HEIC', size:'14,2 MB', iso:'ISO 200', sh:'1/250 s', f:'f/1.8'},
+    {src:'../static/wp1.jpg', pos:'25% 70%', z:1.5, title:'Corolla', date:'06.06.2026', file:'IMG_0413.HEIC', size:'11,8 MB', iso:'ISO 200', sh:'1/320 s', f:'f/2.2'},
+    {src:'../static/wp3.jpg', pos:'50% 50%', z:1, title:'Prisma', date:'22.07.2026', file:'IMG_0478.HEIC', size:'9,4 MB', iso:'ISO 100', sh:'1/500 s', f:'f/8'},
+    {src:'../static/wp3.jpg', pos:'70% 30%', z:1.6, title:'Lastra', date:'22.07.2026', file:'IMG_0479.HEIC', size:'13,1 MB', iso:'ISO 100', sh:'1/640 s', f:'f/5.6'},
+    {src:'../static/wp2.jpg', pos:'50% 50%', z:1, title:'Vetro', date:'03.08.2026', file:'IMG_0531.HEIC', size:'8,7 MB', iso:'ISO 400', sh:'1/125 s', f:'f/2.8'},
+    {src:'../static/wp2.jpg', pos:'80% 60%', z:1.8, title:'Curva', date:'03.08.2026', file:'IMG_0532.HEIC', size:'16,3 MB', iso:'ISO 400', sh:'1/160 s', f:'f/3.5'},
+    {src:'../static/wp3.jpg', pos:'40% 90%', z:1.4, title:'Nodo', date:'14.09.2026', file:'IMG_0617.HEIC', size:'7,9 MB', iso:'ISO 160', sh:'1/250 s', f:'f/4'},
+    {src:'../static/wp2.jpg', pos:'15% 30%', z:1.5, title:'Filo', date:'14.09.2026', file:'IMG_0618.HEIC', size:'12,5 MB', iso:'ISO 160', sh:'1/200 s', f:'f/2'},
+    {src:'../static/wp1.jpg', pos:'60% 40%', z:1.7, title:'Petali', date:'02.10.2026', file:'IMG_0704.HEIC', size:'10,2 MB', iso:'ISO 320', sh:'1/180 s', f:'f/1.8'},
+    {src:'../static/wp3.jpg', pos:'85% 10%', z:1.5, title:'Riflesso', date:'02.10.2026', file:'IMG_0705.HEIC', size:'15,0 MB', iso:'ISO 320', sh:'1/220 s', f:'f/6.3'},
+    {src:'../static/wp2.jpg', pos:'35% 55%', z:1.4, title:'Onda', date:'08.11.2026', file:'IMG_0792.HEIC', size:'9,8 MB', iso:'ISO 250', sh:'1/140 s', f:'f/2.8'},
+    {src:'../static/wp1.jpg', pos:'5% 20%', z:1.9, title:'Sfocatura', date:'08.11.2026', file:'IMG_0793.HEIC', size:'11,1 MB', iso:'ISO 250', sh:'1/90 s', f:'f/1.4'}
+  ];
+
+  const layA = document.getElementById('lay-a');
+  const layB = document.getElementById('lay-b');
+  let front = layA, back = layB, cur = 0;
+
+  /* ---- rullino ---- */
+  const thumbsEl = document.getElementById('thumbs');
+  shots.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.className = 'thumb' + (i === 0 ? ' on' : '');
+    b.type = 'button';
+    b.setAttribute('aria-label', s.title + ', fotogramma ' + (i+1));
+    const img = document.createElement('img');
+    img.src = s.src;
+    img.alt = '';
+    img.loading = 'lazy';
+    img.style.objectPosition = s.pos;
+    img.style.transform = 'scale(' + s.z + ')';
+    const n = document.createElement('span');
+    n.className = 'n';
+    n.textContent = String(i+1).padStart(2,'0');
+    b.append(img, n);
+    b.onclick = () => go(i);
+    thumbsEl.appendChild(b);
+  });
+  const thumbs = [...thumbsEl.children];
+
+  function go(i){
+    if (i === cur && front.src) return;
+    cur = (i + shots.length) % shots.length;
+    const s = shots[cur];
+
+    back.src = s.src;
+    back.alt = s.title;
+    back.style.objectPosition = s.pos;
+    back.style.transform = 'scale(' + (s.z + .06) + ')';
+    back.style.transition = 'opacity .5s ease, transform 8s linear';
+    back.classList.remove('on');
+    void back.offsetWidth;
+    back.classList.add('on');
+    front.classList.remove('on');
+    const old = front;
+    setTimeout(() => { old.style.transform = 'scale(1.02)'; }, 520);
+    front = back; back = old;
+
+    document.getElementById('title').textContent = s.title;
+    document.getElementById('meta').innerHTML =
+      s.date + ' · ' + s.file + ' · ' + s.size + ' · <b>cifrata</b>';
+    document.getElementById('counter').textContent = String(cur+1).padStart(2,'0');
+    document.getElementById('exif1').textContent = s.iso;
+    document.getElementById('exif2').textContent = s.sh;
+    document.getElementById('exif3').textContent = s.f;
+    thumbs.forEach((t, j) => t.classList.toggle('on', j === cur));
+    const active = thumbs[cur];
+    if (active && active.scrollIntoView) {
+      active.scrollIntoView({block:'nearest', inline:'center', behavior:'smooth'});
+    }
+  }
+
+  document.getElementById('prev').onclick = () => go(cur - 1);
+  document.getElementById('next').onclick = () => go(cur + 1);
+  document.addEventListener('keydown', e => {
+    if (document.getElementById('access').classList.contains('open')) {
+      if (e.key === 'Escape') closeAccess();
+      return;
+    }
+    if (e.key === 'ArrowLeft') go(cur - 1);
+    if (e.key === 'ArrowRight') go(cur + 1);
+    if (e.key === 'Escape') closePanel();
+  });
+
+  /* ---- fuoco (decorativo) ---- */
+  const stage = document.getElementById('stage');
+  const focus = document.getElementById('focus');
+  stage.addEventListener('pointermove', e => {
+    if (e.pointerType !== 'mouse') return;
+    const r = stage.getBoundingClientRect();
+    focus.style.left = (e.clientX - r.left) + 'px';
+    focus.style.top = (e.clientY - r.top) + 'px';
+    focus.classList.add('show');
+  });
+  stage.addEventListener('pointerleave', () => focus.classList.remove('show'));
+
+  /* ---- pannello ---- */
+  const panel = document.getElementById('panel');
+  const scrim = document.getElementById('scrim-panel');
+  const menuBtn = document.getElementById('menu-btn');
+  function openPanel(){
+    panel.classList.add('open'); scrim.classList.add('on');
+    menuBtn.setAttribute('aria-expanded','true');
+  }
+  function closePanel(){
+    panel.classList.remove('open'); scrim.classList.remove('on');
+    menuBtn.setAttribute('aria-expanded','false');
+  }
+  menuBtn.onclick = () => panel.classList.contains('open') ? closePanel() : openPanel();
+  document.getElementById('panel-close').onclick = closePanel;
+  scrim.onclick = closePanel;
+
+  /* ---- modalità selezione ---- */
+  let selMode = false;
+  const selModeBtn = document.getElementById('sel-mode');
+  const selected = new Set();
+  selModeBtn.onclick = () => {
+    selMode = !selMode;
+    selModeBtn.querySelector('.v').textContent = selMode ? 'on' : 'off';
+    selModeBtn.style.background = selMode ? 'rgba(216,255,62,.12)' : '';
+    document.querySelectorAll('.thumb').forEach((t,i) => {
+      t.style.outline = selMode && selected.has(i) ? '2px solid #d8ff3e' : '';
+    });
+  };
+  thumbsEl.addEventListener('click', e => {
+    if (!selMode) return;
+    const t = e.target.closest('.thumb');
+    if (!t) return;
+    e.stopPropagation();
+    const i = [...thumbsEl.children].indexOf(t);
+    if (selected.has(i)) selected.delete(i); else selected.add(i);
+    t.style.outline = selected.has(i) ? '2px solid #d8ff3e' : '';
+    t.style.outlineOffset = '-2px';
+    document.getElementById('n-sel').textContent = selected.size;
+  }, true);
+
+  /* ---- raggruppamento ---- */
+  const grp = document.getElementById('grp'), grpV = document.getElementById('grp-v');
+  const modes = ['mese','giorno','anno','nessuno'];
+  let gi = 0;
+  grp.onclick = () => { gi = (gi+1)%modes.length; grpV.textContent = modes[gi]; };
+
+  /* ---- tema ---- */
+  const theme = document.getElementById('theme'), themeV = document.getElementById('theme-v');
+  const themes = ['auto','chiaro','scuro'];
+  let ti = 0;
+  theme.onclick = () => { ti = (ti+1)%themes.length; themeV.textContent = themes[ti]; };
+
+  /* ---- accesso ---- */
+  const access = document.getElementById('access');
+  function openAccess(){ access.classList.add('open'); closePanel(); }
+  function closeAccess(){ access.classList.remove('open'); }
+  document.getElementById('open-access').onclick = openAccess;
+  document.getElementById('access-close').onclick = closeAccess;
+  document.getElementById('access-back').onclick = e => { e.preventDefault(); closeAccess(); };
+
+  const kf = document.getElementById('keyfile');
+  const frame = document.getElementById('dropframe');
+  function ready(name){
+    document.getElementById('drop-s1').textContent = 'Chiave pronta';
+    document.getElementById('drop-s2').textContent = name;
+    frame.classList.add('ready');
+  }
+  kf.addEventListener('change', () => { if (kf.files[0]) ready(kf.files[0].name); });
+  ['dragenter','dragover'].forEach(ev => frame.addEventListener(ev, e => { e.preventDefault(); frame.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(ev => frame.addEventListener(ev, e => { e.preventDefault(); frame.classList.remove('drag'); }));
+  frame.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) ready(f.name); });
+
+  const tIn = document.getElementById('tab-in'), tUp = document.getElementById('tab-up');
+  const fIn = document.getElementById('f-in'), fUp = document.getElementById('f-up');
+  function tab(up){
+    tIn.setAttribute('aria-selected', String(!up));
+    tUp.setAttribute('aria-selected', String(up));
+    fIn.classList.toggle('hide', up);
+    fUp.classList.toggle('open', up);
+  }
+  tIn.onclick = () => tab(false);
+  tUp.onclick = () => tab(true);
+
+  go(0);
+})();
+</script>
+</body>
+</html>
