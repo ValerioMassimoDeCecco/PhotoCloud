@@ -1,0 +1,5 @@
+{
+  "name": "PhotoCloud Mobile & Android Studio",
+  "description": "App mobile installabile (PWA/TWA) e Release Builder Android per l'archivio foto e video cifrato end-to-end PhotoCloud.",
+  "requestFramePermissions": []
+}
