@@ -90,13 +90,24 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
   assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
   assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));
+  assert.ok(workflowYaml.includes('photocloud-release-v1.0.1-signed.apk'));
+
+  const mainActivityKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
+    'utf-8'
+  );
+  assert.ok(mainActivityKt.includes('saveDownloadedFile'));
+  assert.ok(mainActivityKt.includes('MediaStore.Downloads'));
+  assert.ok(mainActivityKt.includes('setDownloadListener'));
 
   const outDir = path.resolve(process.cwd(), 'release');
   const res = await compileSignedAndroidApk(outDir);
   assert.ok(fs.existsSync(res.apkPath));
+  assert.ok(res.apkPath.endsWith('photocloud-release-v1.0.1-signed.apk'));
   assert.equal(res.sha256.length, 64);
 
   const actionsStatus = await triggerGitHubActionsBuild();
   assert.equal(actionsStatus.repo, 'ValerioMassimoDeCecco/PhotoCloud');
   assert.equal(actionsStatus.workflowFile, '.github/workflows/android-release.yml');
+  assert.equal(actionsStatus.releaseTag, 'v1.0.1');
 });

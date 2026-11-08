@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag della Release GitHub (es. v1.0.0)'
+        description: 'Tag della Release GitHub (es. v1.0.1)'
         required: false
-        default: 'v1.0.0'
+        default: 'v1.0.1'
 
 permissions:
   contents: write
@@ -65,16 +65,16 @@ jobs:
             echo "Errore: nessun file APK trovato in app/build/outputs/apk/release"
             exit 1
           fi
-          cp "$APK_OUT" ../photocloud-release-v1.0.0-signed.apk
-          sha256sum ../photocloud-release-v1.0.0-signed.apk > ../photocloud-release-v1.0.0-signed.apk.sha256
+          cp "$APK_OUT" ../photocloud-release-v1.0.1-signed.apk
+          sha256sum ../photocloud-release-v1.0.1-signed.apk > ../photocloud-release-v1.0.1-signed.apk.sha256
 
       - name: Upload Signed APK as GitHub Actions Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: photocloud-release-v1.0.0-signed-apk
+          name: photocloud-release-v1.0.1-signed-apk
           path: |
-            photocloud-release-v1.0.0-signed.apk
-            photocloud-release-v1.0.0-signed.apk.sha256
+            photocloud-release-v1.0.1-signed.apk
+            photocloud-release-v1.0.1-signed.apk.sha256
           if-no-files-found: error
 
       - name: Determine Release Tag
@@ -85,7 +85,7 @@ jobs:
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "TAG=v1.0.0" >> $GITHUB_OUTPUT
+            echo "TAG=v1.0.1" >> $GITHUB_OUTPUT
           fi
 
       - name: Publish Signed APK to GitHub Releases
@@ -98,11 +98,13 @@ jobs:
             Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2).
 
             - **Application ID**: `com.valerio.photocloud`
-            - **APK Firmato**: `photocloud-release-v1.0.0-signed.apk`
-            - **Checksum SHA-256**: `photocloud-release-v1.0.0-signed.apk.sha256`
+            - **Versione**: `1.0.1` (`versionCode 2`)
+            - **Novità v1.0.1**: Risolto il salvataggio della chiave JSON (`photocloud_auth_*.json`) nella cartella `Download` durante la registrazione da app Android e aggiunto supporto completo per i download tramite `MediaStore.Downloads` e `DownloadManager`.
+            - **APK Firmato**: `photocloud-release-v1.0.1-signed.apk`
+            - **Checksum SHA-256**: `photocloud-release-v1.0.1-signed.apk.sha256`
           files: |
-            photocloud-release-v1.0.0-signed.apk
-            photocloud-release-v1.0.0-signed.apk.sha256
+            photocloud-release-v1.0.1-signed.apk
+            photocloud-release-v1.0.1-signed.apk.sha256
           draft: false
           prerelease: false
         env:

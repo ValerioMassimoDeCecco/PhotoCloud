@@ -153,6 +153,51 @@ document.addEventListener('DOMContentLoaded', function() {
     document.body.style.backgroundSize = 'cover';
     document.body.style.backgroundPosition = 'center';
     document.body.style.backgroundRepeat = 'no-repeat';
+
+    // Supporto scaricamento chiave per App Android (AndroidApp bridge) e Browser
+    const actualRegisterForm = document.getElementById('actual-register-form');
+    if (actualRegisterForm) {
+        actualRegisterForm.dataset.androidRegisterHooked = 'true';
+        actualRegisterForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            try {
+                const formData = new FormData(actualRegisterForm);
+                const response = await fetch(actualRegisterForm.getAttribute('action') || '/register', {
+                    method: 'POST',
+                    body: formData
+                });
+                const text = await response.text();
+                if (!response.ok) {
+                    alert(text || 'Errore durante la registrazione.');
+                    return;
+                }
+                const disp = response.headers.get('Content-Disposition') || '';
+                const match = disp.match(/filename="?([^";]+)"?/i);
+                const rawUser = (document.getElementById('register-username')?.value || 'user').trim();
+                const safeUser = rawUser.replace(/[^a-zA-Z0-9_-]/g, '_') || 'user';
+                const filename = (match && match[1]) ? match[1] : `photocloud_auth_${safeUser}.json`;
+
+                if (window.AndroidApp && typeof window.AndroidApp.saveDownloadedFile === 'function') {
+                    window.AndroidApp.saveDownloadedFile(filename, text, 'application/json');
+                } else {
+                    const blob = new Blob([text], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }
+                actualRegisterForm.reset();
+                toggleCustomKey();
+                loginTab.click();
+            } catch (err) {
+                alert('Errore durante la registrazione: ' + err);
+            }
+        });
+    }
 });
 </script>
 {% endblock %}
