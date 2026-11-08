@@ -49,11 +49,21 @@ data class RegisterResult(
     val errorMessage: String = ""
 )
 
+sealed class GallerySyncResult {
+    data class Authenticated(val items: List<MediaItemModel>) : GallerySyncResult()
+    object Unauthenticated : GallerySyncResult()
+    object NetworkError : GallerySyncResult()
+}
+
 class PhotoCloudApiClient(
     private val context: Context,
     @Volatile var baseUrl: String
 ) {
     private val cookiePrefs = context.getSharedPreferences("photocloud_cookie_store", Context.MODE_PRIVATE)
+    private val metaPrefs = context.getSharedPreferences("photocloud_metadata_cache", Context.MODE_PRIVATE)
+    private val diskCacheDir = File(context.cacheDir, "media_cache").apply {
+        if (!exists()) mkdirs()
+    }
 
     private val cookieJar = object : CookieJar {
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
@@ -83,6 +93,69 @@ class PhotoCloudApiClient(
         }
     }
 
+    private fun currentHostKey(): String {
+        return try {
+            Uri.parse(cleanBaseUrl()).host ?: "localhost"
+        } catch (_: Exception) {
+            "localhost"
+        }
+    }
+
+    /**
+     * Synchronously returns true (0ms) if a session cookie is stored for the current server.
+     */
+    fun hasActiveSessionCookie(): Boolean {
+        val map = loadCookieMap(currentHostKey())
+        return map.isNotEmpty()
+    }
+
+    fun getCachedGalleryItems(): List<MediaItemModel> {
+        val raw = metaPrefs.getString("gallery_${currentHostKey()}", null) ?: return emptyList()
+        return parseCachedJsonList(raw)
+    }
+
+    fun saveCachedGalleryItems(items: List<MediaItemModel>) {
+        metaPrefs.edit().putString("gallery_${currentHostKey()}", serializeJsonList(items)).apply()
+    }
+
+    fun getCachedTrashItems(): List<MediaItemModel> {
+        val raw = metaPrefs.getString("trash_${currentHostKey()}", null) ?: return emptyList()
+        return parseCachedJsonList(raw)
+    }
+
+    fun saveCachedTrashItems(items: List<MediaItemModel>) {
+        metaPrefs.edit().putString("trash_${currentHostKey()}", serializeJsonList(items)).apply()
+    }
+
+    private fun serializeJsonList(items: List<MediaItemModel>): String {
+        val arr = JSONArray()
+        for (item in items) {
+            val obj = JSONObject()
+            obj.put("filename", item.filename)
+            obj.put("timestamp", item.timestamp)
+            arr.put(obj)
+        }
+        return arr.toString()
+    }
+
+    private fun parseCachedJsonList(raw: String): List<MediaItemModel> {
+        return try {
+            val arr = JSONArray(raw)
+            val list = ArrayList<MediaItemModel>(arr.length())
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val fn = obj.optString("filename", "")
+                val ts = obj.optDouble("timestamp", 0.0)
+                if (fn.isNotBlank()) {
+                    list.add(MediaItemModel(fn, ts))
+                }
+            }
+            list
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     private fun loadCookieMap(host: String): Map<String, String> {
         val raw = cookiePrefs.getString(host, null) ?: return emptyMap()
         return try {
@@ -109,16 +182,21 @@ class PhotoCloudApiClient(
 
     fun clearCookies() {
         cookiePrefs.edit().clear().apply()
+        metaPrefs.edit().clear().apply()
         bitmapCache.evictAll()
+        try {
+            diskCacheDir.listFiles()?.forEach { it.delete() }
+        } catch (_: Exception) {
+        }
     }
 
     val httpClient: OkHttpClient = OkHttpClient.Builder()
         .cookieJar(cookieJar)
         .followRedirects(true)
         .followSslRedirects(true)
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
-        .writeTimeout(90, TimeUnit.SECONDS)
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
     private val noRedirectClient: OkHttpClient = httpClient.newBuilder()
@@ -126,15 +204,37 @@ class PhotoCloudApiClient(
         .followSslRedirects(false)
         .build()
 
-    private val maxCacheKb = (Runtime.getRuntime().maxMemory() / 1024 / 6).toInt().coerceAtLeast(16 * 1024)
+    private val maxCacheKb = (Runtime.getRuntime().maxMemory() / 1024 / 5).toInt().coerceAtLeast(24 * 1024)
     private val bitmapCache = object : LruCache<String, Bitmap>(maxCacheKb) {
         override fun sizeOf(key: String, value: Bitmap): Int {
             return value.byteCount / 1024
         }
     }
 
+    private fun diskCacheFile(filename: String, fromTrash: Boolean): File {
+        val safeName = filename.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val prefix = if (fromTrash) "trash" else "gal"
+        return File(diskCacheDir, "${prefix}_${safeName}")
+    }
+
     fun getCachedBitmap(filename: String, fromTrash: Boolean = false): Bitmap? {
-        return bitmapCache.get("$fromTrash:$filename")
+        val cacheKey = "$fromTrash:$filename"
+        bitmapCache.get(cacheKey)?.let { return it }
+        val diskFile = diskCacheFile(filename, fromTrash)
+        if (diskFile.exists() && diskFile.length() > 0L) {
+            try {
+                val options = BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                val diskBmp = BitmapFactory.decodeFile(diskFile.absolutePath, options)
+                if (diskBmp != null) {
+                    bitmapCache.put(cacheKey, diskBmp)
+                    return diskBmp
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return null
     }
 
     private fun cleanBaseUrl(): String = baseUrl.trim().removeSuffix("/")
@@ -164,6 +264,22 @@ class PhotoCloudApiClient(
         val cacheKey = "$fromTrash:$filename"
         bitmapCache.get(cacheKey)?.let { return@withContext it }
 
+        // Check persistent local disk cache first for instant offline/cold-start display
+        val diskFile = diskCacheFile(filename, fromTrash)
+        if (diskFile.exists() && diskFile.length() > 0L) {
+            try {
+                val options = BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                val diskBmp = BitmapFactory.decodeFile(diskFile.absolutePath, options)
+                if (diskBmp != null) {
+                    bitmapCache.put(cacheKey, diskBmp)
+                    return@withContext diskBmp
+                }
+            } catch (_: Exception) {
+            }
+        }
+
         try {
             val request = Request.Builder()
                 .url(getMediaUrl(filename, fromTrash))
@@ -174,6 +290,14 @@ class PhotoCloudApiClient(
                 if (!response.isSuccessful) return@withContext null
                 val bytes = response.body?.bytes() ?: return@withContext null
                 if (bytes.isEmpty()) return@withContext null
+
+                try {
+                    FileOutputStream(diskFile).use { out ->
+                        out.write(bytes)
+                        out.flush()
+                    }
+                } catch (_: Exception) {
+                }
 
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -275,10 +399,9 @@ class PhotoCloudApiClient(
     }
 
     /**
-     * Checks session and fetches Gallery media items from either main.py (HTML) or server.ts.
-     * Returns null if not logged in, or the list of MediaItemModel if authenticated.
+     * Synchronizes gallery state in the background without blocking startup.
      */
-    suspend fun fetchGalleryIfAuthenticated(): List<MediaItemModel>? = withContext(Dispatchers.IO) {
+    suspend fun syncGallerySession(): GallerySyncResult = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
                 .url("${cleanBaseUrl()}/")
@@ -287,20 +410,27 @@ class PhotoCloudApiClient(
                 .build()
 
             httpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext null
-                val html = response.body?.string() ?: return@withContext null
+                if (response.code == 401 || response.code == 403) {
+                    return@withContext GallerySyncResult.Unauthenticated
+                }
+                if (!response.isSuccessful) {
+                    return@withContext GallerySyncResult.NetworkError
+                }
+                val html = response.body?.string() ?: return@withContext GallerySyncResult.NetworkError
 
-                // If login page is returned, user is not authenticated
+                // If login page is returned, user session is not active on server
                 if (html.contains("id=\"actual-login-form\"") ||
                     (html.contains("class=\"auth-container\"") && !html.contains("gallery-grid"))
                 ) {
-                    return@withContext null
+                    return@withContext GallerySyncResult.Unauthenticated
                 }
 
-                parseMediaItemsFromHtml(html)
+                val parsed = parseMediaItemsFromHtml(html)
+                saveCachedGalleryItems(parsed)
+                GallerySyncResult.Authenticated(parsed)
             }
         } catch (_: Exception) {
-            null
+            GallerySyncResult.NetworkError
         }
     }
 
@@ -313,13 +443,15 @@ class PhotoCloudApiClient(
                 .build()
 
             httpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext emptyList()
-                val html = response.body?.string() ?: return@withContext emptyList()
+                if (!response.isSuccessful) return@withContext getCachedTrashItems()
+                val html = response.body?.string() ?: return@withContext getCachedTrashItems()
                 if (html.contains("id=\"actual-login-form\"")) return@withContext emptyList()
-                parseMediaItemsFromHtml(html)
+                val parsed = parseMediaItemsFromHtml(html)
+                saveCachedTrashItems(parsed)
+                parsed
             }
         } catch (_: Exception) {
-            emptyList()
+            getCachedTrashItems()
         }
     }
 
@@ -446,6 +578,7 @@ class PhotoCloudApiClient(
             httpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     bitmapCache.remove("false:$filename")
+                    diskCacheFile(filename, false).delete()
                     true
                 } else false
             }
@@ -468,7 +601,10 @@ class PhotoCloudApiClient(
 
             httpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
-                    filenames.forEach { bitmapCache.remove("false:$it") }
+                    filenames.forEach {
+                        bitmapCache.remove("false:$it")
+                        diskCacheFile(it, false).delete()
+                    }
                     true
                 } else false
             }
@@ -488,6 +624,7 @@ class PhotoCloudApiClient(
             httpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     bitmapCache.remove("true:$filename")
+                    diskCacheFile(filename, true).delete()
                     true
                 } else false
             }
@@ -507,6 +644,7 @@ class PhotoCloudApiClient(
             httpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     bitmapCache.remove("true:$filename")
+                    diskCacheFile(filename, true).delete()
                     true
                 } else false
             }
@@ -522,7 +660,12 @@ class PhotoCloudApiClient(
                 .header("Accept", "application/json")
                 .post("{}".toRequestBody("application/json".toMediaTypeOrNull()))
                 .build()
-            httpClient.newCall(request).execute().use { it.isSuccessful }
+            httpClient.newCall(request).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    saveCachedTrashItems(emptyList())
+                    true
+                } else false
+            }
         } catch (_: Exception) {
             false
         }

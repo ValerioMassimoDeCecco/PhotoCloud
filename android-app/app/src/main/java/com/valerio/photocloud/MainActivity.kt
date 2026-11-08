@@ -245,11 +245,20 @@ fun PhotoCloudNativeApp(
     var showServerDialog by remember { mutableStateOf(false) }
     var tempServerInput by remember { mutableStateOf(serverUrl) }
 
-    var isCheckingSession by remember { mutableStateOf(true) }
-    var isAuthenticated by remember { mutableStateOf(false) }
-    var isBiometricLocked by remember { mutableStateOf(false) }
     var biometricEnabled by remember {
         mutableStateOf(prefs.getBoolean("biometric_enabled", true))
+    }
+
+    // 0ms Instant Startup Hydration: synchronously read cookie presence and cached metadata
+    var isAuthenticated by remember(serverUrl) {
+        mutableStateOf(apiClient.hasActiveSessionCookie())
+    }
+    var isBiometricLocked by remember(serverUrl) {
+        mutableStateOf(
+            apiClient.hasActiveSessionCookie() &&
+                prefs.getBoolean("biometric_enabled", true) &&
+                activity.canUseBiometrics()
+        )
     }
 
     var savedKeyBytes by remember {
@@ -264,8 +273,12 @@ fun PhotoCloudNativeApp(
         )
     }
 
-    var galleryItems by remember { mutableStateOf<List<MediaItemModel>>(emptyList()) }
-    var trashItems by remember { mutableStateOf<List<MediaItemModel>>(emptyList()) }
+    var galleryItems by remember(serverUrl) {
+        mutableStateOf(apiClient.getCachedGalleryItems())
+    }
+    var trashItems by remember(serverUrl) {
+        mutableStateOf(apiClient.getCachedTrashItems())
+    }
     var infoDialogMessage by remember { mutableStateOf<String?>(null) }
 
     fun saveKeyForBiometrics(bytes: ByteArray) {
@@ -274,38 +287,46 @@ fun PhotoCloudNativeApp(
         prefs.edit().putString("saved_auth_key_b64", b64).apply()
     }
 
-    fun refreshVault(requireBiometricOnInitialUnlock: Boolean = false) {
+    fun refreshVaultSilently() {
         scope.launch {
-            val gallery = apiClient.fetchGalleryIfAuthenticated()
-            if (gallery != null) {
-                isAuthenticated = true
-                galleryItems = gallery
-                trashItems = apiClient.fetchTrashItems()
-                if (requireBiometricOnInitialUnlock && biometricEnabled && activity.canUseBiometrics()) {
-                    isBiometricLocked = true
-                    activity.showBiometricPrompt(
-                        onSuccess = { isBiometricLocked = false },
-                        onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
-                    )
+            when (val syncResult = apiClient.syncGallerySession()) {
+                is GallerySyncResult.Authenticated -> {
+                    isAuthenticated = true
+                    galleryItems = syncResult.items
+                    trashItems = apiClient.fetchTrashItems()
                 }
-            } else {
-                isAuthenticated = false
-                isBiometricLocked = false
+                is GallerySyncResult.Unauthenticated -> {
+                    apiClient.clearCookies()
+                    isAuthenticated = false
+                    isBiometricLocked = false
+                    galleryItems = emptyList()
+                    trashItems = emptyList()
+                }
+                is GallerySyncResult.NetworkError -> {
+                    // Keep showing cached items without interrupting the user
+                }
             }
-            isCheckingSession = false
         }
     }
 
+    // Trigger BiometricPrompt immediately at 0ms if vault is locked on startup
+    LaunchedEffect(isAuthenticated, isBiometricLocked) {
+        if (isAuthenticated && isBiometricLocked) {
+            activity.showBiometricPrompt(
+                onSuccess = { isBiometricLocked = false },
+                onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
+            )
+        }
+    }
+
+    // Silent background sync only when a session cookie exists
     LaunchedEffect(serverUrl) {
-        isCheckingSession = true
-        refreshVault(requireBiometricOnInitialUnlock = true)
+        if (apiClient.hasActiveSessionCookie()) {
+            refreshVaultSilently()
+        }
     }
 
-    if (isCheckingSession) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(strokeWidth = 3.dp)
-        }
-    } else if (isAuthenticated && isBiometricLocked) {
+    if (isAuthenticated && isBiometricLocked) {
         NativeBiometricLockScreen(
             onUnlockClick = {
                 activity.showBiometricPrompt(
@@ -333,7 +354,11 @@ fun PhotoCloudNativeApp(
                 showServerDialog = true
             },
             onLoginSuccess = {
-                refreshVault(requireBiometricOnInitialUnlock = false)
+                isAuthenticated = true
+                isBiometricLocked = false
+                galleryItems = apiClient.getCachedGalleryItems()
+                trashItems = apiClient.getCachedTrashItems()
+                refreshVaultSilently()
             },
             onShowInfo = { msg ->
                 infoDialogMessage = msg
@@ -364,7 +389,7 @@ fun PhotoCloudNativeApp(
                 }
             },
             onToggleTheme = onToggleTheme,
-            onRefresh = { refreshVault(requireBiometricOnInitialUnlock = false) },
+            onRefresh = { refreshVaultSilently() },
             onOpenServerConfig = {
                 tempServerInput = serverUrl
                 showServerDialog = true
@@ -1664,10 +1689,17 @@ fun MediaGridTile(
                     )
                 }
             } else if (!loadFailed) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PhotoLibrary,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f),
+                        modifier = Modifier.size(24.dp)
                     )
                 }
             } else {

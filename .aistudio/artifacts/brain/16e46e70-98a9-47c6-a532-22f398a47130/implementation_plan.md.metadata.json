@@ -1,6 +1,6 @@
 {
-  "summary":  "Piano di implementazione per ripristinare integralmente la web app originale PhotoCloud (template HTML, fogli di stile CSS e script JS originali), generare e compilare da zero il client Android nativo connesso al server PhotoCloud e pubblicare automaticamente il file APK compilato nelle GitHub Releases del repository ValerioMassimoDeCecco/PhotoCloud.",
-  "updatedAt":  "2026-11-08T12:15:26.783936830Z",
+  "summary":  "Piano di implementazione per PhotoCloud Android v1.0.4: avvio istantaneo a 0ms senza cerchio di caricamento (cache locale + sync silenzioso in background) e certificato di firma Keystore persistente nel repository per aggiornamenti diretti dell'APK senza disinstallazione.",
+  "updatedAt":  "2026-11-08T19:27:09.936615710Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
