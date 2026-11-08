@@ -1,10 +1,13 @@
 package com.valerio.photocloud
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Base64
+import android.view.WindowManager
 import android.widget.MediaController
 import android.widget.Toast
 import android.widget.VideoView
@@ -25,28 +28,36 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
@@ -57,14 +68,19 @@ import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.ManageSearch
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestoreFromTrash
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -74,17 +90,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -102,20 +129,134 @@ enum class GroupingMode(val label: String) {
     YEAR("Anno")
 }
 
-enum class VaultTab {
-    GALLERY,
-    TRASH
+enum class SortOrder(val label: String) {
+    NEWEST("Più recenti"),
+    OLDEST("Più vecchi"),
+    NAME_ASC("Nome (A-Z)")
 }
 
+enum class ThemeMode(val label: String) {
+    SYSTEM("Sistema"),
+    LIGHT("Chiaro"),
+    DARK("Scuro")
+}
+
+enum class AccentPreset(
+    val id: String,
+    val label: String,
+    val primaryDark: Color,
+    val primaryContainerDark: Color,
+    val onPrimaryContainerDark: Color,
+    val primaryLight: Color,
+    val primaryContainerLight: Color,
+    val onPrimaryContainerLight: Color
+) {
+    VIOLET(
+        "violet",
+        "Viola Notte",
+        Color(0xFFD0BCFF),
+        Color(0xFF4F378B),
+        Color(0xFFEADDFF),
+        Color(0xFF6750A4),
+        Color(0xFFEADDFF),
+        Color(0xFF21005D)
+    ),
+    OCEAN(
+        "ocean",
+        "Blu Oceano",
+        Color(0xFFA8C7FA),
+        Color(0xFF0842A0),
+        Color(0xFFD3E3FD),
+        Color(0xFF0B57D0),
+        Color(0xFFD3E3FD),
+        Color(0xFF041E49)
+    ),
+    EMERALD(
+        "emerald",
+        "Smeraldo",
+        Color(0xFF80D9B2),
+        Color(0xFF005138),
+        Color(0xFF9CF6CE),
+        Color(0xFF006C4C),
+        Color(0xFF89F8C7),
+        Color(0xFF002114)
+    ),
+    AMBER(
+        "amber",
+        "Ambra Solare",
+        Color(0xFFFFB951),
+        Color(0xFF633F00),
+        Color(0xFFFFDDB3),
+        Color(0xFF825500),
+        Color(0xFFFFDDB3),
+        Color(0xFF291800)
+    ),
+    ROSE(
+        "rose",
+        "Rosa Corallo",
+        Color(0xFFFFB2BE),
+        Color(0xFF7B293B),
+        Color(0xFFFFD9DE),
+        Color(0xFF9A4052),
+        Color(0xFFFFD9DE),
+        Color(0xFF3F0013)
+    ),
+    MONOCHROME(
+        "mono",
+        "Bianco & Nero",
+        Color(0xFFE2E2E2),
+        Color(0xFF353535),
+        Color(0xFFF5F5F5),
+        Color(0xFF1E1E1E),
+        Color(0xFFE0E0E0),
+        Color(0xFF111111)
+    )
+}
+
+enum class VaultTab {
+    GALLERY,
+    TRASH,
+    SETTINGS
+}
+
+data class CustomizationState(
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val amoledBlack: Boolean = false,
+    val dynamicColors: Boolean = true,
+    val accentPreset: AccentPreset = AccentPreset.VIOLET,
+    val monochromeAppIcon: Boolean = false,
+    val gridColumns: Int = 3,
+    val gridSpacingDp: Int = 3,
+    val tileCornerRadiusDp: Int = 10,
+    val portraitAspectRatio: Boolean = false,
+    val defaultGrouping: GroupingMode = GroupingMode.MONTH,
+    val sortOrder: SortOrder = SortOrder.NEWEST,
+    val showVideoBadges: Boolean = true,
+    val showFloatingBarLabels: Boolean = true,
+    val compactFloatingBar: Boolean = false,
+    val hapticsEnabled: Boolean = true,
+    val confirmBeforeTrash: Boolean = false,
+    val autoplayVideos: Boolean = true,
+    val biometricEnabled: Boolean = true,
+    val lockOnBackground: Boolean = false,
+    val secureScreenFlag: Boolean = false
+)
+
 /**
- * PhotoCloud 100% Native Android Client v1.0.3
- * - Native Biometric Authentication (BiometricPrompt: Fingerprint / Face Unlock + Quick Biometric Login)
- * - Pure Jetpack Compose Material You (MD3 Dynamic Color) UI — NO WebView
- * - 120Hz High Refresh Rate display mode & spring physics
- * - Bottom Floating Bar (Material You Pill Bar)
- * - Instant Fullscreen 120Hz Lightbox with HorizontalPager + Pinch-to-Zoom
+ * PhotoCloud 100% Native Android Client v1.0.5
+ * - 0ms Instant Startup (Synchronous cookie/cache hydration, zero loading circle)
+ * - Drag-to-Select Multiple Media in LazyVerticalGrid
+ * - Full Settings & Customization Menu (Grid, Theme, AMOLED, Accents, Security, Floating Bar, Cache)
+ * - Dual App Icon Support (Color Purple/Night & Black/White Monochrome via Launcher Aliases)
+ * - Native Biometric Authentication (BiometricPrompt)
  */
 class MainActivity : FragmentActivity() {
+
+    private var onBackgroundLockCallback: (() -> Unit)? = null
+
+    fun setOnBackgroundLockListener(listener: (() -> Unit)?) {
+        onBackgroundLockCallback = listener
+    }
 
     private fun enableHighRefreshRate120Hz() {
         try {
@@ -134,6 +275,39 @@ class MainActivity : FragmentActivity() {
                 }
             }
             window.attributes = params
+        } catch (_: Exception) {
+        }
+    }
+
+    fun applySecureScreenFlag(enabled: Boolean) {
+        try {
+            if (enabled) {
+                window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    fun setLauncherIconMonochrome(monochrome: Boolean) {
+        try {
+            val pm = packageManager
+            val colorComp = ComponentName(this, "com.valerio.photocloud.LauncherColor")
+            val bwComp = ComponentName(this, "com.valerio.photocloud.LauncherMonochrome")
+
+            pm.setComponentEnabledSetting(
+                colorComp,
+                if (monochrome) PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                else PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                PackageManager.DONT_KILL_APP
+            )
+            pm.setComponentEnabledSetting(
+                bwComp,
+                if (monochrome) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP
+            )
         } catch (_: Exception) {
         }
     }
@@ -178,6 +352,11 @@ class MainActivity : FragmentActivity() {
         prompt.authenticate(promptInfo)
     }
 
+    override fun onStop() {
+        super.onStop()
+        onBackgroundLockCallback?.invoke()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableHighRefreshRate120Hz()
@@ -191,17 +370,114 @@ class MainActivity : FragmentActivity() {
         setContent {
             val context = LocalContext.current
             val systemDark = isSystemInDarkTheme()
-            var isDarkTheme by remember {
-                mutableStateOf(prefs.getBoolean("dark_mode", systemDark))
+
+            var custom by remember {
+                mutableStateOf(
+                    CustomizationState(
+                        themeMode = ThemeMode.entries.find {
+                            it.name == prefs.getString("theme_mode", ThemeMode.SYSTEM.name)
+                        } ?: ThemeMode.SYSTEM,
+                        amoledBlack = prefs.getBoolean("amoled_black", false),
+                        dynamicColors = prefs.getBoolean("dynamic_colors", true),
+                        accentPreset = AccentPreset.entries.find {
+                            it.id == prefs.getString("accent_preset", AccentPreset.VIOLET.id)
+                        } ?: AccentPreset.VIOLET,
+                        monochromeAppIcon = prefs.getBoolean("monochrome_app_icon", false),
+                        gridColumns = prefs.getInt("grid_columns", 3).coerceIn(2, 5),
+                        gridSpacingDp = prefs.getInt("grid_spacing_dp", 3).coerceIn(1, 12),
+                        tileCornerRadiusDp = prefs.getInt("tile_corner_dp", 10).coerceIn(0, 28),
+                        portraitAspectRatio = prefs.getBoolean("portrait_aspect", false),
+                        defaultGrouping = GroupingMode.entries.find {
+                            it.name == prefs.getString("default_grouping", GroupingMode.MONTH.name)
+                        } ?: GroupingMode.MONTH,
+                        sortOrder = SortOrder.entries.find {
+                            it.name == prefs.getString("sort_order", SortOrder.NEWEST.name)
+                        } ?: SortOrder.NEWEST,
+                        showVideoBadges = prefs.getBoolean("show_video_badges", true),
+                        showFloatingBarLabels = prefs.getBoolean("show_floating_labels", true),
+                        compactFloatingBar = prefs.getBoolean("compact_floating_bar", false),
+                        hapticsEnabled = prefs.getBoolean("haptics_enabled", true),
+                        confirmBeforeTrash = prefs.getBoolean("confirm_before_trash", false),
+                        autoplayVideos = prefs.getBoolean("autoplay_videos", true),
+                        biometricEnabled = prefs.getBoolean("biometric_enabled", true),
+                        lockOnBackground = prefs.getBoolean("lock_on_background", false),
+                        secureScreenFlag = prefs.getBoolean("secure_screen_flag", false)
+                    )
+                )
             }
 
-            val colorScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (isDarkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            fun updateCustom(newState: CustomizationState) {
+                custom = newState
+                prefs.edit()
+                    .putString("theme_mode", newState.themeMode.name)
+                    .putBoolean("amoled_black", newState.amoledBlack)
+                    .putBoolean("dynamic_colors", newState.dynamicColors)
+                    .putString("accent_preset", newState.accentPreset.id)
+                    .putBoolean("monochrome_app_icon", newState.monochromeAppIcon)
+                    .putInt("grid_columns", newState.gridColumns)
+                    .putInt("grid_spacing_dp", newState.gridSpacingDp)
+                    .putInt("tile_corner_dp", newState.tileCornerRadiusDp)
+                    .putBoolean("portrait_aspect", newState.portraitAspectRatio)
+                    .putString("default_grouping", newState.defaultGrouping.name)
+                    .putString("sort_order", newState.sortOrder.name)
+                    .putBoolean("show_video_badges", newState.showVideoBadges)
+                    .putBoolean("show_floating_labels", newState.showFloatingBarLabels)
+                    .putBoolean("compact_floating_bar", newState.compactFloatingBar)
+                    .putBoolean("haptics_enabled", newState.hapticsEnabled)
+                    .putBoolean("confirm_before_trash", newState.confirmBeforeTrash)
+                    .putBoolean("autoplay_videos", newState.autoplayVideos)
+                    .putBoolean("biometric_enabled", newState.biometricEnabled)
+                    .putBoolean("lock_on_background", newState.lockOnBackground)
+                    .putBoolean("secure_screen_flag", newState.secureScreenFlag)
+                    .apply()
+            }
+
+            LaunchedEffect(custom.secureScreenFlag) {
+                applySecureScreenFlag(custom.secureScreenFlag)
+            }
+
+            val isDark = when (custom.themeMode) {
+                ThemeMode.SYSTEM -> systemDark
+                ThemeMode.DARK -> true
+                ThemeMode.LIGHT -> false
+            }
+
+            val baseScheme = if (custom.dynamicColors && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
             } else {
-                if (isDarkTheme) darkColorScheme() else lightColorScheme()
+                val preset = custom.accentPreset
+                if (isDark) {
+                    darkColorScheme(
+                        primary = preset.primaryDark,
+                        primaryContainer = preset.primaryContainerDark,
+                        onPrimaryContainer = preset.onPrimaryContainerDark,
+                        secondaryContainer = preset.primaryContainerDark.copy(alpha = 0.75f),
+                        onSecondaryContainer = preset.onPrimaryContainerDark
+                    )
+                } else {
+                    lightColorScheme(
+                        primary = preset.primaryLight,
+                        primaryContainer = preset.primaryContainerLight,
+                        onPrimaryContainer = preset.onPrimaryContainerLight,
+                        secondaryContainer = preset.primaryContainerLight.copy(alpha = 0.75f),
+                        onSecondaryContainer = preset.onPrimaryContainerLight
+                    )
+                }
             }
 
-            MaterialTheme(colorScheme = colorScheme) {
+            val finalColorScheme = if (isDark && custom.amoledBlack) {
+                baseScheme.copy(
+                    background = Color.Black,
+                    surface = Color.Black,
+                    surfaceContainerLow = Color(0xFF0B0B0E),
+                    surfaceContainer = Color(0xFF121216),
+                    surfaceContainerHigh = Color(0xFF1A1A20)
+                )
+            } else {
+                baseScheme
+            }
+
+            MaterialTheme(colorScheme = finalColorScheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -210,12 +486,9 @@ class MainActivity : FragmentActivity() {
                         activity = this@MainActivity,
                         apiClient = apiClient,
                         initialServerUrl = initialServerUrl,
-                        isDarkTheme = isDarkTheme,
-                        onToggleTheme = {
-                            val next = !isDarkTheme
-                            isDarkTheme = next
-                            prefs.edit().putBoolean("dark_mode", next).apply()
-                        },
+                        custom = custom,
+                        isDarkTheme = isDark,
+                        onUpdateCustom = { updateCustom(it) },
                         onSaveServerUrl = { newUrl ->
                             val cleaned = newUrl.trim().removeSuffix("/")
                             apiClient.baseUrl = cleaned
@@ -228,13 +501,116 @@ class MainActivity : FragmentActivity() {
     }
 }
 
+/**
+ * High-precision vector rendering of the user's attached PhotoCloud logo
+ * (supports both Color Purple/Night and Monochrome Black & White).
+ */
+@Composable
+fun PhotoCloudLogoBadge(
+    monochrome: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Canvas(
+        modifier = modifier
+            .clip(RoundedCornerShape(24))
+    ) {
+        val w = size.width
+        val h = size.height
+
+        // 1. Squircle gradient background
+        val bgColors = if (monochrome) {
+            listOf(Color(0xFF343434), Color(0xFF1A1A1A), Color(0xFF070707))
+        } else {
+            listOf(Color(0xFF521563), Color(0xFF26134F), Color(0xFF090D2B))
+        }
+        drawRoundRect(
+            brush = Brush.linearGradient(
+                colors = bgColors,
+                start = Offset(0f, 0f),
+                end = Offset(w, h)
+            ),
+            cornerRadius = CornerRadius(w * 0.22f, h * 0.22f)
+        )
+
+        val strokeBack = if (monochrome) Color(0xFF828282) else Color(0xFF886EC6)
+        val strokeMid = if (monochrome) Color(0xFFB5B5B5) else Color(0xFFB39CE8)
+        val fillMid = if (monochrome) Color(0xFF181818) else Color(0xFF1E1143)
+        val strokeFront = if (monochrome) Color(0xFFF7F7F7) else Color(0xFFF4EEFF)
+        val fillFront = if (monochrome) Color(0xFF1A1A1A) else Color(0xFF211147)
+        val sunColor = if (monochrome) Color(0xFFF5F5F5) else Color(0xFFFEFCD5)
+
+        val sw = w * 0.035f
+
+        // 2. Back rounded frame
+        drawRoundRect(
+            color = strokeBack,
+            topLeft = Offset(w * 0.23f, h * 0.38f),
+            size = Size(w * 0.35f, h * 0.35f),
+            cornerRadius = CornerRadius(w * 0.05f, h * 0.05f),
+            style = Stroke(width = sw)
+        )
+
+        // 3. Middle rounded frame
+        drawRoundRect(
+            color = fillMid,
+            topLeft = Offset(w * 0.32f, h * 0.31f),
+            size = Size(w * 0.35f, h * 0.35f),
+            cornerRadius = CornerRadius(w * 0.05f, h * 0.05f)
+        )
+        drawRoundRect(
+            color = strokeMid,
+            topLeft = Offset(w * 0.32f, h * 0.31f),
+            size = Size(w * 0.35f, h * 0.35f),
+            cornerRadius = CornerRadius(w * 0.05f, h * 0.05f),
+            style = Stroke(width = sw)
+        )
+
+        // 4. Sun & Glow (top-right)
+        val sunCenter = Offset(w * 0.685f, h * 0.285f)
+        drawCircle(
+            color = sunColor.copy(alpha = 0.16f),
+            radius = w * 0.12f,
+            center = sunCenter
+        )
+        drawCircle(
+            color = sunColor.copy(alpha = 0.28f),
+            radius = w * 0.088f,
+            center = sunCenter
+        )
+        drawCircle(
+            color = sunColor,
+            radius = w * 0.06f,
+            center = sunCenter
+        )
+
+        // 5. Front folded right-triangle card
+        val triPath = Path().apply {
+            moveTo(w * 0.41f, h * 0.25f)
+            lineTo(w * 0.75f, h * 0.59f)
+            lineTo(w * 0.41f, h * 0.59f)
+            close()
+        }
+        drawPath(path = triPath, color = fillFront)
+        drawPath(
+            path = triPath,
+            color = strokeFront,
+            style = Stroke(
+                width = sw * 1.08f,
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        )
+    }
+}
+
 @Composable
 fun PhotoCloudNativeApp(
     activity: MainActivity,
     apiClient: PhotoCloudApiClient,
     initialServerUrl: String,
+    custom: CustomizationState,
     isDarkTheme: Boolean,
-    onToggleTheme: () -> Unit,
+    onUpdateCustom: (CustomizationState) -> Unit,
     onSaveServerUrl: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -245,10 +621,6 @@ fun PhotoCloudNativeApp(
     var showServerDialog by remember { mutableStateOf(false) }
     var tempServerInput by remember { mutableStateOf(serverUrl) }
 
-    var biometricEnabled by remember {
-        mutableStateOf(prefs.getBoolean("biometric_enabled", true))
-    }
-
     // 0ms Instant Startup Hydration: synchronously read cookie presence and cached metadata
     var isAuthenticated by remember(serverUrl) {
         mutableStateOf(apiClient.hasActiveSessionCookie())
@@ -256,9 +628,20 @@ fun PhotoCloudNativeApp(
     var isBiometricLocked by remember(serverUrl) {
         mutableStateOf(
             apiClient.hasActiveSessionCookie() &&
-                prefs.getBoolean("biometric_enabled", true) &&
+                custom.biometricEnabled &&
                 activity.canUseBiometrics()
         )
+    }
+
+    DisposableEffect(isAuthenticated, custom.lockOnBackground, custom.biometricEnabled) {
+        activity.setOnBackgroundLockListener {
+            if (isAuthenticated && custom.lockOnBackground && custom.biometricEnabled && activity.canUseBiometrics()) {
+                isBiometricLocked = true
+            }
+        }
+        onDispose {
+            activity.setOnBackgroundLockListener(null)
+        }
     }
 
     var savedKeyBytes by remember {
@@ -328,6 +711,7 @@ fun PhotoCloudNativeApp(
 
     if (isAuthenticated && isBiometricLocked) {
         NativeBiometricLockScreen(
+            monochromeIcon = custom.monochromeAppIcon,
             onUnlockClick = {
                 activity.showBiometricPrompt(
                     onSuccess = { isBiometricLocked = false },
@@ -347,6 +731,7 @@ fun PhotoCloudNativeApp(
             activity = activity,
             apiClient = apiClient,
             serverUrl = serverUrl,
+            monochromeIcon = custom.monochromeAppIcon,
             savedKeyBytes = savedKeyBytes,
             onSaveKeyForBiometrics = { saveKeyForBiometrics(it) },
             onOpenServerConfig = {
@@ -366,21 +751,14 @@ fun PhotoCloudNativeApp(
         )
     } else {
         NativeVaultScreen(
+            activity = activity,
             apiClient = apiClient,
+            serverUrl = serverUrl,
             galleryItems = galleryItems,
             trashItems = trashItems,
+            custom = custom,
             isDarkTheme = isDarkTheme,
-            biometricEnabled = biometricEnabled,
-            onToggleBiometric = {
-                val next = !biometricEnabled
-                biometricEnabled = next
-                prefs.edit().putBoolean("biometric_enabled", next).apply()
-                Toast.makeText(
-                    context,
-                    if (next) "Blocco biometrico attivato" else "Blocco biometrico disattivato",
-                    Toast.LENGTH_SHORT
-                ).show()
-            },
+            onUpdateCustom = onUpdateCustom,
             onLockNow = {
                 if (activity.canUseBiometrics()) {
                     isBiometricLocked = true
@@ -388,7 +766,6 @@ fun PhotoCloudNativeApp(
                     Toast.makeText(context, "Biometria non configurata sul dispositivo", Toast.LENGTH_SHORT).show()
                 }
             },
-            onToggleTheme = onToggleTheme,
             onRefresh = { refreshVaultSilently() },
             onOpenServerConfig = {
                 tempServerInput = serverUrl
@@ -462,6 +839,7 @@ fun PhotoCloudNativeApp(
 
 @Composable
 fun NativeBiometricLockScreen(
+    monochromeIcon: Boolean,
     onUnlockClick: () -> Unit,
     onSwitchAccount: () -> Unit
 ) {
@@ -483,20 +861,10 @@ fun NativeBiometricLockScreen(
                 modifier = Modifier.padding(32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(76.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Fingerprint,
-                            contentDescription = "Biometria",
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(42.dp)
-                        )
-                    }
-                }
+                PhotoCloudLogoBadge(
+                    monochrome = monochromeIcon,
+                    modifier = Modifier.size(84.dp)
+                )
 
                 Spacer(Modifier.height(20.dp))
 
@@ -540,6 +908,7 @@ fun NativeAuthScreen(
     activity: MainActivity,
     apiClient: PhotoCloudApiClient,
     serverUrl: String,
+    monochromeIcon: Boolean,
     savedKeyBytes: ByteArray?,
     onSaveKeyForBiometrics: (ByteArray) -> Unit,
     onOpenServerConfig: () -> Unit,
@@ -628,6 +997,11 @@ fun NativeAuthScreen(
                     modifier = Modifier.padding(28.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    PhotoCloudLogoBadge(
+                        monochrome = monochromeIcon,
+                        modifier = Modifier.size(72.dp)
+                    )
+                    Spacer(Modifier.height(14.dp))
                     Text(
                         text = "PhotoCloud",
                         style = MaterialTheme.typography.headlineMedium,
@@ -706,7 +1080,6 @@ fun NativeAuthScreen(
                     }
 
                     if (!isRegisterTab) {
-                        // Quick Biometric Login if a key was previously used on this phone
                         if (savedKeyBytes != null && activity.canUseBiometrics()) {
                             FilledTonalButton(
                                 onClick = {
@@ -941,29 +1314,50 @@ fun NativeAuthScreen(
     }
 }
 
+/**
+ * Finds the filename of the media tile located at the pointer's current [offset]
+ * inside the [LazyGridState] layout info.
+ */
+private fun findMediaFilenameAtOffset(gridState: LazyGridState, offset: Offset): String? {
+    val hitItem = gridState.layoutInfo.visibleItemsInfo.firstOrNull { info ->
+        val keyStr = info.key as? String ?: return@firstOrNull false
+        if (!keyStr.startsWith("media_")) return@firstOrNull false
+        val left = info.offset.x.toFloat()
+        val top = info.offset.y.toFloat()
+        val right = left + info.size.width
+        val bottom = top + info.size.height
+        offset.x in left..right && offset.y in top..bottom
+    }
+    val keyStr = hitItem?.key as? String ?: return null
+    return keyStr.removePrefix("media_")
+}
+
 @Composable
 fun NativeVaultScreen(
+    activity: MainActivity,
     apiClient: PhotoCloudApiClient,
+    serverUrl: String,
     galleryItems: List<MediaItemModel>,
     trashItems: List<MediaItemModel>,
+    custom: CustomizationState,
     isDarkTheme: Boolean,
-    biometricEnabled: Boolean,
-    onToggleBiometric: () -> Unit,
+    onUpdateCustom: (CustomizationState) -> Unit,
     onLockNow: () -> Unit,
-    onToggleTheme: () -> Unit,
     onRefresh: () -> Unit,
     onOpenServerConfig: () -> Unit,
     onLogout: () -> Unit,
     onShowInfo: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
 
     var currentTab by remember { mutableStateOf(VaultTab.GALLERY) }
-    var groupingMode by remember { mutableStateOf(GroupingMode.MONTH) }
+    var groupingMode by remember(custom.defaultGrouping) { mutableStateOf(custom.defaultGrouping) }
     var showGroupingMenu by remember { mutableStateOf(false) }
 
     var selectedFilenames by remember { mutableStateOf<Set<String>>(emptySet()) }
     var lightboxInitialIndex by remember { mutableStateOf<Int?>(null) }
+    var pendingTrashConfirmFilenames by remember { mutableStateOf<List<String>?>(null) }
 
     var isUploading by remember { mutableStateOf(false) }
     var uploadProgressText by remember { mutableStateOf("") }
@@ -971,7 +1365,14 @@ fun NativeVaultScreen(
     var isScanningDuplicates by remember { mutableStateOf(false) }
     var duplicateGroups by remember { mutableStateOf<List<List<String>>?>(null) }
 
-    val activeItems = if (currentTab == VaultTab.GALLERY) galleryItems else trashItems
+    val rawItems = if (currentTab == VaultTab.GALLERY) galleryItems else trashItems
+    val activeItems = remember(rawItems, custom.sortOrder) {
+        when (custom.sortOrder) {
+            SortOrder.NEWEST -> rawItems.sortedByDescending { it.timestamp }
+            SortOrder.OLDEST -> rawItems.sortedBy { it.timestamp }
+            SortOrder.NAME_ASC -> rawItems.sortedBy { it.filename.lowercase() }
+        }
+    }
     val isFromTrash = currentTab == VaultTab.TRASH
 
     val uploadLauncher = rememberLauncherForActivityResult(
@@ -1010,11 +1411,27 @@ fun NativeVaultScreen(
         }
     }
 
-    BackHandler(enabled = lightboxInitialIndex != null || selectedFilenames.isNotEmpty() || currentTab == VaultTab.TRASH) {
+    BackHandler(enabled = lightboxInitialIndex != null || selectedFilenames.isNotEmpty() || currentTab != VaultTab.GALLERY) {
         when {
             lightboxInitialIndex != null -> lightboxInitialIndex = null
             selectedFilenames.isNotEmpty() -> selectedFilenames = emptySet()
-            currentTab == VaultTab.TRASH -> currentTab = VaultTab.GALLERY
+            currentTab != VaultTab.GALLERY -> currentTab = VaultTab.GALLERY
+        }
+    }
+
+    val gridState = rememberLazyGridState()
+
+    // State for Drag-to-Select gesture
+    var dragStartIndex by remember { mutableStateOf<Int?>(null) }
+    var dragLastIndex by remember { mutableStateOf<Int?>(null) }
+    var dragAddingSelection by remember { mutableStateOf(true) }
+    var selectionSnapshotBeforeDrag by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    fun triggerHaptic(longPress: Boolean = false) {
+        if (custom.hapticsEnabled) {
+            haptic.performHapticFeedback(
+                if (longPress) HapticFeedbackType.LongPress else HapticFeedbackType.TextHandleMove
+            )
         }
     }
 
@@ -1022,36 +1439,53 @@ fun NativeVaultScreen(
         Column(modifier = Modifier.fillMaxSize()) {
             // Minimalist Material You Top Header
             Surface(
-                color = MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
+                color = MaterialTheme.colorScheme.background.copy(alpha = 0.94f),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
                     modifier = Modifier
                         .statusBarsPadding()
                         .fillMaxWidth()
-                        .padding(horizontal = 18.dp, vertical = 14.dp),
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Column {
-                        Text(
-                            text = if (currentTab == VaultTab.GALLERY) "Archivio" else "Cestino",
-                            style = MaterialTheme.typography.titleLarge.copy(
-                                fontWeight = FontWeight.SemiBold,
-                                letterSpacing = (-0.5).sp
-                            ),
-                            color = MaterialTheme.colorScheme.onBackground
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        PhotoCloudLogoBadge(
+                            monochrome = custom.monochromeAppIcon,
+                            modifier = Modifier.size(38.dp)
                         )
-                        Text(
-                            text = "${activeItems.size} elementi",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Column {
+                            Text(
+                                text = when (currentTab) {
+                                    VaultTab.GALLERY -> if (selectedFilenames.isNotEmpty()) "${selectedFilenames.size} selezionati" else "Archivio"
+                                    VaultTab.TRASH -> "Cestino"
+                                    VaultTab.SETTINGS -> "Impostazioni"
+                                },
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = (-0.5).sp
+                                ),
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = when (currentTab) {
+                                    VaultTab.GALLERY -> "${galleryItems.size} elementi • Trascina per selezionare"
+                                    VaultTab.TRASH -> "${trashItems.size} elementi nel cestino"
+                                    VaultTab.SETTINGS -> "Personalizzazione & Opzioni Generali"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         if (currentTab == VaultTab.GALLERY && activeItems.isNotEmpty()) {
                             Box {
@@ -1064,7 +1498,7 @@ fun NativeVaultScreen(
                                         text = groupingMode.label,
                                         style = MaterialTheme.typography.labelLarge,
                                         fontWeight = FontWeight.SemiBold,
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
                                     )
                                 }
                                 DropdownMenu(
@@ -1085,6 +1519,7 @@ fun NativeVaultScreen(
 
                             IconButton(
                                 onClick = {
+                                    triggerHaptic()
                                     selectedFilenames = if (selectedFilenames.size == activeItems.size) {
                                         emptySet()
                                     } else {
@@ -1123,15 +1558,6 @@ fun NativeVaultScreen(
                             }
                         }
 
-                        // Biometric toggle & instant lock
-                        IconButton(onClick = onToggleBiometric) {
-                            Icon(
-                                imageVector = Icons.Default.Fingerprint,
-                                contentDescription = "Blocco Biometrico",
-                                tint = if (biometricEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
                         IconButton(onClick = onLockNow) {
                             Icon(
                                 imageVector = Icons.Default.Lock,
@@ -1140,12 +1566,14 @@ fun NativeVaultScreen(
                             )
                         }
 
-                        IconButton(onClick = onRefresh) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Aggiorna",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        if (currentTab != VaultTab.SETTINGS) {
+                            IconButton(onClick = onRefresh) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "Aggiorna",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
@@ -1179,8 +1607,33 @@ fun NativeVaultScreen(
                 }
             }
 
-            // Main 120Hz Photo Grid
-            if (activeItems.isEmpty()) {
+            if (currentTab == VaultTab.SETTINGS) {
+                NativeSettingsScreen(
+                    activity = activity,
+                    apiClient = apiClient,
+                    serverUrl = serverUrl,
+                    galleryCount = galleryItems.size,
+                    trashCount = trashItems.size,
+                    custom = custom,
+                    onUpdateCustom = onUpdateCustom,
+                    onOpenServerConfig = onOpenServerConfig,
+                    onScanDuplicates = {
+                        isScanningDuplicates = true
+                        scope.launch {
+                            val groups = apiClient.findDuplicates()
+                            isScanningDuplicates = false
+                            if (groups.isEmpty()) {
+                                onShowInfo("Nessun duplicato trovato")
+                            } else {
+                                duplicateGroups = groups
+                            }
+                        }
+                    },
+                    onLockNow = onLockNow,
+                    onLogout = onLogout,
+                    onShowInfo = onShowInfo
+                )
+            } else if (activeItems.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -1209,17 +1662,85 @@ fun NativeVaultScreen(
                     }
                 }
             } else {
+                // 120Hz Photo Grid with Drag-to-Select Multi-Selection
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
+                    state = gridState,
+                    columns = GridCells.Fixed(custom.gridColumns.coerceIn(2, 5)),
                     contentPadding = PaddingValues(
                         start = 6.dp,
                         end = 6.dp,
                         top = 6.dp,
-                        bottom = 136.dp
+                        bottom = 140.dp
                     ),
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp),
-                    modifier = Modifier.fillMaxSize()
+                    horizontalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
+                    verticalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(activeItems, currentTab) {
+                            if (currentTab != VaultTab.GALLERY) return@pointerInput
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { startOffset ->
+                                    val hitFn = findMediaFilenameAtOffset(gridState, startOffset)
+                                    val idx = activeItems.indexOfFirst { it.filename == hitFn }
+                                    if (idx >= 0 && hitFn != null) {
+                                        triggerHaptic(longPress = true)
+                                        dragStartIndex = idx
+                                        dragLastIndex = idx
+                                        selectionSnapshotBeforeDrag = selectedFilenames
+                                        val shouldSelect = !selectedFilenames.contains(hitFn)
+                                        dragAddingSelection = shouldSelect
+                                        selectedFilenames = if (shouldSelect) {
+                                            selectedFilenames + hitFn
+                                        } else {
+                                            selectedFilenames - hitFn
+                                        }
+                                    } else {
+                                        dragStartIndex = null
+                                        dragLastIndex = null
+                                    }
+                                },
+                                onDrag = { change, _ ->
+                                    val startIdx = dragStartIndex ?: return@detectDragGesturesAfterLongPress
+                                    change.consume()
+
+                                    // Smooth auto-scroll near top or bottom edges during drag selection
+                                    val viewportH = gridState.layoutInfo.viewportSize.height.toFloat()
+                                    val y = change.position.y
+                                    if (y < 140f) {
+                                        scope.launch { gridState.scrollBy(-28f) }
+                                    } else if (y > viewportH - 220f) {
+                                        scope.launch { gridState.scrollBy(28f) }
+                                    }
+
+                                    val hitFn = findMediaFilenameAtOffset(gridState, change.position)
+                                    val currentIdx = activeItems.indexOfFirst { it.filename == hitFn }
+                                    if (currentIdx >= 0 && currentIdx != dragLastIndex) {
+                                        dragLastIndex = currentIdx
+                                        triggerHaptic(longPress = false)
+                                        val rangeStart = minOf(startIdx, currentIdx)
+                                        val rangeEnd = maxOf(startIdx, currentIdx)
+                                        val rangeFilenames = activeItems
+                                            .subList(rangeStart, rangeEnd + 1)
+                                            .map { it.filename }
+                                            .toSet()
+
+                                        selectedFilenames = if (dragAddingSelection) {
+                                            selectionSnapshotBeforeDrag + rangeFilenames
+                                        } else {
+                                            selectionSnapshotBeforeDrag - rangeFilenames
+                                        }
+                                    }
+                                },
+                                onDragEnd = {
+                                    dragStartIndex = null
+                                    dragLastIndex = null
+                                },
+                                onDragCancel = {
+                                    dragStartIndex = null
+                                    dragLastIndex = null
+                                }
+                            )
+                        }
                 ) {
                     groupedSections.forEach { (sectionTitle, sectionItems) ->
                         if (sectionTitle.isNotBlank()) {
@@ -1239,7 +1760,7 @@ fun NativeVaultScreen(
 
                         items(
                             items = sectionItems,
-                            key = { it.filename }
+                            key = { "media_${it.filename}" }
                         ) { mediaItem ->
                             val isSelected = selectedFilenames.contains(mediaItem.filename)
                             MediaGridTile(
@@ -1248,8 +1769,12 @@ fun NativeVaultScreen(
                                 fromTrash = isFromTrash,
                                 isSelected = isSelected,
                                 inSelectionMode = selectedFilenames.isNotEmpty(),
+                                cornerRadiusDp = custom.tileCornerRadiusDp,
+                                aspectRatio = if (custom.portraitAspectRatio) 0.8f else 1f,
+                                showVideoBadge = custom.showVideoBadges,
                                 onClick = {
                                     if (selectedFilenames.isNotEmpty() && currentTab == VaultTab.GALLERY) {
+                                        triggerHaptic()
                                         selectedFilenames = if (isSelected) {
                                             selectedFilenames - mediaItem.filename
                                         } else {
@@ -1264,6 +1789,7 @@ fun NativeVaultScreen(
                                 },
                                 onLongClick = {
                                     if (currentTab == VaultTab.GALLERY) {
+                                        triggerHaptic(longPress = true)
                                         selectedFilenames = if (isSelected) {
                                             selectedFilenames - mediaItem.filename
                                         } else {
@@ -1346,11 +1872,15 @@ fun NativeVaultScreen(
                         Button(
                             onClick = {
                                 val toTrash = selectedFilenames.toList()
-                                scope.launch {
-                                    if (apiClient.moveBatchToTrash(toTrash)) {
-                                        onShowInfo("${toTrash.size} elementi spostati nel cestino")
-                                        selectedFilenames = emptySet()
-                                        onRefresh()
+                                if (custom.confirmBeforeTrash) {
+                                    pendingTrashConfirmFilenames = toTrash
+                                } else {
+                                    scope.launch {
+                                        if (apiClient.moveBatchToTrash(toTrash)) {
+                                            onShowInfo("${toTrash.size} elementi spostati nel cestino")
+                                            selectedFilenames = emptySet()
+                                            onRefresh()
+                                        }
                                     }
                                 }
                             },
@@ -1376,13 +1906,16 @@ fun NativeVaultScreen(
                 }
             }
 
+            val barHeight = if (custom.compactFloatingBar) 54.dp else 64.dp
+            val pillHeight = if (custom.compactFloatingBar) 40.dp else 46.dp
+
             Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
                 tonalElevation = 6.dp,
                 shadowElevation = 16.dp,
                 modifier = Modifier
-                    .height(64.dp)
+                    .height(barHeight)
                     .border(
                         width = 1.dp,
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
@@ -1391,17 +1924,19 @@ fun NativeVaultScreen(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.padding(horizontal = 10.dp)
                 ) {
+                    // Tab 1: Foto (Gallery)
                     Surface(
                         onClick = {
+                            triggerHaptic()
                             currentTab = VaultTab.GALLERY
                             selectedFilenames = emptySet()
                         },
                         shape = CircleShape,
                         color = if (currentTab == VaultTab.GALLERY) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                        modifier = Modifier.height(46.dp)
+                        modifier = Modifier.height(pillHeight)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -1413,7 +1948,7 @@ fun NativeVaultScreen(
                                 tint = if (currentTab == VaultTab.GALLERY) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(21.dp)
                             )
-                            if (currentTab == VaultTab.GALLERY) {
+                            if (currentTab == VaultTab.GALLERY && custom.showFloatingBarLabels) {
                                 Spacer(Modifier.width(6.dp))
                                 Text(
                                     text = "Foto",
@@ -1425,11 +1960,15 @@ fun NativeVaultScreen(
                         }
                     }
 
+                    // Primary Pill: + Carica
                     Surface(
-                        onClick = { uploadLauncher.launch("*/*") },
+                        onClick = {
+                            triggerHaptic()
+                            uploadLauncher.launch("*/*")
+                        },
                         shape = CircleShape,
                         color = MaterialTheme.colorScheme.primaryContainer,
-                        modifier = Modifier.height(46.dp)
+                        modifier = Modifier.height(pillHeight)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -1441,46 +1980,28 @@ fun NativeVaultScreen(
                                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                 modifier = Modifier.size(22.dp)
                             )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = "Carica",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+                            if (custom.showFloatingBarLabels) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "Carica",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
                         }
                     }
 
-                    IconButton(
-                        onClick = {
-                            isScanningDuplicates = true
-                            scope.launch {
-                                val groups = apiClient.findDuplicates()
-                                isScanningDuplicates = false
-                                if (groups.isEmpty()) {
-                                    onShowInfo("Nessun duplicato trovato")
-                                } else {
-                                    duplicateGroups = groups
-                                }
-                            }
-                        },
-                        modifier = Modifier.size(44.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ManageSearch,
-                            contentDescription = "Trova Duplicati",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
+                    // Tab 2: Cestino (Trash)
                     Surface(
                         onClick = {
+                            triggerHaptic()
                             currentTab = VaultTab.TRASH
                             selectedFilenames = emptySet()
                         },
                         shape = CircleShape,
                         color = if (currentTab == VaultTab.TRASH) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                        modifier = Modifier.height(46.dp)
+                        modifier = Modifier.height(pillHeight)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -1492,7 +2013,7 @@ fun NativeVaultScreen(
                                 tint = if (currentTab == VaultTab.TRASH) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(21.dp)
                             )
-                            if (currentTab == VaultTab.TRASH) {
+                            if (currentTab == VaultTab.TRASH && custom.showFloatingBarLabels) {
                                 Spacer(Modifier.width(6.dp))
                                 Text(
                                     text = "Cestino",
@@ -1504,37 +2025,37 @@ fun NativeVaultScreen(
                         }
                     }
 
-                    IconButton(
-                        onClick = onToggleTheme,
-                        modifier = Modifier.size(44.dp)
+                    // Tab 3: Impostazioni (Settings & Customization)
+                    Surface(
+                        onClick = {
+                            triggerHaptic()
+                            currentTab = VaultTab.SETTINGS
+                            selectedFilenames = emptySet()
+                        },
+                        shape = CircleShape,
+                        color = if (currentTab == VaultTab.SETTINGS) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                        modifier = Modifier.height(pillHeight)
                     ) {
-                        Icon(
-                            imageVector = if (isDarkTheme) Icons.Default.DarkMode else Icons.Default.LightMode,
-                            contentDescription = "Tema",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    IconButton(
-                        onClick = onOpenServerConfig,
-                        modifier = Modifier.size(44.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Dns,
-                            contentDescription = "Server",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    IconButton(
-                        onClick = onLogout,
-                        modifier = Modifier.size(44.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Logout,
-                            contentDescription = "Esci",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Impostazioni",
+                                tint = if (currentTab == VaultTab.SETTINGS) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(21.dp)
+                            )
+                            if (currentTab == VaultTab.SETTINGS && custom.showFloatingBarLabels) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "Opzioni",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1547,13 +2068,18 @@ fun NativeVaultScreen(
                 items = activeItems,
                 initialIndex = openIdx.coerceIn(0, activeItems.lastIndex),
                 fromTrash = isFromTrash,
+                autoplayVideos = custom.autoplayVideos,
                 onClose = { lightboxInitialIndex = null },
                 onMoveToTrash = { filename ->
-                    scope.launch {
-                        if (apiClient.moveToTrash(filename)) {
-                            onShowInfo("Spostato nel cestino")
-                            lightboxInitialIndex = null
-                            onRefresh()
+                    if (custom.confirmBeforeTrash) {
+                        pendingTrashConfirmFilenames = listOf(filename)
+                    } else {
+                        scope.launch {
+                            if (apiClient.moveToTrash(filename)) {
+                                onShowInfo("Spostato nel cestino")
+                                lightboxInitialIndex = null
+                                onRefresh()
+                            }
                         }
                     }
                 },
@@ -1570,6 +2096,50 @@ fun NativeVaultScreen(
                     scope.launch {
                         val (_, msg) = apiClient.saveSingleMediaToDownloads(filename, isFromTrash)
                         onShowInfo(msg)
+                    }
+                }
+            )
+        }
+
+        val toConfirmTrash = pendingTrashConfirmFilenames
+        if (toConfirmTrash != null) {
+            AlertDialog(
+                onDismissRequest = { pendingTrashConfirmFilenames = null },
+                shape = RoundedCornerShape(28.dp),
+                title = { Text("Sposta nel Cestino") },
+                text = {
+                    Text("Vuoi spostare ${toConfirmTrash.size} elementi nel cestino?")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val list = toConfirmTrash
+                            pendingTrashConfirmFilenames = null
+                            scope.launch {
+                                val ok = if (list.size == 1) {
+                                    apiClient.moveToTrash(list.first())
+                                } else {
+                                    apiClient.moveBatchToTrash(list)
+                                }
+                                if (ok) {
+                                    onShowInfo("${list.size} elementi spostati nel cestino")
+                                    selectedFilenames = emptySet()
+                                    lightboxInitialIndex = null
+                                    onRefresh()
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    ) {
+                        Text("Sposta nel Cestino")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingTrashConfirmFilenames = null }) {
+                        Text("Annulla")
                     }
                 }
             )
@@ -1612,6 +2182,565 @@ fun NativeVaultScreen(
     }
 }
 
+@Composable
+fun NativeSettingsScreen(
+    activity: MainActivity,
+    apiClient: PhotoCloudApiClient,
+    serverUrl: String,
+    galleryCount: Int,
+    trashCount: Int,
+    custom: CustomizationState,
+    onUpdateCustom: (CustomizationState) -> Unit,
+    onOpenServerConfig: () -> Unit,
+    onScanDuplicates: () -> Unit,
+    onLockNow: () -> Unit,
+    onLogout: () -> Unit,
+    onShowInfo: (String) -> Unit
+) {
+    var cacheStats by remember { mutableStateOf(apiClient.getDiskCacheStats()) }
+    val scrollState = rememberScrollState()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(horizontal = 16.dp)
+            .padding(top = 6.dp, bottom = 140.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // 1. APP ICON SWITCHER (COLOR vs BLACK & WHITE)
+        SettingsSectionCard(
+            title = "Icona App & Identità",
+            icon = Icons.Default.Palette
+        ) {
+            Text(
+                text = "Scegli lo stile dell'icona PhotoCloud nel launcher Android e nell'app:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(14.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Option 1: Color Logo
+                Surface(
+                    onClick = {
+                        onUpdateCustom(custom.copy(monochromeAppIcon = false))
+                        activity.setLauncherIconMonochrome(false)
+                        onShowInfo("Icona app impostata: Colorata (Viola Notte)")
+                    },
+                    shape = RoundedCornerShape(22.dp),
+                    color = if (!custom.monochromeAppIcon) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier
+                        .weight(1f)
+                        .border(
+                            width = if (!custom.monochromeAppIcon) 2.dp else 0.dp,
+                            color = if (!custom.monochromeAppIcon) MaterialTheme.colorScheme.primary else Color.Transparent,
+                            shape = RoundedCornerShape(22.dp)
+                        )
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(vertical = 18.dp, horizontal = 12.dp)
+                    ) {
+                        PhotoCloudLogoBadge(
+                            monochrome = false,
+                            modifier = Modifier.size(64.dp)
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = "Colorata",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Viola Notte",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Option 2: Black & White Logo
+                Surface(
+                    onClick = {
+                        onUpdateCustom(custom.copy(monochromeAppIcon = true))
+                        activity.setLauncherIconMonochrome(true)
+                        onShowInfo("Icona app impostata: Bianco & Nero")
+                    },
+                    shape = RoundedCornerShape(22.dp),
+                    color = if (custom.monochromeAppIcon) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier
+                        .weight(1f)
+                        .border(
+                            width = if (custom.monochromeAppIcon) 2.dp else 0.dp,
+                            color = if (custom.monochromeAppIcon) MaterialTheme.colorScheme.primary else Color.Transparent,
+                            shape = RoundedCornerShape(22.dp)
+                        )
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(vertical = 18.dp, horizontal = 12.dp)
+                    ) {
+                        PhotoCloudLogoBadge(
+                            monochrome = true,
+                            modifier = Modifier.size(64.dp)
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = "Bianco & Nero",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Monocromatica",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2. TEMA, COLORI & DISPLAY 120HZ
+        SettingsSectionCard(
+            title = "Tema, Colori & Schermo",
+            icon = Icons.Default.DarkMode
+        ) {
+            Text(
+                text = "Modalità Tema",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ThemeMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = custom.themeMode == mode,
+                        onClick = { onUpdateCustom(custom.copy(themeMode = mode)) },
+                        label = { Text(mode.label) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            SettingsSwitchRow(
+                title = "Nero Puro AMOLED (True Black)",
+                subtitle = "Sfondo #000000 assoluto in modalità scura per schermi OLED",
+                checked = custom.amoledBlack,
+                onCheckedChange = { onUpdateCustom(custom.copy(amoledBlack = it)) }
+            )
+
+            SettingsSwitchRow(
+                title = "Colori Dinamici Material You",
+                subtitle = "Usa la palette estratta dallo sfondo di Android 12+",
+                checked = custom.dynamicColors,
+                onCheckedChange = { onUpdateCustom(custom.copy(dynamicColors = it)) }
+            )
+
+            if (!custom.dynamicColors || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Palette Colore Accento",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    AccentPreset.entries.forEach { preset ->
+                        val isSelected = custom.accentPreset == preset
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(preset.primaryDark)
+                                .border(
+                                    width = if (isSelected) 3.dp else 1.dp,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else Color.Transparent,
+                                    shape = CircleShape
+                                )
+                                .clickable {
+                                    onUpdateCustom(custom.copy(accentPreset = preset, dynamicColors = false))
+                                }
+                        ) {
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = preset.label,
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. PERSONALIZZAZIONE GRIGLIA & LAYOUT
+        SettingsSectionCard(
+            title = "Layout Griglia & Miniature",
+            icon = Icons.Default.GridView
+        ) {
+            Text(
+                text = "Colonne della Griglia: ${custom.gridColumns}",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(2, 3, 4, 5).forEach { cols ->
+                    FilterChip(
+                        selected = custom.gridColumns == cols,
+                        onClick = { onUpdateCustom(custom.copy(gridColumns = cols)) },
+                        label = { Text("$cols col") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = "Spaziatura Miniature (${custom.gridSpacingDp} dp)",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Slider(
+                value = custom.gridSpacingDp.toFloat(),
+                onValueChange = { onUpdateCustom(custom.copy(gridSpacingDp = it.toInt())) },
+                valueRange = 1f..10f,
+                steps = 8
+            )
+
+            Text(
+                text = "Arrotondamento Angoli Foto (${custom.tileCornerRadiusDp} dp)",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Slider(
+                value = custom.tileCornerRadiusDp.toFloat(),
+                onValueChange = { onUpdateCustom(custom.copy(tileCornerRadiusDp = it.toInt())) },
+                valueRange = 0f..24f,
+                steps = 11
+            )
+
+            SettingsSwitchRow(
+                title = "Miniature Verticali (Ritratto 4:5)",
+                subtitle = "Mostra le foto in formato 4:5 anziché quadrato 1:1",
+                checked = custom.portraitAspectRatio,
+                onCheckedChange = { onUpdateCustom(custom.copy(portraitAspectRatio = it)) }
+            )
+
+            SettingsSwitchRow(
+                title = "Mostra Icona Video sulle Miniature",
+                subtitle = "Evidenzia i video MP4/MOV nella griglia",
+                checked = custom.showVideoBadges,
+                onCheckedChange = { onUpdateCustom(custom.copy(showVideoBadges = it)) }
+            )
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Raggruppamento Predefinito all'Avvio",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                GroupingMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = custom.defaultGrouping == mode,
+                        onClick = { onUpdateCustom(custom.copy(defaultGrouping = mode)) },
+                        label = { Text(mode.label, maxLines = 1) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Ordinamento Elementi",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                SortOrder.entries.forEach { order ->
+                    FilterChip(
+                        selected = custom.sortOrder == order,
+                        onClick = { onUpdateCustom(custom.copy(sortOrder = order)) },
+                        label = { Text(order.label, maxLines = 1) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        // 4. FLOATING BAR & INTERAZIONE
+        SettingsSectionCard(
+            title = "Floating Bar & Comportamento",
+            icon = Icons.Default.Tune
+        ) {
+            SettingsSwitchRow(
+                title = "Etichette Testo nella Floating Bar",
+                subtitle = "Mostra i nomi delle sezioni accanto alle icone in basso",
+                checked = custom.showFloatingBarLabels,
+                onCheckedChange = { onUpdateCustom(custom.copy(showFloatingBarLabels = it)) }
+            )
+
+            SettingsSwitchRow(
+                title = "Floating Bar Compatta",
+                subtitle = "Riduce l'altezza della barra fluttuante inferiore",
+                checked = custom.compactFloatingBar,
+                onCheckedChange = { onUpdateCustom(custom.copy(compactFloatingBar = it)) }
+            )
+
+            SettingsSwitchRow(
+                title = "Feedback Aptico (Vibrazione 120Hz)",
+                subtitle = "Vibrazione leggera durante il trascinamento di selezione multipla",
+                checked = custom.hapticsEnabled,
+                onCheckedChange = { onUpdateCustom(custom.copy(hapticsEnabled = it)) }
+            )
+
+            SettingsSwitchRow(
+                title = "Chiedi Conferma prima di Cestinare",
+                subtitle = "Mostra un avviso prima di spostare foto nel cestino",
+                checked = custom.confirmBeforeTrash,
+                onCheckedChange = { onUpdateCustom(custom.copy(confirmBeforeTrash = it)) }
+            )
+
+            SettingsSwitchRow(
+                title = "Autoplay Video nella Lightbox",
+                subtitle = "Riproduce automaticamente i video quando vengono aperti",
+                checked = custom.autoplayVideos,
+                onCheckedChange = { onUpdateCustom(custom.copy(autoplayVideos = it)) }
+            )
+        }
+
+        // 5. SICUREZZA & PRIVACY
+        SettingsSectionCard(
+            title = "Sicurezza & Biometria",
+            icon = Icons.Default.Security
+        ) {
+            SettingsSwitchRow(
+                title = "Sblocco Biometrico all'Avvio",
+                subtitle = "Richiede impronta digitale o volto per aprire la cassaforte",
+                checked = custom.biometricEnabled,
+                onCheckedChange = { onUpdateCustom(custom.copy(biometricEnabled = it)) }
+            )
+
+            SettingsSwitchRow(
+                title = "Blocca Automaticamente in Background",
+                subtitle = "Richiede nuovamente l'impronta quando esci dall'app",
+                checked = custom.lockOnBackground,
+                onCheckedChange = { onUpdateCustom(custom.copy(lockOnBackground = it)) }
+            )
+
+            SettingsSwitchRow(
+                title = "Schermo Sicuro (Anti-Screenshot)",
+                subtitle = "Blocca gli screenshot e oscura l'anteprima nelle app recenti",
+                checked = custom.secureScreenFlag,
+                onCheckedChange = { onUpdateCustom(custom.copy(secureScreenFlag = it)) }
+            )
+
+            Spacer(Modifier.height(10.dp))
+            FilledTonalButton(
+                onClick = onLockNow,
+                shape = CircleShape,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Blocca Cassaforte Ora", fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        // 6. GENERALI, SERVER & GESTIONE CACHE
+        SettingsSectionCard(
+            title = "Generali, Server & Cache",
+            icon = Icons.Default.Dns
+        ) {
+            val cacheMb = String.format(Locale.ITALIAN, "%.2f MB", cacheStats.second / (1024.0 * 1024.0))
+            Text(
+                text = "Server attivo: $serverUrl",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "Archivio: $galleryCount foto/video • Cestino: $trashCount • Cache locale: ${cacheStats.first} file ($cacheMb)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilledTonalButton(
+                    onClick = onOpenServerConfig,
+                    shape = CircleShape,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Dns, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Cambia Server")
+                }
+
+                FilledTonalButton(
+                    onClick = onScanDuplicates,
+                    shape = CircleShape,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.ManageSearch, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Trova Duplicati")
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        apiClient.clearMediaCache()
+                        cacheStats = apiClient.getDiskCacheStats()
+                        onShowInfo("Cache miniature svuotata")
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.CleaningServices, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Svuota Cache")
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        onUpdateCustom(CustomizationState())
+                        activity.setLauncherIconMonochrome(false)
+                        onShowInfo("Impostazioni predefinite ripristinate")
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Reset Opzioni")
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Button(
+                onClick = onLogout,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                ),
+                shape = CircleShape,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Disconnetti Sessione (Logout)", fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsSectionCard(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(26.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+fun SettingsSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MediaGridTile(
@@ -1620,6 +2749,9 @@ fun MediaGridTile(
     fromTrash: Boolean,
     isSelected: Boolean,
     inSelectionMode: Boolean,
+    cornerRadiusDp: Int,
+    aspectRatio: Float,
+    showVideoBadge: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onRestore: (() -> Unit)? = null,
@@ -1650,10 +2782,12 @@ fun MediaGridTile(
         label = "tileScale"
     )
 
+    val shape = RoundedCornerShape(if (isSelected) (cornerRadiusDp + 8).dp else cornerRadiusDp.dp)
+
     Box(
         modifier = Modifier
-            .aspectRatio(1f)
-            .clip(RoundedCornerShape(if (isSelected) 18.dp else 10.dp))
+            .aspectRatio(aspectRatio)
+            .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .combinedClickable(
                 onClick = onClick,
@@ -1664,7 +2798,7 @@ fun MediaGridTile(
             modifier = Modifier
                 .fillMaxSize()
                 .scale(scale)
-                .clip(RoundedCornerShape(if (isSelected) 18.dp else 10.dp))
+                .clip(shape)
         ) {
             val currentBmp = bitmap
             if (currentBmp != null) {
@@ -1681,12 +2815,14 @@ fun MediaGridTile(
                         .background(MaterialTheme.colorScheme.surfaceContainerHighest),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayCircleFilled,
-                        contentDescription = "Video",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(40.dp)
-                    )
+                    if (showVideoBadge) {
+                        Icon(
+                            imageVector = Icons.Default.PlayCircleFilled,
+                            contentDescription = "Video",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
                 }
             } else if (!loadFailed) {
                 Box(
@@ -1784,6 +2920,7 @@ fun NativeLightboxModal(
     items: List<MediaItemModel>,
     initialIndex: Int,
     fromTrash: Boolean,
+    autoplayVideos: Boolean,
     onClose: () -> Unit,
     onMoveToTrash: (String) -> Unit,
     onRestore: (String) -> Unit,
@@ -1871,7 +3008,9 @@ fun NativeLightboxModal(
                                 )
                                 setOnPreparedListener { mp ->
                                     mp.isLooping = true
-                                    start()
+                                    if (autoplayVideos) {
+                                        start()
+                                    }
                                 }
                             }
                         }

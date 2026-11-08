@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Background Squircle / Full Bleed Gradient (Deep Purple -> Midnight Navy) -->
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="12"
+                android:startY="12"
+                android:endX="96"
+                android:endY="96"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FF521563" />
+                <item android:offset="0.48" android:color="#FF26134F" />
+                <item android:offset="1.0" android:color="#FF090D2B" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Back Card Layer (Bottom-Left Rounded Frame) -->
+    <path
+        android:fillColor="#1A000000"
+        android:strokeColor="#FF886EC6"
+        android:strokeWidth="3.4"
+        android:strokeLineJoin="round"
+        android:pathData="M31,42 L58,42 A5,5 0 0,1 63,47 L63,74 A5,5 0 0,1 58,79 L31,79 A5,5 0 0,1 26,74 L26,47 A5,5 0 0,1 31,42 Z" />
+
+    <!-- Middle Card Layer (Center Rounded Frame) -->
+    <path
+        android:fillColor="#FF1E1143"
+        android:strokeColor="#FFB39CE8"
+        android:strokeWidth="3.5"
+        android:strokeLineJoin="round"
+        android:pathData="M40,34 L67,34 A5,5 0 0,1 72,39 L72,66 A5,5 0 0,1 67,71 L40,71 A5,5 0 0,1 35,66 L35,39 A5,5 0 0,1 40,34 Z" />
+
+    <!-- Soft Sun Glow (Top Right) -->
+    <path
+        android:fillColor="#26FFF9C4"
+        android:pathData="M73,31 m-13,0 a13,13 0 1,0 26,0 a13,13 0 1,0 -26,0" />
+    <path
+        android:fillColor="#45FFF9C4"
+        android:pathData="M73,31 m-9.5,0 a9.5,9.5 0 1,0 19,0 a9.5,9.5 0 1,0 -19,0" />
+
+    <!-- Sun / Moon Disc -->
+    <path
+        android:fillColor="#FFFEFCD5"
+        android:pathData="M73,31 m-6.5,0 a6.5,6.5 0 1,0 13,0 a6.5,6.5 0 1,0 -13,0" />
+
+    <!-- Front Folded Triangle Card -->
+    <path
+        android:fillColor="#FF211147"
+        android:strokeColor="#FFF4EEFF"
+        android:strokeWidth="3.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M44,29.5 C44,26.8 47.2,25.5 49.0,27.5 L80.5,61.0 C82.3,62.9 80.9,66.0 78.2,66.0 L48.5,66.0 C46.0,66.0 44.0,64.0 44.0,61.5 Z" />
+</vector>

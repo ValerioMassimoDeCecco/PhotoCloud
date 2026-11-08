@@ -183,10 +183,27 @@ class PhotoCloudApiClient(
     fun clearCookies() {
         cookiePrefs.edit().clear().apply()
         metaPrefs.edit().clear().apply()
+        clearMediaCache()
+    }
+
+    fun clearMediaCache() {
         bitmapCache.evictAll()
         try {
             diskCacheDir.listFiles()?.forEach { it.delete() }
         } catch (_: Exception) {
+        }
+    }
+
+    fun getDiskCacheStats(): Pair<Int, Long> {
+        return try {
+            val files = diskCacheDir.listFiles() ?: return Pair(0, 0L)
+            var totalBytes = 0L
+            for (f in files) {
+                if (f.isFile) totalBytes += f.length()
+            }
+            Pair(files.size, totalBytes)
+        } catch (_: Exception) {
+            Pair(0, 0L)
         }
     }
 

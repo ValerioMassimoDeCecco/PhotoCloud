@@ -90,12 +90,17 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
   assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
   assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));
-  assert.ok(workflowYaml.includes('photocloud-release-v1.0.4-signed.apk'));
+  assert.ok(workflowYaml.includes('photocloud-release-v1.0.5-signed.apk'));
   assert.equal(workflowYaml.includes('rm -f photocloud-release-key.jks'), false);
 
   const keystorePath = path.resolve(process.cwd(), 'android-app/app/photocloud-release-key.jks');
   assert.ok(fs.existsSync(keystorePath));
   assert.ok(fs.statSync(keystorePath).size > 1000);
+
+  const colorIconPath = path.resolve(process.cwd(), 'android-app/app/src/main/res/drawable/ic_launcher_color.xml');
+  const bwIconPath = path.resolve(process.cwd(), 'android-app/app/src/main/res/drawable/ic_launcher_bw.xml');
+  assert.ok(fs.existsSync(colorIconPath));
+  assert.ok(fs.existsSync(bwIconPath));
 
   const mainActivityKt = fs.readFileSync(
     path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
@@ -105,6 +110,9 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.equal(mainActivityKt.includes('isCheckingSession'), false);
   assert.ok(mainActivityKt.includes('hasActiveSessionCookie'));
   assert.ok(mainActivityKt.includes('getCachedGalleryItems'));
+  assert.ok(mainActivityKt.includes('detectDragGesturesAfterLongPress'));
+  assert.ok(mainActivityKt.includes('NativeSettingsScreen'));
+  assert.ok(mainActivityKt.includes('setLauncherIconMonochrome'));
   assert.ok(mainActivityKt.includes('BiometricPrompt'));
   assert.ok(mainActivityKt.includes('BiometricManager'));
   assert.ok(mainActivityKt.includes('NativeBiometricLockScreen'));
@@ -116,11 +124,11 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   const outDir = path.resolve(process.cwd(), 'release');
   const res = await compileSignedAndroidApk(outDir);
   assert.ok(fs.existsSync(res.apkPath));
-  assert.ok(res.apkPath.endsWith('photocloud-release-v1.0.4-signed.apk'));
+  assert.ok(res.apkPath.endsWith('photocloud-release-v1.0.5-signed.apk'));
   assert.equal(res.sha256.length, 64);
 
   const actionsStatus = await triggerGitHubActionsBuild();
   assert.equal(actionsStatus.repo, 'ValerioMassimoDeCecco/PhotoCloud');
   assert.equal(actionsStatus.workflowFile, '.github/workflows/android-release.yml');
-  assert.equal(actionsStatus.releaseTag, 'v1.0.4');
+  assert.equal(actionsStatus.releaseTag, 'v1.0.5');
 });
