@@ -124,6 +124,13 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                 ${albumBadge}
                 <div class="media-actions">
                     ${
+                      isImg
+                        ? `<button type="button" class="btn icon edit-photo-btn" title="Modifica Foto" aria-label="Modifica ${file}" onclick="window.openPhotoEditor && window.openPhotoEditor('${file}', event)">
+                            <span class="material-icons">tune</span>
+                        </button>`
+                        : ''
+                    }
+                    ${
                       !isMedia
                         ? `<a href="/media/${encodeURIComponent(item.filename)}?download=1" download="${file}" class="btn icon" title="Scarica file" onclick="window.trackDirectDownload && window.trackDirectDownload(event, '${file}', ${sizeBytes})">
                             <span class="material-icons">download</span>
@@ -371,7 +378,7 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                 }
 
                 const clickedCard = event.target.closest('.clickable-media');
-                if (clickedCard && !event.target.closest('.delete-form') && !event.target.matches('.media-checkbox')) {
+                if (clickedCard && !event.target.closest('.media-actions') && !event.target.closest('.delete-form') && !event.target.matches('.media-checkbox')) {
                     const allCards = Array.from(galleryGrid.querySelectorAll('.clickable-media'));
                     const allUrls = allCards.map(card => {
                         const df = card.getAttribute('data-filename');

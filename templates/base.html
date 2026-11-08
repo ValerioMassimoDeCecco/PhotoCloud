@@ -19,13 +19,23 @@
     <div id="lightbox" class="lightbox" onclick="closeLightbox()">
         <div class="lightbox-top-bar" onclick="event.stopPropagation()">
             <span id="lightbox-counter" class="lightbox-counter">1 / 1</span>
-            <button class="close-btn" onclick="closeLightbox()" title="Chiudi">
-                <span class="material-icons">close</span>
-            </button>
+            <div class="lightbox-top-actions">
+                <button type="button" id="lightbox-edit-btn" class="lightbox-action-pill" onclick="openPhotoEditorFromLightbox(event)" title="Modifica Foto">
+                    <span class="material-icons">tune</span>
+                    <span>Modifica Foto</span>
+                </button>
+                <a id="lightbox-download-btn" class="lightbox-action-pill" href="#" download title="Scarica">
+                    <span class="material-icons">download</span>
+                    <span>Scarica</span>
+                </a>
+                <button type="button" class="close-btn" onclick="closeLightbox()" title="Chiudi" aria-label="Chiudi Lightbox">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
         </div>
 
         <div class="lightbox-content" onclick="event.stopPropagation()">
-            <button class="nav-btn prev-btn" onclick="navigateMedia(-1, event)" title="Precedente">
+            <button type="button" class="nav-btn prev-btn" onclick="navigateMedia(-1, event)" title="Precedente" aria-label="Media precedente">
                 <span class="material-icons">chevron_left</span>
             </button>
             
@@ -37,13 +47,126 @@
                 </video>
             </div>
             
-            <button class="nav-btn next-btn" onclick="navigateMedia(1, event)" title="Successivo">
+            <button type="button" class="nav-btn next-btn" onclick="navigateMedia(1, event)" title="Successivo" aria-label="Media successivo">
                 <span class="material-icons">chevron_right</span>
             </button>
         </div>
     </div>
+
+    <!-- MATERIAL YOU PHOTO EDITOR STUDIO MODAL -->
+    <div id="photo-editor-modal" class="photo-editor-modal" style="display: none;" role="dialog" aria-modal="true" aria-label="Editor Foto PhotoCloud">
+        <header class="photo-editor-header">
+            <div class="photo-editor-title-wrap">
+                <button type="button" class="btn icon" id="editor-close-btn" title="Annulla e chiudi editor" aria-label="Chiudi Editor">
+                    <span class="material-icons">close</span>
+                </button>
+                <div>
+                    <h2 id="editor-filename-title">Modifica Foto</h2>
+                    <span id="editor-resolution-badge" class="editor-sub-badge">Canvas HD Crittografato</span>
+                </div>
+            </div>
+            <div class="photo-editor-header-actions">
+                <button type="button" class="btn outlined" id="editor-reset-btn" title="Ripristina modifiche">
+                    <span class="material-icons">restart_alt</span>
+                    <span class="btn-text">Reset</span>
+                </button>
+                <button type="button" class="btn outlined" id="editor-save-overwrite-btn" title="Sovrascrivi la foto originale">
+                    <span class="material-icons">save</span>
+                    <span class="btn-text">Sovrascrivi</span>
+                </button>
+                <button type="button" class="btn primary" id="editor-save-copy-btn" title="Salva come nuova copia nell'archivio">
+                    <span class="material-icons">add_photo_alternate</span>
+                    <span class="btn-text">Salva Copia</span>
+                </button>
+            </div>
+        </header>
+
+        <div class="photo-editor-stage">
+            <canvas id="photo-editor-canvas" data-testid="photo-editor-canvas"></canvas>
+        </div>
+
+        <section class="photo-editor-controls">
+            <!-- Filter Presets Row -->
+            <div class="editor-presets-row" role="group" aria-label="Filtri predefiniti">
+                <button type="button" class="editor-preset-chip active" data-preset="original">Originale</button>
+                <button type="button" class="editor-preset-chip" data-preset="vivid">Vivido</button>
+                <button type="button" class="editor-preset-chip" data-preset="bw">Bianco &amp; Nero</button>
+                <button type="button" class="editor-preset-chip" data-preset="sepia">Seppia</button>
+                <button type="button" class="editor-preset-chip" data-preset="cinema">Cinema</button>
+                <button type="button" class="editor-preset-chip" data-preset="cool">Freddo</button>
+                <button type="button" class="editor-preset-chip" data-preset="vintage">Vintage</button>
+            </div>
+
+            <!-- Sliders Grid -->
+            <div class="editor-sliders-grid">
+                <label class="editor-slider-item">
+                    <div class="editor-slider-label">
+                        <span><span class="material-icons">light_mode</span> Luminosità</span>
+                        <strong id="val-brightness">0</strong>
+                    </div>
+                    <input type="range" id="slider-brightness" min="-100" max="100" value="0" aria-label="Luminosità">
+                </label>
+
+                <label class="editor-slider-item">
+                    <div class="editor-slider-label">
+                        <span><span class="material-icons">contrast</span> Contrasto</span>
+                        <strong id="val-contrast">0</strong>
+                    </div>
+                    <input type="range" id="slider-contrast" min="-100" max="100" value="0" aria-label="Contrasto">
+                </label>
+
+                <label class="editor-slider-item">
+                    <div class="editor-slider-label">
+                        <span><span class="material-icons">palette</span> Saturazione</span>
+                        <strong id="val-saturation">0</strong>
+                    </div>
+                    <input type="range" id="slider-saturation" min="-100" max="100" value="0" aria-label="Saturazione">
+                </label>
+
+                <label class="editor-slider-item">
+                    <div class="editor-slider-label">
+                        <span><span class="material-icons">thermostat</span> Calore</span>
+                        <strong id="val-warmth">0</strong>
+                    </div>
+                    <input type="range" id="slider-warmth" min="-100" max="100" value="0" aria-label="Calore">
+                </label>
+            </div>
+
+            <!-- Transform & Crop Toolbar -->
+            <div class="editor-transform-toolbar">
+                <div class="editor-tool-group">
+                    <button type="button" class="editor-tool-btn" id="editor-rotate-left-btn" title="Ruota di -90°">
+                        <span class="material-icons">rotate_left</span>
+                        <span>-90°</span>
+                    </button>
+                    <button type="button" class="editor-tool-btn" id="editor-rotate-right-btn" title="Ruota di +90°">
+                        <span class="material-icons">rotate_right</span>
+                        <span>+90°</span>
+                    </button>
+                    <button type="button" class="editor-tool-btn" id="editor-flip-h-btn" title="Specchia Orizzontalmente">
+                        <span class="material-icons">flip</span>
+                        <span>Specchia Oriz.</span>
+                    </button>
+                    <button type="button" class="editor-tool-btn" id="editor-flip-v-btn" title="Specchia Verticalmente">
+                        <span class="material-icons" style="transform: rotate(90deg);">flip</span>
+                        <span>Specchia Vert.</span>
+                    </button>
+                </div>
+
+                <div class="editor-crop-group" role="group" aria-label="Proporzioni ritaglio">
+                    <span class="crop-label"><span class="material-icons">crop</span> Ritaglio:</span>
+                    <button type="button" class="editor-crop-chip active" data-crop="free">Libero</button>
+                    <button type="button" class="editor-crop-chip" data-crop="1:1">1:1</button>
+                    <button type="button" class="editor-crop-chip" data-crop="4:5">4:5</button>
+                    <button type="button" class="editor-crop-chip" data-crop="4:3">4:3</button>
+                    <button type="button" class="editor-crop-chip" data-crop="16:9">16:9</button>
+                </div>
+            </div>
+        </section>
+    </div>
     
     <script src="{{ url_for('static', filename='scripts/lightbox.js') }}"></script>
+    <script src="{{ url_for('static', filename='scripts/photo-editor.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

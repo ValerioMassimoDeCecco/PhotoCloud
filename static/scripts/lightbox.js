@@ -1,4 +1,4 @@
-// static/scripts/lightbox.js — Material You 120Hz Lightbox con supporto touch swipe e risoluzione robusta URL
+// static/scripts/lightbox.js — Material You 120Hz Lightbox con supporto touch swipe, download e avvio Photo Editor
 
 let currentIndex = 0;
 let mediaList = [];
@@ -11,12 +11,19 @@ function getElements() {
     const lightboxVideo = document.getElementById('lightbox-video');
     const lightboxVideoSource = lightboxVideo ? lightboxVideo.querySelector('source') : null;
     const lightboxCounter = document.getElementById('lightbox-counter');
-    return { lightbox, lightboxImg, lightboxVideo, lightboxVideoSource, lightboxCounter };
+    const lightboxEditBtn = document.getElementById('lightbox-edit-btn');
+    const lightboxDownloadBtn = document.getElementById('lightbox-download-btn');
+    return {
+        lightbox,
+        lightboxImg,
+        lightboxVideo,
+        lightboxVideoSource,
+        lightboxCounter,
+        lightboxEditBtn,
+        lightboxDownloadBtn,
+    };
 }
 
-/**
- * Estrae in modo sicuro il nome file o l'URL da una stringa o da un oggetto { filename: "..." }.
- */
 function resolveMediaUrl(item) {
     if (!item) return '';
     let raw = '';
@@ -33,9 +40,18 @@ function resolveMediaUrl(item) {
     return `/media/${encodeURIComponent(raw)}`;
 }
 
-/**
- * Ricostruisce la lista dei media direttamente dalle card presenti nel DOM se necessario.
- */
+function extractFilenameFromMediaUrl(mediaUrl) {
+    if (!mediaUrl) return '';
+    const clean = mediaUrl.split('?')[0].split('#')[0];
+    const parts = clean.split('/');
+    const last = parts[parts.length - 1] || '';
+    try {
+        return decodeURIComponent(last);
+    } catch {
+        return last;
+    }
+}
+
 function collectDomMediaUrls() {
     const cards = Array.from(document.querySelectorAll('.clickable-media'));
     return cards.map(card => {
@@ -48,6 +64,20 @@ function collectDomMediaUrls() {
         return '';
     }).filter(Boolean);
 }
+
+window.getCurrentLightboxFilename = function() {
+    if (!mediaList.length) return '';
+    const mediaUrl = resolveMediaUrl(mediaList[currentIndex]);
+    return extractFilenameFromMediaUrl(mediaUrl);
+};
+
+window.openPhotoEditorFromLightbox = function(event) {
+    if (event) event.stopPropagation();
+    const fn = window.getCurrentLightboxFilename();
+    if (fn && window.openPhotoEditor) {
+        window.openPhotoEditor(fn, event);
+    }
+};
 
 window.openLightbox = function(url, isVideo, index, allMedia) {
     const { lightbox } = getElements();
@@ -62,7 +92,8 @@ window.openLightbox = function(url, isVideo, index, allMedia) {
 
     const targetUrl = resolveMediaUrl(url);
     if (targetUrl) {
-        const foundIdx = mediaList.findIndex(u => decodeURIComponent(u) === decodeURIComponent(targetUrl));
+        const cleanTarget = targetUrl.split('?')[0];
+        const foundIdx = mediaList.findIndex(u => decodeURIComponent(u.split('?')[0]) === decodeURIComponent(cleanTarget));
         if (foundIdx !== -1) {
             currentIndex = foundIdx;
         } else if (typeof index === 'number' && index >= 0 && index < mediaList.length) {
@@ -120,7 +151,14 @@ window.navigateMedia = function(direction, event) {
 };
 
 function showMediaAtIndex(index) {
-    const { lightboxImg, lightboxVideo, lightboxVideoSource, lightboxCounter } = getElements();
+    const {
+        lightboxImg,
+        lightboxVideo,
+        lightboxVideoSource,
+        lightboxCounter,
+        lightboxEditBtn,
+        lightboxDownloadBtn,
+    } = getElements();
     if (!mediaList.length) return;
 
     const mediaUrl = resolveMediaUrl(mediaList[index]);
@@ -128,9 +166,19 @@ function showMediaAtIndex(index) {
 
     const cleanPath = mediaUrl.split('?')[0].split('#')[0];
     const isVideo = /\.(mp4|mov|webm|mkv|avi)$/i.test(cleanPath);
+    const filename = extractFilenameFromMediaUrl(mediaUrl);
 
     if (lightboxCounter) {
         lightboxCounter.textContent = `${index + 1} / ${mediaList.length}`;
+    }
+
+    if (lightboxEditBtn) {
+        lightboxEditBtn.style.display = isVideo ? 'none' : 'inline-flex';
+    }
+
+    if (lightboxDownloadBtn && filename) {
+        lightboxDownloadBtn.setAttribute('href', `/media/${encodeURIComponent(filename)}?download=1`);
+        lightboxDownloadBtn.setAttribute('download', filename);
     }
 
     if (lightboxVideo) {
@@ -159,6 +207,9 @@ function showMediaAtIndex(index) {
 }
 
 function handleKeydown(e) {
+    const editorModal = document.getElementById('photo-editor-modal');
+    if (editorModal && editorModal.style.display !== 'none') return;
+
     if (e.key === 'ArrowRight') {
         window.navigateMedia(1);
     } else if (e.key === 'ArrowLeft') {

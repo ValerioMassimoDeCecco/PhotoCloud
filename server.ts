@@ -188,8 +188,8 @@ async function startServer() {
   }
 
   const app = express();
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
   app.use('/static', express.static(STATIC_DIR));
   app.use('/release', express.static(RELEASE_DIR));
 
@@ -341,7 +341,7 @@ async function startServer() {
       const status: GitHubActionsRunStatus = await triggerGitHubActionsBuild({
         githubToken: process.env.GITHUB_TOKEN,
         branch: req.body?.branch,
-        releaseTag: req.body?.release_tag || 'v1.0.6',
+        releaseTag: req.body?.release_tag || 'v1.0.7',
       });
       res.json(status);
     } catch (e: unknown) {
@@ -356,7 +356,7 @@ async function startServer() {
     try {
       const compiled = await compileSignedAndroidApk(RELEASE_DIR);
       const token = process.env.GITHUB_TOKEN;
-      const tagName = req.body?.tag_name || 'v1.0.6';
+      const tagName = req.body?.tag_name || 'v1.0.7';
       const status = await publishApkToGitHubRelease({
         githubToken: token,
         tagName,
@@ -567,6 +567,82 @@ async function startServer() {
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       res.status(500).json({ error: `Errore durante il caricamento: ${msg}` });
+    }
+  });
+
+  // --- PHOTO EDITOR SAVE ENDPOINT (Supports "copy" and "overwrite" modes) ---
+  app.post('/api/media/edit', upload.single('file'), (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+
+    const originalFilename = path.basename(String(req.body?.originalFilename || '').trim());
+    const mode = String(req.body?.mode || 'copy').toLowerCase() === 'overwrite' ? 'overwrite' : 'copy';
+
+    let imageBuffer: Buffer | null = null;
+    if (req.file && req.file.buffer && req.file.buffer.length > 0) {
+      imageBuffer = req.file.buffer;
+    } else if (typeof req.body?.imageBase64 === 'string' && req.body.imageBase64.length > 0) {
+      const rawB64 = req.body.imageBase64.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
+      imageBuffer = Buffer.from(rawB64, 'base64');
+    }
+
+    if (!imageBuffer || imageBuffer.length === 0) {
+      res.status(400).json({ error: 'Immagine modificata non valida o vuota.' });
+      return;
+    }
+
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    fs.mkdirSync(userFolder, { recursive: true });
+    const safeUserFolder = path.resolve(userFolder);
+
+    try {
+      let targetFilename = '';
+      let targetFilepath = '';
+
+      if (mode === 'overwrite' && originalFilename) {
+        const candidatePath = path.resolve(safeUserFolder, originalFilename);
+        if (candidatePath.startsWith(safeUserFolder + path.sep) && fs.existsSync(candidatePath)) {
+          targetFilename = originalFilename;
+          targetFilepath = candidatePath;
+        }
+      }
+
+      if (!targetFilename) {
+        const ext = path.extname(originalFilename || '.jpg') || '.jpg';
+        const safeExt = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext.toLowerCase()) ? ext : '.jpg';
+        while (true) {
+          targetFilename = `${crypto.randomBytes(8).toString('hex')}${safeExt}`;
+          targetFilepath = path.join(safeUserFolder, targetFilename);
+          if (!fs.existsSync(targetFilepath)) break;
+        }
+      }
+
+      const encrypted = encryptFile(imageBuffer, sess.apiKey);
+      fs.writeFileSync(targetFilepath, encrypted);
+
+      // Preserve album assignment if original photo belonged to an album
+      const albumsData = loadUserAlbums(sess.username);
+      if (originalFilename && albumsData.fileAlbums[originalFilename] && targetFilename !== originalFilename) {
+        albumsData.fileAlbums[targetFilename] = albumsData.fileAlbums[originalFilename];
+        saveUserAlbums(sess.username, albumsData);
+      }
+
+      res.json({
+        success: true,
+        mode,
+        filename: targetFilename,
+        message:
+          mode === 'overwrite'
+            ? 'Foto originale aggiornata con successo.'
+            : 'Foto modificata salvata come nuova copia.',
+        mediaFiles: listMediaFiles(userFolder, sess.username),
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      res.status(500).json({ error: `Errore salvataggio foto modificata: ${msg}` });
     }
   });
 

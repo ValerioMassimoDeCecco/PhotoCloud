@@ -1381,6 +1381,7 @@ fun NativeVaultScreen(
 
     var selectedFilenames by remember { mutableStateOf<Set<String>>(emptySet()) }
     var lightboxInitialIndex by remember { mutableStateOf<Int?>(null) }
+    var editingPhotoFilename by remember { mutableStateOf<String?>(null) }
     var pendingTrashConfirmFilenames by remember { mutableStateOf<List<String>?>(null) }
 
     // Top-Right Transfer Operations State (Uploads & Downloads with live speed & size)
@@ -1492,9 +1493,10 @@ fun NativeVaultScreen(
     }
 
     BackHandler(
-        enabled = showTransferPopup || lightboxInitialIndex != null || selectedFilenames.isNotEmpty() || currentTab != VaultTab.GALLERY
+        enabled = editingPhotoFilename != null || showTransferPopup || lightboxInitialIndex != null || selectedFilenames.isNotEmpty() || currentTab != VaultTab.GALLERY
     ) {
         when {
+            editingPhotoFilename != null -> editingPhotoFilename = null
             showTransferPopup -> showTransferPopup = false
             lightboxInitialIndex != null -> lightboxInitialIndex = null
             selectedFilenames.isNotEmpty() -> selectedFilenames = emptySet()
@@ -2393,6 +2395,9 @@ fun NativeVaultScreen(
                 fromTrash = isFromTrash,
                 autoplayVideos = custom.autoplayVideos,
                 onClose = { lightboxInitialIndex = null },
+                onEditPhoto = { filename ->
+                    editingPhotoFilename = filename
+                },
                 onMoveToTrash = { filename ->
                     if (custom.confirmBeforeTrash) {
                         pendingTrashConfirmFilenames = listOf(filename)
@@ -2425,6 +2430,24 @@ fun NativeVaultScreen(
                         )
                         onShowInfo(msg)
                     }
+                }
+            )
+        }
+
+        val editTargetFilename = editingPhotoFilename
+        if (editTargetFilename != null) {
+            NativePhotoEditorModal(
+                apiClient = apiClient,
+                filename = editTargetFilename,
+                onClose = { editingPhotoFilename = null },
+                onSaved = { msg ->
+                    editingPhotoFilename = null
+                    onShowInfo(msg)
+                    onRefresh()
+                },
+                onTransferUpdate = { op ->
+                    showTransferPopup = true
+                    upsertTransferOperation(op)
                 }
             )
         }
@@ -3994,6 +4017,7 @@ fun NativeLightboxModal(
     fromTrash: Boolean,
     autoplayVideos: Boolean,
     onClose: () -> Unit,
+    onEditPhoto: (String) -> Unit,
     onMoveToTrash: (String) -> Unit,
     onRestore: (String) -> Unit,
     onDownload: (String) -> Unit
@@ -4149,15 +4173,26 @@ fun NativeLightboxModal(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(horizontal = 14.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(horizontal = 12.dp)
             ) {
+                if (!fromTrash && !currentItem.isVideo) {
+                    TextButton(
+                        onClick = { onEditPhoto(currentItem.filename) },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFD0BCFF))
+                    ) {
+                        Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("Modifica", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+
                 TextButton(
                     onClick = { onDownload(currentItem.filename) },
                     colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
                 ) {
                     Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(5.dp))
                     Text("Salva", fontWeight = FontWeight.SemiBold)
                 }
 
@@ -4167,7 +4202,7 @@ fun NativeLightboxModal(
                         colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFA8C7FA))
                     ) {
                         Icon(Icons.Default.RestoreFromTrash, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(6.dp))
+                        Spacer(Modifier.width(5.dp))
                         Text("Ripristina", fontWeight = FontWeight.SemiBold)
                     }
                 } else {
@@ -4176,7 +4211,7 @@ fun NativeLightboxModal(
                         colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2B8B5))
                     ) {
                         Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(6.dp))
+                        Spacer(Modifier.width(5.dp))
                         Text("Cestina", fontWeight = FontWeight.SemiBold)
                     }
                 }
@@ -4184,3 +4219,518 @@ fun NativeLightboxModal(
         }
     }
 }
+
+data class AndroidPhotoPreset(
+    val id: String,
+    val label: String,
+    val brightness: Float,
+    val contrast: Float,
+    val saturation: Float,
+    val warmth: Float
+)
+
+val ANDROID_PHOTO_PRESETS = listOf(
+    AndroidPhotoPreset("original", "Originale", 0f, 0f, 0f, 0f),
+    AndroidPhotoPreset("vivid", "Vivido", 6f, 22f, 35f, 8f),
+    AndroidPhotoPreset("bw", "Bianco & Nero", 5f, 28f, -100f, 0f),
+    AndroidPhotoPreset("sepia", "Seppia", 6f, 12f, -45f, 55f),
+    AndroidPhotoPreset("cinema", "Cinema", -4f, 30f, -15f, -18f),
+    AndroidPhotoPreset("cool", "Freddo", 4f, 10f, 8f, -35f),
+    AndroidPhotoPreset("vintage", "Vintage", 8f, -12f, -25f, 32f)
+)
+
+fun renderEditedAndroidBitmap(
+    source: android.graphics.Bitmap,
+    brightness: Float,
+    contrast: Float,
+    saturation: Float,
+    warmth: Float,
+    rotationDegrees: Int,
+    flipH: Boolean,
+    flipV: Boolean,
+    cropRatio: String
+): android.graphics.Bitmap {
+    val normRot = ((rotationDegrees % 360) + 360) % 360
+    val matrix = android.graphics.Matrix()
+    if (normRot != 0) {
+        matrix.postRotate(normRot.toFloat())
+    }
+    if (flipH || flipV) {
+        matrix.postScale(if (flipH) -1f else 1f, if (flipV) -1f else 1f)
+    }
+
+    val transformed = if (normRot != 0 || flipH || flipV) {
+        android.graphics.Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+    } else {
+        source
+    }
+
+    val srcW = transformed.width.coerceAtLeast(1)
+    val srcH = transformed.height.coerceAtLeast(1)
+
+    val targetRatio: Float? = when (cropRatio) {
+        "1:1" -> 1f
+        "4:5" -> 4f / 5f
+        "4:3" -> 4f / 3f
+        "16:9" -> 16f / 9f
+        else -> null
+    }
+
+    var cropX = 0
+    var cropY = 0
+    var cropW = srcW
+    var cropH = srcH
+
+    if (targetRatio != null && targetRatio > 0f) {
+        val currentRatio = srcW.toFloat() / srcH.toFloat()
+        if (currentRatio > targetRatio) {
+            cropW = (srcH * targetRatio).toInt().coerceIn(1, srcW)
+            cropX = ((srcW - cropW) / 2).coerceAtLeast(0)
+        } else if (currentRatio < targetRatio) {
+            cropH = (srcW / targetRatio).toInt().coerceIn(1, srcH)
+            cropY = ((srcH - cropH) / 2).coerceAtLeast(0)
+        }
+    }
+
+    val outBitmap = android.graphics.Bitmap.createBitmap(
+        cropW,
+        cropH,
+        android.graphics.Bitmap.Config.ARGB_8888
+    )
+    val canvas = android.graphics.Canvas(outBitmap)
+
+    val satFactor = ((100f + saturation) / 100f).coerceAtLeast(0f)
+    val satMatrix = android.graphics.ColorMatrix().apply {
+        setSaturation(satFactor)
+    }
+
+    val cFactor = ((100f + contrast) / 100f).coerceAtLeast(0f)
+    val cScale = cFactor * cFactor
+    val bOffset = brightness * 1.6f + 128f * (1f - cScale)
+    val rWarm = warmth * 0.45f
+    val gWarm = warmth * 0.10f
+    val bWarm = -warmth * 0.45f
+
+    val adjustMatrix = android.graphics.ColorMatrix(
+        floatArrayOf(
+            cScale, 0f, 0f, 0f, bOffset + rWarm,
+            0f, cScale, 0f, 0f, bOffset + gWarm,
+            0f, 0f, cScale, 0f, bOffset + bWarm,
+            0f, 0f, 0f, 1f, 0f
+        )
+    )
+    satMatrix.postConcat(adjustMatrix)
+
+    val paint = android.graphics.Paint(
+        android.graphics.Paint.ANTI_ALIAS_FLAG or android.graphics.Paint.FILTER_BITMAP_FLAG
+    ).apply {
+        colorFilter = android.graphics.ColorMatrixColorFilter(satMatrix)
+    }
+
+    val srcRect = android.graphics.Rect(cropX, cropY, cropX + cropW, cropY + cropH)
+    val dstRect = android.graphics.Rect(0, 0, cropW, cropH)
+    canvas.drawBitmap(transformed, srcRect, dstRect, paint)
+
+    return outBitmap
+}
+
+@Composable
+fun NativePhotoEditorModal(
+    apiClient: PhotoCloudApiClient,
+    filename: String,
+    onClose: () -> Unit,
+    onSaved: (String) -> Unit,
+    onTransferUpdate: (TransferOperation) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var sourceBitmap by remember(filename) {
+        mutableStateOf(apiClient.getCachedBitmap(filename, false))
+    }
+    var isLoading by remember(filename) { mutableStateOf(sourceBitmap == null) }
+    var isSaving by remember { mutableStateOf(false) }
+
+    var activePreset by remember { mutableStateOf("original") }
+    var brightness by remember { mutableFloatStateOf(0f) }
+    var contrast by remember { mutableFloatStateOf(0f) }
+    var saturation by remember { mutableFloatStateOf(0f) }
+    var warmth by remember { mutableFloatStateOf(0f) }
+    var rotationDegrees by remember { mutableIntStateOf(0) }
+    var flipH by remember { mutableStateOf(false) }
+    var flipV by remember { mutableStateOf(false) }
+    var cropRatio by remember { mutableStateOf("free") }
+
+    LaunchedEffect(filename) {
+        if (sourceBitmap == null) {
+            isLoading = true
+            sourceBitmap = apiClient.loadMediaBitmap(filename, false)
+            isLoading = false
+        }
+    }
+
+    val previewBitmap = remember(
+        sourceBitmap,
+        brightness,
+        contrast,
+        saturation,
+        warmth,
+        rotationDegrees,
+        flipH,
+        flipV,
+        cropRatio
+    ) {
+        val src = sourceBitmap ?: return@remember null
+        renderEditedAndroidBitmap(
+            source = src,
+            brightness = brightness,
+            contrast = contrast,
+            saturation = saturation,
+            warmth = warmth,
+            rotationDegrees = rotationDegrees,
+            flipH = flipH,
+            flipV = flipV,
+            cropRatio = cropRatio
+        )
+    }
+
+    fun resetEdits() {
+        activePreset = "original"
+        brightness = 0f
+        contrast = 0f
+        saturation = 0f
+        warmth = 0f
+        rotationDegrees = 0
+        flipH = false
+        flipV = false
+        cropRatio = "free"
+    }
+
+    fun saveEditedPhoto(overwrite: Boolean) {
+        val currentPreview = previewBitmap ?: return
+        if (isSaving) return
+        isSaving = true
+        scope.launch {
+            val outStream = java.io.ByteArrayOutputStream()
+            currentPreview.compress(android.graphics.Bitmap.CompressFormat.JPEG, 94, outStream)
+            val jpegBytes = outStream.toByteArray()
+            val (ok, msg) = apiClient.uploadEditedPhotoBytes(
+                originalFilename = filename,
+                editedJpegBytes = jpegBytes,
+                overwrite = overwrite,
+                onTransferUpdate = onTransferUpdate
+            )
+            isSaving = false
+            if (ok) {
+                onSaved(msg)
+            }
+        }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = Color(0xFF0A0A0F)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Surface(
+                        onClick = onClose,
+                        shape = CircleShape,
+                        color = Color.White.copy(alpha = 0.12f),
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Close, contentDescription = "Chiudi", tint = Color.White)
+                        }
+                    }
+                    Column {
+                        Text(
+                            text = "Modifica Foto",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = filename,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.65f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                TextButton(
+                    onClick = { resetEdits() },
+                    enabled = !isSaving
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Reset", color = Color.White, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            // Live Image Preview Stage
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color(0xFF14141C)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(color = Color.White)
+                } else if (previewBitmap != null) {
+                    Image(
+                        bitmap = previewBitmap.asImageBitmap(),
+                        contentDescription = "Anteprima Modifica",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(12.dp)
+                    )
+                } else {
+                    Text(
+                        text = "Impossibile caricare la foto per la modifica",
+                        color = Color.White.copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            // Scrollable Controls Sheet
+            Surface(
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 6.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 390.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 18.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // 1. Filter Presets
+                    Text(
+                        text = "FILTRI RAPIDI",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ANDROID_PHOTO_PRESETS.forEach { preset ->
+                            FilterChip(
+                                selected = activePreset == preset.id,
+                                onClick = {
+                                    activePreset = preset.id
+                                    brightness = preset.brightness
+                                    contrast = preset.contrast
+                                    saturation = preset.saturation
+                                    warmth = preset.warmth
+                                },
+                                label = { Text(preset.label, fontWeight = FontWeight.SemiBold) },
+                                shape = CircleShape
+                            )
+                        }
+                    }
+
+                    // 2. Transform & Aspect Ratio Crop
+                    Text(
+                        text = "TRASFORMA & RITAGLIA",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = { rotationDegrees = (rotationDegrees - 90 + 360) % 360 },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text("-90°", fontWeight = FontWeight.Bold)
+                        }
+                        FilledTonalButton(
+                            onClick = { rotationDegrees = (rotationDegrees + 90) % 360 },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text("+90°", fontWeight = FontWeight.Bold)
+                        }
+                        FilledTonalButton(
+                            onClick = { flipH = !flipH },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text("Specchia O.", fontWeight = FontWeight.Bold, maxLines = 1)
+                        }
+                        FilledTonalButton(
+                            onClick = { flipV = !flipV },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text("Specchia V.", fontWeight = FontWeight.Bold, maxLines = 1)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            "free" to "Libero",
+                            "1:1" to "1:1 Quadrato",
+                            "4:5" to "4:5 Ritratto",
+                            "4:3" to "4:3 Foto",
+                            "16:9" to "16:9 Cinema"
+                        ).forEach { (ratioKey, ratioLabel) ->
+                            FilterChip(
+                                selected = cropRatio == ratioKey,
+                                onClick = { cropRatio = ratioKey },
+                                label = { Text(ratioLabel) },
+                                shape = CircleShape
+                            )
+                        }
+                    }
+
+                    // 3. Fine Adjustments Sliders
+                    Text(
+                        text = "REGOLAZIONI FINE",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    EditorSliderControl(
+                        label = "Luminosità",
+                        value = brightness,
+                        onValueChange = {
+                            activePreset = "custom"
+                            brightness = it
+                        }
+                    )
+                    EditorSliderControl(
+                        label = "Contrasto",
+                        value = contrast,
+                        onValueChange = {
+                            activePreset = "custom"
+                            contrast = it
+                        }
+                    )
+                    EditorSliderControl(
+                        label = "Saturazione",
+                        value = saturation,
+                        onValueChange = {
+                            activePreset = "custom"
+                            saturation = it
+                        }
+                    )
+                    EditorSliderControl(
+                        label = "Calore",
+                        value = warmth,
+                        onValueChange = {
+                            activePreset = "custom"
+                            warmth = it
+                        }
+                    )
+
+                    // 4. Save Actions (Overwrite or Save Copy)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { saveEditedPhoto(overwrite = true) },
+                            enabled = !isSaving && previewBitmap != null,
+                            shape = CircleShape,
+                            modifier = Modifier.weight(1f).height(48.dp)
+                        ) {
+                            Text("Sovrascrivi", fontWeight = FontWeight.Bold)
+                        }
+                        Button(
+                            onClick = { saveEditedPhoto(overwrite = false) },
+                            enabled = !isSaving && previewBitmap != null,
+                            shape = CircleShape,
+                            modifier = Modifier.weight(1f).height(48.dp)
+                        ) {
+                            if (isSaving) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                            } else {
+                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Salva Copia", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditorSliderControl(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "${value.toInt()}",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = -100f..100f
+        )
+    }
+}
+

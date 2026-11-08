@@ -20,6 +20,14 @@ import {
   compileSignedAndroidApk,
   triggerGitHubActionsBuild,
 } from './githubReleasePublisher';
+import {
+  DEFAULT_PHOTO_EDIT_STATE,
+  PHOTO_FILTER_PRESETS,
+  applyPresetToEditState,
+  normalizeRotation,
+  computeCropRect,
+  transformRgbPixel,
+} from './photoEditorMath';
 
 test('generateApiKey produces a 32-char key with lower, upper, digit, and punctuation', () => {
   const key = generateApiKey(32);
@@ -62,7 +70,40 @@ test('findDuplicateGroups detects identical file hashes and sorts filenames', ()
   assert.deepEqual(duplicates, [['a_original.jpg', 'b_copy.jpg']]);
 });
 
-test('Templates render non-media Cloud File Manager, Album grouping, and Top-Right Transfer Center', () => {
+test('photoEditorMath presets, rotation normalization, crop calculation, and RGB pixel transforms work accurately', () => {
+  assert.equal(Object.keys(PHOTO_FILTER_PRESETS).length, 7);
+  const bwState = applyPresetToEditState(DEFAULT_PHOTO_EDIT_STATE, 'bw');
+  assert.equal(bwState.filterPreset, 'bw');
+  assert.equal(bwState.saturation, -100);
+
+  assert.equal(normalizeRotation(-90), 270);
+  assert.equal(normalizeRotation(450), 90);
+  assert.equal(normalizeRotation(360), 0);
+
+  const squareCrop = computeCropRect(1920, 1080, '1:1');
+  assert.equal(squareCrop.width, 1080);
+  assert.equal(squareCrop.height, 1080);
+  assert.equal(squareCrop.x, 420);
+  assert.equal(squareCrop.y, 0);
+
+  const portraitCrop = computeCropRect(1000, 1000, '4:5');
+  assert.equal(portraitCrop.width, 800);
+  assert.equal(portraitCrop.height, 1000);
+  assert.equal(portraitCrop.x, 100);
+
+  // Neutral state leaves pixel unchanged
+  const [r0, g0, b0] = transformRgbPixel(120, 150, 200, DEFAULT_PHOTO_EDIT_STATE);
+  assert.equal(r0, 120);
+  assert.equal(g0, 150);
+  assert.equal(b0, 200);
+
+  // Black & White state equalizes R, G, B channels (0 saturation)
+  const [rBw, gBw, bBw] = transformRgbPixel(220, 80, 40, bwState);
+  assert.equal(rBw, gBw);
+  assert.equal(gBw, bBw);
+});
+
+test('Templates render non-media Cloud File Manager, Album grouping, Photo Editor Modal, and Top-Right Transfer Center', () => {
   const loginHtml = renderLoginTemplate();
   assert.ok(loginHtml.includes('Il tuo archivio foto/video sicuro'));
   assert.ok(loginHtml.includes('/static/styles/login.css'));
@@ -98,12 +139,15 @@ test('Templates render non-media Cloud File Manager, Album grouping, and Top-Rig
   assert.ok(galleryHtml.includes('id="tab-files-btn"'));
   assert.ok(galleryHtml.includes('id="upload-indicator-container"'));
   assert.ok(galleryHtml.includes('id="upload-speed-badge"'));
+  assert.ok(galleryHtml.includes('id="photo-editor-modal"'));
+  assert.ok(galleryHtml.includes('id="lightbox-edit-btn"'));
+  assert.ok(galleryHtml.includes('/static/scripts/photo-editor.js'));
 
   const trashHtml = renderTrashTemplate([]);
   assert.ok(trashHtml.includes('Il cestino è vuoto'));
 });
 
-test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android v1.0.6 project are configured', async () => {
+test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android v1.0.7 project are configured', async () => {
   const workflowPath = path.resolve(process.cwd(), '.github/workflows/android-release.yml');
   assert.ok(fs.existsSync(workflowPath));
   const workflowYaml = fs.readFileSync(workflowPath, 'utf-8');
@@ -115,7 +159,7 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
   assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
   assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));
-  assert.ok(workflowYaml.includes('photocloud-release-v1.0.6-signed.apk'));
+  assert.ok(workflowYaml.includes('photocloud-release-v1.0.7-signed.apk'));
   assert.equal(workflowYaml.includes('rm -f photocloud-release-key.jks'), false);
 
   const keystorePath = path.resolve(process.cwd(), 'android-app/app/photocloud-release-key.jks');
@@ -145,21 +189,24 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(mainActivityKt.includes('NativeCloudFileManagerScreen'));
   assert.ok(mainActivityKt.includes('TransferOperationsFloatingCard'));
   assert.ok(mainActivityKt.includes('AlbumManagerDialog'));
+  assert.ok(mainActivityKt.includes('NativePhotoEditorModal'));
+  assert.ok(mainActivityKt.includes('renderEditedAndroidBitmap'));
   assert.ok(mainActivityKt.includes('ALBUM("Album")'));
   assert.ok(mainActivityKt.includes('VaultTab.FILES'));
   assert.ok(apiClientKt.includes('ProgressRequestBody'));
   assert.ok(apiClientKt.includes('TransferOperation'));
   assert.ok(apiClientKt.includes('formatSpeedHuman'));
   assert.ok(apiClientKt.includes('assignFilesToAlbum'));
+  assert.ok(apiClientKt.includes('uploadEditedPhotoBytes'));
 
   const outDir = path.resolve(process.cwd(), 'release');
   const res = await compileSignedAndroidApk(outDir);
   assert.ok(fs.existsSync(res.apkPath));
-  assert.ok(res.apkPath.endsWith('photocloud-release-v1.0.6-signed.apk'));
+  assert.ok(res.apkPath.endsWith('photocloud-release-v1.0.7-signed.apk'));
   assert.equal(res.sha256.length, 64);
 
   const actionsStatus = await triggerGitHubActionsBuild();
   assert.equal(actionsStatus.repo, 'ValerioMassimoDeCecco/PhotoCloud');
   assert.equal(actionsStatus.workflowFile, '.github/workflows/android-release.yml');
-  assert.equal(actionsStatus.releaseTag, 'v1.0.6');
+  assert.equal(actionsStatus.releaseTag, 'v1.0.7');
 });

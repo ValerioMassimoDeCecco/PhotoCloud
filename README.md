@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video & File Manager Cloud Crittografato (Web & Android Nativo v1.0.6)
+# PhotoCloud — Archivio Foto, Video & File Manager Cloud Crittografato (Web & Android Nativo v1.0.7)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura di **foto, video e qualsiasi tipo di file non-media** (PDF, ZIP, APK, documenti Office, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile al 100% con il formato crittografico originale Python).
@@ -6,7 +6,7 @@
 
 ---
 
-## ✨ Tutte le Funzionalità (Aggiornato alla Release `v1.0.6`)
+## ✨ Tutte le Funzionalità (Aggiornato alla Release `v1.0.7`)
 
 ### 🔐 Sicurezza, Crittografia & Biometria
 - **Crittografia End-to-End Sul Disco (`AES-256-CFB` + `PBKDF2-HMAC-SHA256` a 100.000 iterazioni)**: ogni foto, video o documento viene cifrato prima di essere scritto nella cartella `user_media/<username>` con salt e IV dedicati.
@@ -26,6 +26,13 @@
   - Filtra istantaneamente la galleria tramite i chip degli album.
 - **Selezione Multipla tramite Trascinamento (`Drag-to-Select`)**: tieni premuto su una foto e trascina il dito sulla griglia per selezionare o deselezionare rapidamente interi blocchi di elementi, con **auto-scroll** ai bordi e **feedback aptico a 120Hz**.
 - **Lightbox Nativa a Schermo Intero**: swipe fluido (`HorizontalPager`), doppio tocco e **pinch-to-zoom fino a 4x**, e player video nativo con controlli e autoplay configurabile.
+
+### 🪄 Photo Editor Studio Integrato (Web & App Android)
+- **Editing Fotografico Non-Distruttivo o Diretto**: apri qualsiasi foto nella Lightbox (o premi l'icona di modifica rapida sulla miniatura) e tocca **Modifica Foto** sia nella Web App sia nell'App Android nativa.
+- **7 Filtri Fotografici Istantanei**: `Originale`, `Vivido`, `Bianco & Nero`, `Seppia`, `Cinema`, `Freddo` e `Vintage`.
+- **Regolazioni Fine in Tempo Reale**: slider ad alta precisione (`-100` a `+100`) per **Luminosità**, **Contrasto**, **Saturazione** e **Calore (Temperatura Colore)**.
+- **Trasformazione & Ritaglio Proporzioni**: rotazione rapida (`-90°` / `+90°`), specchiatura **Orizzontale** e **Verticale**, e ritaglio centrato con rapporti d'aspetto `Libero`, `1:1 Quadrato`, `4:5 Ritratto`, `4:3 Foto` e `16:9 Cinema`.
+- **Salvataggio Crittografato (`AES-256-CFB`)**: scegli se **Salvare una Nuova Copia** (mantenendo lo stesso album della foto originale) oppure **Sovrascrivere l'Originale** direttamente sul server cifrato, con monitoraggio della velocità nel Centro Trasferimenti in alto a destra.
 
 ### 📁 File Manager Cloud (Supporto Qualsiasi File Non-Media)
 - **Caricamento Universale**: oltre a foto e video, puoi caricare su Web e APK **qualsiasi file non-media** (`PDF`, `DOCX`, `XLSX`, `PPTX`, `ZIP`, `RAR`, `7Z`, `APK`, `MP3`, `FLAC`, `JSON`, `TXT`, `PY`, `KT`, ecc.).
@@ -196,10 +203,10 @@ PORT=5000 npm start
 
 ### 🤖 4. Android (Installazione APK Nativo & Compilazione da Sorgente)
 
-#### Opzione A: Scaricare e Installare l'APK Pronto (`v1.0.6`)
-1. Vai nella sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases)** (oppure scarica l'APK generato nella cartella `/release/photocloud-release-v1.0.6-signed.apk`).
-2. Scarica sul tuo telefono Android il file **`photocloud-release-v1.0.6-signed.apk`**.
-3. Apri il file `.apk` per installarlo (se hai già installato la `v1.0.4` o `v1.0.5`, Android aggiornerà direttamente l'app mantenendo tutti i tuoi dati, le impostazioni e la chiave biometrica poiché la firma `photocloud-release-key.jks` è identica).
+#### Opzione A: Scaricare e Installare l'APK Pronto (`v1.0.7`)
+1. Vai nella sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases)** (oppure scarica l'APK generato nella cartella `/release/photocloud-release-v1.0.7-signed.apk`).
+2. Scarica sul tuo telefono Android il file **`photocloud-release-v1.0.7-signed.apk`**.
+3. Apri il file `.apk` per installarlo (se hai già installato la `v1.0.4`, `v1.0.5` o `v1.0.6`, Android aggiornerà direttamente l'app mantenendo tutti i tuoi dati, le impostazioni e la chiave biometrica poiché la firma `photocloud-release-key.jks` è identica).
 4. All'apertura dell'app:
    - Tocca il badge **Server** in alto a destra (o vai in **Opzioni → Cambia Server**).
    - Inserisci l'indirizzo del tuo server PhotoCloud (es. `http://192.168.1.50:3000` su rete locale Wi-Fi, oppure `http://10.0.2.2:3000` se usi l'Emulatore Android sul PC).
@@ -230,9 +237,9 @@ Il codice sorgente completo dell'app Android nativa si trova nella cartella `/an
 | `npm run dev` | Avvia il server full-stack Express + Vite in modalità sviluppo sulla porta `3000`. |
 | `npm run build` | Compila i bundle frontend ottimizzati per la produzione. |
 | `npm start` | Avvia il server Node.js/TypeScript in modalità produzione. |
-| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, template, verifica APK e workflow GitHub Actions). |
+| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math, template, verifica APK e workflow GitHub Actions). |
 | `npm run lint` | Verifica statica dei tipi TypeScript (`tsc --noEmit`). |
-| `npm run release:apk` | Compila il pacchetto APK firmato in `/release/photocloud-release-v1.0.6-signed.apk` e sincronizza/avvia la pipeline GitHub Actions se `GITHUB_TOKEN` è presente. |
+| `npm run release:apk` | Compila il pacchetto APK firmato in `/release/photocloud-release-v1.0.7-signed.apk` e sincronizza/avvia la pipeline GitHub Actions se `GITHUB_TOKEN` è presente. |
 
 ---
 
@@ -245,25 +252,26 @@ PhotoCloud/
 ├── android-app/                  # Progetto Nativo Android (Kotlin + Jetpack Compose Material You 120Hz)
 │   ├── app/
 │   │   ├── photocloud-release-key.jks  # Keystore persistente RSA-2048 per aggiornamenti APK diretti
-│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.0.6
+│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.0.7
 │   │   └── src/main/
 │   │       ├── AndroidManifest.xml     # Permessi, activity principale e alias icone (Colorata + B/W)
 │   │       ├── java/com/valerio/photocloud/
-│   │       │   ├── MainActivity.kt          # UI Nativa 120Hz, Galleria, File Manager Cloud, Album, Impostazioni
-│   │       │   └── PhotoCloudApiClient.kt   # Client HTTP, cache 0ms, tracker velocità upload/download
+│   │       │   ├── MainActivity.kt          # UI Nativa 120Hz, Galleria, Photo Editor Studio, File Manager Cloud, Album
+│   │       │   └── PhotoCloudApiClient.kt   # Client HTTP, cache 0ms, upload foto modificate e tracker velocità
 │   │       └── res/drawable/
 │   │           ├── ic_launcher_color.xml    # Icona App Colorata (Viola Notte)
 │   │           └── ic_launcher_bw.xml       # Icona App Monocromatica (Bianco & Nero)
 ├── src/
 │   ├── lib/
 │   │   ├── crypto.ts                   # Motore AES-256-CFB + PBKDF2-HMAC-SHA256 + deduplicazione SHA-256
-│   │   ├── templateRenderer.ts         # Renderer HTML (Galleria, File Manager Cloud, Album, Cestino)
+│   │   ├── photoEditorMath.ts          # Logica pura filtri, trasformazioni colore RGB, rotazione e ritaglio
+│   │   ├── templateRenderer.ts         # Renderer HTML (Galleria, Photo Editor Modal, File Manager Cloud, Album)
 │   │   ├── githubReleasePublisher.ts   # Builder APK e integrazione API GitHub Releases / Actions
 │   │   └── crypto.test.ts              # Suite di test automatici
 │   └── types.ts                        # Tipi TypeScript condivisi
 ├── static/
-│   ├── scripts/                        # Logica client Web (upload.js con velocità live, grouping.js, selection.js...)
-│   └── styles/                         # Fogli di stile Material You (gallery.css, login.css)
-├── server.ts                           # Server Express principale (API Media, File Cloud, Album, ZIP, Auth)
+│   ├── scripts/                        # Logica client Web (photo-editor.js, upload.js, grouping.js, lightbox.js...)
+│   └── styles/                         # Fogli di stile Material You (base.css, gallery.css, login.css)
+├── server.ts                           # Server Express principale (API Media, Photo Edit, File Cloud, Album, ZIP, Auth)
 └── package.json
 ```

@@ -879,6 +879,196 @@ class PhotoCloudApiClient(
     }
 
     /**
+     * Uploads an edited photo (JPEG bytes) to the server either as a new copy ("copy")
+     * or overwriting the existing photo ("overwrite"), with live transfer speed tracking
+     * and fallback to /upload for older servers.
+     */
+    suspend fun uploadEditedPhotoBytes(
+        originalFilename: String,
+        editedJpegBytes: ByteArray,
+        overwrite: Boolean,
+        onTransferUpdate: (TransferOperation) -> Unit = {}
+    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        if (editedJpegBytes.isEmpty()) {
+            return@withContext Pair(false, "Immagine modificata vuota")
+        }
+
+        val opId = "edit_${System.currentTimeMillis()}"
+        val opTitle = if (overwrite) "Sovrascrivi: $originalFilename" else "Nuova copia: $originalFilename"
+        val totalBytes = editedJpegBytes.size.toLong()
+        val startMs = System.currentTimeMillis()
+        val modeStr = if (overwrite) "overwrite" else "copy"
+
+        onTransferUpdate(
+            TransferOperation(
+                id = opId,
+                title = opTitle,
+                isUpload = true,
+                transferredBytes = 0L,
+                totalBytes = totalBytes,
+                speedBytesPerSec = 0L,
+                status = TransferStatus.RUNNING,
+                detail = "Salvataggio modifiche foto..."
+            )
+        )
+
+        try {
+            val multipart = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart(
+                    "file",
+                    originalFilename,
+                    editedJpegBytes.toRequestBody("image/jpeg".toMediaTypeOrNull())
+                )
+                .addFormDataPart("originalFilename", originalFilename)
+                .addFormDataPart("mode", modeStr)
+                .build()
+
+            var lastEmit = 0L
+            val progressBody = ProgressRequestBody(multipart) { written, _ ->
+                val now = System.currentTimeMillis()
+                if (now - lastEmit >= 100L || written >= totalBytes) {
+                    lastEmit = now
+                    val done = written.coerceAtMost(totalBytes)
+                    val elapsed = max(0.15, (now - startMs) / 1000.0)
+                    val speed = (done / elapsed).toLong()
+                    onTransferUpdate(
+                        TransferOperation(
+                            id = opId,
+                            title = opTitle,
+                            isUpload = true,
+                            transferredBytes = done,
+                            totalBytes = totalBytes,
+                            speedBytesPerSec = speed,
+                            status = TransferStatus.RUNNING,
+                            detail = "Crittografia e invio al server..."
+                        )
+                    )
+                }
+            }
+
+            val editReq = Request.Builder()
+                .url("${cleanBaseUrl()}/api/media/edit")
+                .post(progressBody)
+                .build()
+
+            var handledByEditEndpoint = false
+            httpClient.newCall(editReq).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    handledByEditEndpoint = true
+                } else if (resp.code != 404 && resp.code != 405) {
+                    val err = resp.body?.string() ?: "Errore salvataggio (${resp.code})"
+                    onTransferUpdate(
+                        TransferOperation(
+                            id = opId,
+                            title = opTitle,
+                            isUpload = true,
+                            transferredBytes = 0L,
+                            totalBytes = totalBytes,
+                            speedBytesPerSec = 0L,
+                            status = TransferStatus.ERROR,
+                            detail = err
+                        )
+                    )
+                    return@withContext Pair(false, err)
+                }
+            }
+
+            if (!handledByEditEndpoint) {
+                // Fallback for older Python backend: upload via /upload
+                val fallbackMultipart = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart(
+                        "file[]",
+                        originalFilename,
+                        editedJpegBytes.toRequestBody("image/jpeg".toMediaTypeOrNull())
+                    )
+                    .addFormDataPart("timestamp[]", System.currentTimeMillis().toString())
+                    .build()
+
+                val fallbackReq = Request.Builder()
+                    .url("${cleanBaseUrl()}/upload")
+                    .post(fallbackMultipart)
+                    .build()
+
+                httpClient.newCall(fallbackReq).execute().use { fbResp ->
+                    if (!fbResp.isSuccessful) {
+                        val err = fbResp.body?.string() ?: "Errore upload foto modificata"
+                        onTransferUpdate(
+                            TransferOperation(
+                                id = opId,
+                                title = opTitle,
+                                isUpload = true,
+                                transferredBytes = 0L,
+                                totalBytes = totalBytes,
+                                speedBytesPerSec = 0L,
+                                status = TransferStatus.ERROR,
+                                detail = err
+                            )
+                        )
+                        return@withContext Pair(false, err)
+                    }
+                }
+                if (overwrite) {
+                    moveToTrash(originalFilename)
+                }
+            }
+
+            if (overwrite) {
+                val cacheKey = "false:$originalFilename"
+                bitmapCache.remove(cacheKey)
+                val diskFile = diskCacheFile(originalFilename, false)
+                try {
+                    FileOutputStream(diskFile).use { out ->
+                        out.write(editedJpegBytes)
+                        out.flush()
+                    }
+                    val updatedBmp = BitmapFactory.decodeByteArray(editedJpegBytes, 0, editedJpegBytes.size)
+                    if (updatedBmp != null) {
+                        bitmapCache.put(cacheKey, updatedBmp)
+                    }
+                } catch (_: Exception) {
+                }
+            }
+
+            val elapsed = max(0.15, (System.currentTimeMillis() - startMs) / 1000.0)
+            val speed = (totalBytes / elapsed).toLong()
+            onTransferUpdate(
+                TransferOperation(
+                    id = opId,
+                    title = opTitle,
+                    isUpload = true,
+                    transferredBytes = totalBytes,
+                    totalBytes = totalBytes,
+                    speedBytesPerSec = speed,
+                    status = TransferStatus.COMPLETED,
+                    detail = if (overwrite) "Originale aggiornato" else "Salvata nuova copia"
+                )
+            )
+
+            Pair(
+                true,
+                if (overwrite) "Foto originale aggiornata con successo"
+                else "Foto modificata salvata come nuova copia"
+            )
+        } catch (e: Exception) {
+            onTransferUpdate(
+                TransferOperation(
+                    id = opId,
+                    title = opTitle,
+                    isUpload = true,
+                    transferredBytes = 0L,
+                    totalBytes = totalBytes,
+                    speedBytesPerSec = 0L,
+                    status = TransferStatus.ERROR,
+                    detail = e.localizedMessage ?: "Errore di rete"
+                )
+            )
+            Pair(false, "Errore salvataggio foto: ${e.localizedMessage}")
+        }
+    }
+
+    /**
      * Uploads any files (photos, videos, PDFs, ZIPs, APKs, docs, audio, etc.) with real-time
      * byte progress, speed (bytes/sec), and total size reporting.
      */
