@@ -1,15 +1,20 @@
 # PhotoCloud — Archivio Foto, Video & File Manager Cloud Crittografato (Web & Android Nativo v1.0.7)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura di **foto, video e qualsiasi tipo di file non-media** (PDF, ZIP, APK, documenti Office, audio, codice, ecc.), composta da:
-1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile al 100% con il formato crittografico originale Python).
+1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, legge il formato crittografico originale Python; i nuovi file usano un formato autenticato non leggibile dalle vecchie versioni).
 2. **App Android 100% Nativa (`com.valerio.photocloud`)** scritta in **Kotlin + Jetpack Compose (Material You 120Hz)** che comunica direttamente con il tuo server PhotoCloud.
+
+
+> **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
+>
+> Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
 
 ---
 
 ## ✨ Tutte le Funzionalità (Aggiornato alla Release `v1.0.7`)
 
 ### 🔐 Sicurezza, Crittografia & Biometria
-- **Crittografia End-to-End Sul Disco (`AES-256-CFB` + `PBKDF2-HMAC-SHA256` a 100.000 iterazioni)**: ogni foto, video o documento viene cifrato prima di essere scritto nella cartella `user_media/<username>` con salt e IV dedicati.
+- **Crittografia sul server (`AES-256-GCM` + `PBKDF2-HMAC-SHA256` a 100.000 iterazioni)**: ogni foto, video o documento viene cifrato prima di essere scritto nella cartella `user_media/<username>` con salt e IV dedicati.
 - **Autenticazione tramite File Chiave (`.json`)**: accesso immediato caricando il file chiave `photocloud_auth_<username>.json` generato in fase di registrazione (con chiave casuale a 32 caratteri o chiave personalizzata).
 - **Sblocco Biometrico Nativo (`BiometricPrompt`)**: su Android puoi sbloccare l'archivio e accedere al tuo account con **impronta digitale o riconoscimento facciale**, con opzione di **blocco automatico quando l'app va in background**.
 - **Schermo Sicuro Anti-Screenshot (`FLAG_SECURE`)**: opzione attivabile dalle impostazioni per impedire screenshot e oscurare l'anteprima dell'app nel multitasking di Android.
@@ -32,7 +37,7 @@
 - **7 Filtri Fotografici Istantanei**: `Originale`, `Vivido`, `Bianco & Nero`, `Seppia`, `Cinema`, `Freddo` e `Vintage`.
 - **Regolazioni Fine in Tempo Reale**: slider ad alta precisione (`-100` a `+100`) per **Luminosità**, **Contrasto**, **Saturazione** e **Calore (Temperatura Colore)**.
 - **Trasformazione & Ritaglio Proporzioni**: rotazione rapida (`-90°` / `+90°`), specchiatura **Orizzontale** e **Verticale**, e ritaglio centrato con rapporti d'aspetto `Libero`, `1:1 Quadrato`, `4:5 Ritratto`, `4:3 Foto` e `16:9 Cinema`.
-- **Salvataggio Crittografato (`AES-256-CFB`)**: scegli se **Salvare una Nuova Copia** (mantenendo lo stesso album della foto originale) oppure **Sovrascrivere l'Originale** direttamente sul server cifrato, con monitoraggio della velocità nel Centro Trasferimenti in alto a destra.
+- **Salvataggio Crittografato (`AES-256-GCM`)**: scegli se **Salvare una Nuova Copia** (mantenendo lo stesso album della foto originale) oppure **Sovrascrivere l'Originale** direttamente sul server cifrato, con monitoraggio della velocità nel Centro Trasferimenti in alto a destra.
 
 ### 📁 File Manager Cloud (Supporto Qualsiasi File Non-Media)
 - **Caricamento Universale**: oltre a foto e video, puoi caricare su Web e APK **qualsiasi file non-media** (`PDF`, `DOCX`, `XLSX`, `PPTX`, `ZIP`, `RAR`, `7Z`, `APK`, `MP3`, `FLAC`, `JSON`, `TXT`, `PY`, `KT`, ecc.).
@@ -69,7 +74,7 @@ Di seguito trovi le istruzioni passo-passo per scaricare ed eseguire il server e
 ### 🪟 1. Windows (Windows 10 / Windows 11)
 
 #### Prerequisiti
-1. Scarica e installa **Node.js (versione 20 LTS o superiore)** da [https://nodejs.org](https://nodejs.org) (include `npm`).
+1. Scarica e installa **Node.js (versione 20.19+ oppure 22.12+)** da [https://nodejs.org](https://nodejs.org) (include `npm`).
 2. Scarica e installa **Git per Windows** da [https://git-scm.com/download/win](https://git-scm.com/download/win) (oppure scarica direttamente il file `.zip` del repository da GitHub).
 
 #### Scaricare ed Avviare il Progetto (PowerShell o Prompt dei Comandi)
@@ -149,7 +154,7 @@ npm start
 ### 🐧 3. Linux (Ubuntu / Debian, Fedora, Arch Linux)
 
 #### Prerequisiti
-Installa **Node.js (v20+)** e **Git** con il gestore pacchetti della tua distribuzione:
+Installa **Node.js (20.19+ oppure 22.12+)** e **Git** con il gestore pacchetti della tua distribuzione:
 
 - **Ubuntu / Debian / Linux Mint**:
   ```bash
@@ -237,9 +242,9 @@ Il codice sorgente completo dell'app Android nativa si trova nella cartella `/an
 | `npm run dev` | Avvia il server full-stack Express + Vite in modalità sviluppo sulla porta `3000`. |
 | `npm run build` | Compila i bundle frontend ottimizzati per la produzione. |
 | `npm start` | Avvia il server Node.js/TypeScript in modalità produzione. |
-| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math, template, verifica APK e workflow GitHub Actions). |
+| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math, template, controlli del workflow e test di integrazione API). |
 | `npm run lint` | Verifica statica dei tipi TypeScript (`tsc --noEmit`). |
-| `npm run release:apk` | Compila il pacchetto APK firmato in `/release/photocloud-release-v1.0.7-signed.apk` e sincronizza/avvia la pipeline GitHub Actions se `GITHUB_TOKEN` è presente. |
+| `npm run release:apk` | Compila il pacchetto APK firmato in `/release/photocloud-release-v1.0.7-signed.apk` tramite Gradle e Android SDK; con `GITHUB_TOKEN` può anche pubblicare e attivare il workflow. |
 
 ---
 
@@ -263,7 +268,7 @@ PhotoCloud/
 │   │           └── ic_launcher_bw.xml       # Icona App Monocromatica (Bianco & Nero)
 ├── src/
 │   ├── lib/
-│   │   ├── crypto.ts                   # Motore AES-256-CFB + PBKDF2-HMAC-SHA256 + deduplicazione SHA-256
+│   │   ├── crypto.ts                   # Motore AES-256-GCM (lettura legacy CFB) + PBKDF2-HMAC-SHA256 + deduplicazione SHA-256
 │   │   ├── photoEditorMath.ts          # Logica pura filtri, trasformazioni colore RGB, rotazione e ritaglio
 │   │   ├── templateRenderer.ts         # Renderer HTML (Galleria, Photo Editor Modal, File Manager Cloud, Album)
 │   │   ├── githubReleasePublisher.ts   # Builder APK e integrazione API GitHub Releases / Actions

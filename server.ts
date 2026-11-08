@@ -10,6 +10,7 @@ import {
   verifyKey,
   encryptFile,
   decryptFile,
+  encryptedPlaintextSize,
   calculateBufferHash,
   findDuplicateGroups,
 } from './src/lib/crypto';
@@ -18,23 +19,14 @@ import {
   renderGalleryTemplate,
   renderTrashTemplate,
 } from './src/lib/templateRenderer';
-import {
-  compileSignedAndroidApk,
-  triggerGitHubActionsBuild,
-  publishApkToGitHubRelease,
-  GitHubReleaseStatus,
-  GitHubActionsRunStatus,
-} from './src/lib/githubReleasePublisher';
 import { FileCategory, MediaItem } from './src/types';
 
 const UPLOAD_FOLDER = path.resolve(process.cwd(), 'user_media');
-const TEMP_ZIP_FOLDER = path.resolve(process.cwd(), 'temp_zips');
 const RELEASE_DIR = path.resolve(process.cwd(), 'release');
 const USERS_FILE = path.resolve(process.cwd(), 'users.txt');
 const STATIC_DIR = path.resolve(process.cwd(), 'static');
 
 fs.mkdirSync(UPLOAD_FOLDER, { recursive: true });
-fs.mkdirSync(TEMP_ZIP_FOLDER, { recursive: true });
 fs.mkdirSync(RELEASE_DIR, { recursive: true });
 if (!fs.existsSync(USERS_FILE)) {
   fs.writeFileSync(USERS_FILE, '', 'utf-8');
@@ -43,6 +35,7 @@ if (!fs.existsSync(USERS_FILE)) {
 interface SessionData {
   username: string;
   apiKey: string;
+  expiresAt: number;
 }
 
 interface UserAlbumsData {
@@ -54,6 +47,8 @@ const SESSIONS = new Map<string, SessionData>();
 const ZIP_TASKS = new Map<
   string,
   {
+    owner: string;
+    buffer?: Buffer;
     status: 'starting' | 'processing' | 'complete' | 'error';
     progress: number;
     filename: string | null;
@@ -63,7 +58,6 @@ const ZIP_TASKS = new Map<
   }
 >();
 
-let latestReleaseStatus: GitHubReleaseStatus | null = null;
 
 function parseCookies(cookieHeader?: string): Record<string, string> {
   const list: Record<string, string> = {};
@@ -82,7 +76,9 @@ function getSession(req: Request): SessionData | null {
   const cookies = parseCookies(req.headers.cookie);
   const sid = cookies['photocloud_sid'] || (req.headers['x-session-id'] as string);
   if (!sid) return null;
-  return SESSIONS.get(sid) ?? null;
+  const session = SESSIONS.get(sid);
+  if (session && session.expiresAt <= Date.now()) { SESSIONS.delete(sid); return null; }
+  return session ?? null;
 }
 
 function findUser(username: string): string | null {
@@ -158,8 +154,11 @@ function listMediaFiles(folderPath: string, username?: string): MediaItem[] {
     }
     if (stat.isFile()) {
       const { isMedia, category } = classifyFileExtension(f);
-      // Encrypted payload has 28-byte AES-GCM overhead (12 IV + 16 AuthTag)
-      const originalApproxSize = Math.max(0, stat.size - 28);
+      const fd = fs.openSync(full, 'r');
+      const header = Buffer.alloc(Math.min(stat.size, 18));
+      try { fs.readSync(fd, header, 0, header.length, 0); } finally { fs.closeSync(fd); }
+      const overhead = header.equals(Buffer.from('PhotoCloud-GCM-v1\0')) ? 62 : 32;
+      const originalApproxSize = Math.max(0, stat.size - overhead);
       details.push({
         filename: f,
         timestamp: stat.mtimeMs / 1000,
@@ -177,20 +176,11 @@ function listMediaFiles(folderPath: string, username?: string): MediaItem[] {
 const upload = multer({ storage: multer.memoryStorage() });
 
 async function startServer() {
-  try {
-    const compiled = await compileSignedAndroidApk(RELEASE_DIR);
-    latestReleaseStatus = await publishApkToGitHubRelease({
-      apkPath: compiled.apkPath,
-      sha256: compiled.sha256,
-    });
-  } catch (err) {
-    console.error('Errore durante la compilazione/pubblicazione APK:', err);
-  }
-
   const app = express();
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
   app.use('/static', express.static(STATIC_DIR));
+  app.use(express.static(path.resolve(process.cwd(), 'public'), { index: false }));
   app.use('/release', express.static(RELEASE_DIR));
 
   // --- ORIGINAL WEB APP ROUTES + CLOUD FILE MANAGER & ALBUMS ---
@@ -316,67 +306,15 @@ async function startServer() {
   });
 
   // --- APK & GITHUB ACTIONS / RELEASE ENDPOINTS ---
-  app.get('/api/release/status', (_req: Request, res: Response) => {
-    res.json({
-      release: latestReleaseStatus,
-    });
+  // Release publishing is deliberately not exposed over HTTP. Use the CLI/workflow.
+  app.all(['/api/release/status', '/api/github-actions/status', '/api/github-actions/trigger', '/api/release/publish'], (_req, res) => {
+    res.status(410).json({ error: 'Gestione release disponibile solo tramite CLI o GitHub Actions.' });
   });
 
-  app.get('/api/github-actions/status', async (_req: Request, res: Response) => {
-    try {
-      const status: GitHubActionsRunStatus = await triggerGitHubActionsBuild({
-        githubToken: process.env.GITHUB_TOKEN,
-      });
-      res.json(status);
-    } catch (e: unknown) {
-      res.status(500).json({
-        triggered: false,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-  });
-
-  app.post('/api/github-actions/trigger', async (req: Request, res: Response) => {
-    try {
-      const status: GitHubActionsRunStatus = await triggerGitHubActionsBuild({
-        githubToken: process.env.GITHUB_TOKEN,
-        branch: req.body?.branch,
-        releaseTag: req.body?.release_tag || 'v1.0.7',
-      });
-      res.json(status);
-    } catch (e: unknown) {
-      res.status(500).json({
-        triggered: false,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-  });
-
-  app.post('/api/release/publish', async (req: Request, res: Response) => {
-    try {
-      const compiled = await compileSignedAndroidApk(RELEASE_DIR);
-      const token = process.env.GITHUB_TOKEN;
-      const tagName = req.body?.tag_name || 'v1.0.7';
-      const status = await publishApkToGitHubRelease({
-        githubToken: token,
-        tagName,
-        apkPath: compiled.apkPath,
-        sha256: compiled.sha256,
-      });
-      latestReleaseStatus = status;
-      res.json(status);
-    } catch (e: unknown) {
-      res.status(500).json({
-        published: false,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-  });
-
-  // --- REGISTER ---
+  // --- REGISTRATION ---
   app.post('/register', upload.none(), (req: Request, res: Response) => {
-    const rawUsername = (req.body?.username || '').trim();
-    if (!rawUsername) {
+    const rawUsername = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(rawUsername)) {
       res.status(400).send('Username non valido!');
       return;
     }
@@ -435,9 +373,9 @@ async function startServer() {
       return;
     }
 
-    const username = authData?.username?.trim();
+    const username = typeof authData?.username === 'string' ? authData.username.trim() : '';
     const apiKey = authData?.api_key;
-    if (!username || !apiKey) {
+    if (!username || username === '.' || username === '..' || /[\/\\:\x00-\x1f\x7f]/.test(username) || typeof apiKey !== 'string' || !apiKey) {
       res.status(400).send('File di autenticazione non valido.');
       return;
     }
@@ -445,10 +383,10 @@ async function startServer() {
     const storedHash = findUser(username);
     if (storedHash && verifyKey(apiKey, storedHash)) {
       const sid = crypto.randomUUID();
-      SESSIONS.set(sid, { username, apiKey });
+      SESSIONS.set(sid, { username, apiKey, expiresAt: Date.now() + 86400000 });
       res.setHeader(
         'Set-Cookie',
-        `photocloud_sid=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`
+        `photocloud_sid=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${req.secure ? "; Secure" : ""}`
       );
       if (req.headers.accept?.includes('application/json')) {
         res.json({ success: true, username });
@@ -463,7 +401,7 @@ async function startServer() {
   // --- LOGOUT ---
   app.post('/logout', (req: Request, res: Response) => {
     const cookies = parseCookies(req.headers.cookie);
-    const sid = cookies['photocloud_sid'];
+    const sid = cookies['photocloud_sid'] || (req.headers['x-session-id'] as string);
     if (sid) {
       SESSIONS.delete(sid);
     }
@@ -512,7 +450,7 @@ async function startServer() {
         const baseClean = path
           .basename(rawOrig, ext)
           .replace(/[^a-zA-Z0-9._-]/g, '_')
-          .slice(0, 64) || 'file';
+          .slice(0, 64).replace(/^\.+/, '') || 'file';
 
         const { isMedia } = classifyFileExtension(rawOrig);
         let filename = '';
@@ -747,9 +685,8 @@ async function startServer() {
       if (safePath.startsWith(userFolder + path.sep) && fs.existsSync(safePath)) {
         try {
           const dest = path.join(trashFolder, path.basename(safePath));
+          if (fs.existsSync(dest)) throw new Error('Un file con questo nome è già nel cestino');
           fs.renameSync(safePath, dest);
-          const now = Date.now() / 1000;
-          fs.utimesSync(dest, now, now);
           validFilenames.push(f);
         } catch (err: unknown) {
           errors.push(`Errore su ${f}: ${err instanceof Error ? err.message : String(err)}`);
@@ -792,9 +729,8 @@ async function startServer() {
       const trashFolder = path.join(userFolder, 'trash');
       fs.mkdirSync(trashFolder, { recursive: true });
       const dest = path.join(trashFolder, path.basename(filename));
+      if (fs.existsSync(dest)) { res.status(409).json({ success: false, error: 'Un file con questo nome è già nel cestino' }); return; }
       fs.renameSync(safeFilepath, dest);
-      const now = Date.now() / 1000;
-      fs.utimesSync(dest, now, now);
       res.json({ success: true, message: `File ${filename} spostato nel cestino` });
     } catch (e: unknown) {
       res.status(500).json({
@@ -822,6 +758,7 @@ async function startServer() {
 
     try {
       const dest = path.join(userFolder, path.basename(filename));
+      if (fs.existsSync(dest)) { res.status(409).json({ success: false, error: 'Un file con questo nome esiste già nell’archivio' }); return; }
       fs.renameSync(safeFilepath, dest);
       res.json({ success: true });
     } catch (e: unknown) {
@@ -933,12 +870,18 @@ async function startServer() {
     const taskId = crypto.randomUUID();
     const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
     ZIP_TASKS.set(taskId, {
+      owner: sess.username,
       status: 'starting',
       progress: 0,
       filename: null,
       totalBytes: 0,
       processedBytes: 0,
     });
+
+    const expiry = setTimeout(() => {
+      ZIP_TASKS.delete(taskId);
+    }, 60 * 60 * 1000);
+    expiry.unref();
 
     (async () => {
       try {
@@ -949,7 +892,7 @@ async function startServer() {
         for (const fname of filenames) {
           const sp = path.resolve(userFolder, fname);
           if (sp.startsWith(userFolder + path.sep) && fs.existsSync(sp)) {
-            totalBytes += Math.max(0, fs.statSync(sp).size - 28);
+            totalBytes += encryptedPlaintextSize(fs.readFileSync(sp));
           }
         }
         for (let i = 0; i < total; i++) {
@@ -963,6 +906,7 @@ async function startServer() {
             zip.file(path.basename(fname), dec);
           }
           ZIP_TASKS.set(taskId, {
+            owner: sess.username,
             status: 'processing',
             progress,
             filename: null,
@@ -971,10 +915,10 @@ async function startServer() {
           });
         }
         const zipFilename = `${taskId}.zip`;
-        const zipFilepath = path.join(TEMP_ZIP_FOLDER, zipFilename);
         const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-        fs.writeFileSync(zipFilepath, buf);
         ZIP_TASKS.set(taskId, {
+          owner: sess.username,
+          buffer: buf,
           status: 'complete',
           progress: 100,
           filename: zipFilename,
@@ -983,6 +927,7 @@ async function startServer() {
         });
       } catch (err: unknown) {
         ZIP_TASKS.set(taskId, {
+          owner: sess.username,
           status: 'error',
           progress: 0,
           filename: null,
@@ -1000,8 +945,10 @@ async function startServer() {
       res.status(403).json({ error: 'Accesso negato' });
       return;
     }
-    const info = ZIP_TASKS.get(String(req.params.taskId)) || { status: 'not_found', progress: 0 };
-    res.json(info);
+    const info = ZIP_TASKS.get(String(req.params.taskId));
+    if (!info || info.owner !== sess.username) { res.status(404).json({ status: 'not_found', progress: 0 }); return; }
+    const { owner, buffer, ...publicInfo } = info;
+    res.json(publicInfo);
   });
 
   app.get('/download-zip/:filename', (req: Request, res: Response) => {
@@ -1011,25 +958,13 @@ async function startServer() {
       return;
     }
     const filename = String(req.params.filename);
-    const directory = path.resolve(TEMP_ZIP_FOLDER);
-    const filepath = path.resolve(directory, filename);
-
-    if (!filepath.startsWith(directory + path.sep)) {
-      res.status(403).send('Accesso non autorizzato al file');
-      return;
-    }
-    if (!fs.existsSync(filepath)) {
-      res.status(404).send('File non trovato');
-      return;
-    }
-
-    const zipBytes = fs.readFileSync(filepath);
-    try {
-      fs.unlinkSync(filepath);
-    } catch {
-      // ignore
-    }
     const taskId = path.parse(filename).name;
+    const task = ZIP_TASKS.get(taskId);
+    if (!task || task.owner !== sess.username || task.filename !== filename || task.status !== 'complete') {
+      res.status(404).send('File non trovato'); return;
+    }
+    const zipBytes = task.buffer;
+    if (!zipBytes) { res.status(404).send('File non trovato'); return; }
     ZIP_TASKS.delete(taskId);
 
     res.setHeader('Content-Type', 'application/zip');

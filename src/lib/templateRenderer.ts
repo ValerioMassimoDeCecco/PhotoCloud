@@ -125,14 +125,14 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                 <div class="media-actions">
                     ${
                       isImg
-                        ? `<button type="button" class="btn icon edit-photo-btn" title="Modifica Foto" aria-label="Modifica ${file}" onclick="window.openPhotoEditor && window.openPhotoEditor('${file}', event)">
+                        ? `<button type="button" class="btn icon edit-photo-btn" title="Modifica Foto" aria-label="Modifica ${file}" onclick="window.openPhotoEditor && window.openPhotoEditor(this.closest('[data-filename]').dataset.filename, event)">
                             <span class="material-icons">tune</span>
                         </button>`
                         : ''
                     }
                     ${
                       !isMedia
-                        ? `<a href="/media/${encodeURIComponent(item.filename)}?download=1" download="${file}" class="btn icon" title="Scarica file" onclick="window.trackDirectDownload && window.trackDirectDownload(event, '${file}', ${sizeBytes})">
+                        ? `<a href="/media/${encodeURIComponent(item.filename)}?download=1" download="${file}" class="btn icon" title="Scarica file" onclick="window.trackDirectDownload && window.trackDirectDownload(event, this.closest('[data-filename]').dataset.filename, ${sizeBytes})">
                             <span class="material-icons">download</span>
                         </a>`
                         : ''
@@ -153,7 +153,7 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
   const styles = `<link rel="stylesheet" href="/static/styles/gallery.css">`;
 
   const content = `
-<div class="gallery-container" data-albums='${albumsJson}'>
+<div class="gallery-container" data-albums='${escapeHtml(albumsJson)}'>
     <header class="gallery-header">
         <div class="header-content">
             <div class="header-title-group">
@@ -228,7 +228,7 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
         </div>
     </header>
 
-    <div class="gallery-grid" data-media-files='${filenamesJson}'>
+    <div class="gallery-grid" data-media-files='${escapeHtml(filenamesJson)}'>
         ${emptyHtml}
         ${cardsHtml}
     </div>

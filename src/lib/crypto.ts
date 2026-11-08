@@ -48,33 +48,38 @@ export function deriveKey(key: string, salt: Buffer): Buffer {
   return crypto.pbkdf2Sync(Buffer.from(key, 'utf-8'), salt, 100000, 32, 'sha256');
 }
 
-/**
- * Encrypts file data using AES-256-CFB8 (compatible with Python cryptography modes.CFB)
- * Format: [16-byte salt][16-byte iv][ciphertext]
- */
-export function encryptFile(fileData: Buffer, key: string): Buffer {
-  const salt = crypto.randomBytes(16);
-  const iv = crypto.randomBytes(16);
-  const derivedKey = deriveKey(key, salt);
-  // Python cryptography's modes.CFB defaults to 128-bit feedback (aes-256-cfb)
-  const cipher = crypto.createCipheriv('aes-256-cfb', derivedKey, iv);
-  const encrypted = Buffer.concat([cipher.update(fileData), cipher.final()]);
-  return Buffer.concat([salt, iv, encrypted]);
+// New files use authenticated encryption. Legacy salt/IV/CFB files remain readable.
+const MAGIC = Buffer.from('PhotoCloud-GCM-v1\0', 'utf8');
+const GCM_OVERHEAD = MAGIC.length + 16 + 12 + 16;
+
+export function encryptedPlaintextSize(data: Buffer): number {
+  return Math.max(0, data.length - (data.subarray(0, MAGIC.length).equals(MAGIC) ? GCM_OVERHEAD : 32));
 }
 
-/**
- * Decrypts file data encrypted by encryptFile.
- */
+export function encryptFile(fileData: Buffer, key: string): Buffer {
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', deriveKey(key, salt), iv);
+  const ciphertext = Buffer.concat([cipher.update(fileData), cipher.final()]);
+  return Buffer.concat([MAGIC, salt, iv, cipher.getAuthTag(), ciphertext]);
+}
+
 export function decryptFile(encryptedData: Buffer, key: string): Buffer {
-  if (encryptedData.length < 32) {
-    throw new Error('Encrypted payload too short');
+  if (encryptedData.subarray(0, MAGIC.length).equals(MAGIC)) {
+    if (encryptedData.length < GCM_OVERHEAD) throw new Error('Encrypted payload too short');
+    const offset = MAGIC.length;
+    const salt = encryptedData.subarray(offset, offset + 16);
+    const iv = encryptedData.subarray(offset + 16, offset + 28);
+    const tag = encryptedData.subarray(offset + 28, offset + 44);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', deriveKey(key, salt), iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(encryptedData.subarray(offset + 44)), decipher.final()]);
   }
+  if (encryptedData.length < 32) throw new Error('Encrypted payload too short');
   const salt = encryptedData.subarray(0, 16);
   const iv = encryptedData.subarray(16, 32);
-  const ciphertext = encryptedData.subarray(32);
-  const derivedKey = deriveKey(key, salt);
-  const decipher = crypto.createDecipheriv('aes-256-cfb', derivedKey, iv);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  const decipher = crypto.createDecipheriv('aes-256-cfb', deriveKey(key, salt), iv);
+  return Buffer.concat([decipher.update(encryptedData.subarray(32)), decipher.final()]);
 }
 
 /**

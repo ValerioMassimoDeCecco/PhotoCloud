@@ -68,10 +68,11 @@ document.addEventListener('DOMContentLoaded', () => {
             li.innerHTML = `
                 <span class="material-icons">${type === 'download' ? 'download' : 'upload'}</span>
                 <div class="file-info">
-                    <span class="file-name">${name}</span>
+                    <span class="file-name"></span>
                     <span class="file-status">In avvio...</span>
                 </div>
             `;
+            li.querySelector('.file-name').textContent = name;
             fileList.prepend(li);
         }
         gem.classList.add('is-uploading');
@@ -139,10 +140,11 @@ document.addEventListener('DOMContentLoaded', () => {
             li.innerHTML = `
                 <span class="material-icons">upload_file</span>
                 <div class="file-info">
-                    <span class="file-name">${file.name}</span>
+                    <span class="file-name"></span>
                     <span class="file-status">In coda • ${formatBytes(file.size)}</span>
                 </div>
             `;
+            li.querySelector('.file-name').textContent = file.name;
             li.dataset.filename = file.name;
             fileList.prepend(li);
         });

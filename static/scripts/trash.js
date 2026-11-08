@@ -38,7 +38,7 @@ async function handleRestore(button) {
     if (!confirm(`Vuoi davvero ripristinare "${filename}"?`)) return;
 
     try {
-        const response = await fetch(`/restore/${filename}`, {
+        const response = await fetch(`/restore/${encodeURIComponent(filename)}`, {
             method: 'POST',
             headers: { 'Accept': 'application/json' },
         });
@@ -59,7 +59,7 @@ async function handlePermanentDelete(button) {
     if (!confirm(`ATTENZIONE: Stai per eliminare definitivamente "${filename}". L'azione è irreversibile. Continuare?`)) return;
 
     try {
-        const response = await fetch(`/delete_permanent/${filename}`, {
+        const response = await fetch(`/delete_permanent/${encodeURIComponent(filename)}`, {
             method: 'POST',
             headers: { 'Accept': 'application/json' },
         });
