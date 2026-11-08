@@ -251,6 +251,7 @@ export async function triggerGitHubActionsBuild(options?: {
 
   // 2. Push/update the workflow and Android project files via GitHub Contents API if needed
   const filesToSync = [
+    'README.md',
     '.github/workflows/android-release.yml',
     'android-app/settings.gradle.kts',
     'android-app/build.gradle.kts',
