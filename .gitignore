@@ -13,3 +13,8 @@ temp_zips/
 # Python cache
 __pycache__/
 *.pyc
+
+# Node / build output
+node_modules/
+dist/
+android-app/app/build/

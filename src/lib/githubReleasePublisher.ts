@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import JSZip from 'jszip';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 export interface GitHubReleaseStatus {
   published: boolean;
@@ -41,166 +42,23 @@ const DEFAULT_TAG = 'v1.0.7';
 const APK_FILENAME = 'photocloud-release-v1.0.7-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
-/**
- * Compiles a local fallback APK package (photocloud-release-v1.0.0-signed.apk)
- * from the source files in /android-app and signs it with RSA-2048 SHA-256.
- */
+/** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
 export async function compileSignedAndroidApk(outputDir: string): Promise<{
-  apkPath: string;
-  apkBuffer: Buffer;
-  sha256: string;
-  metadataPath: string;
+  apkPath: string; apkBuffer: Buffer; sha256: string; metadataPath: string;
 }> {
+  const project = path.resolve(process.cwd(), 'android-app');
+  await promisify(execFile)('gradle', ['assembleRelease', '--no-daemon'], {
+    cwd: project, maxBuffer: 10 * 1024 * 1024,
+  });
+  const source = path.join(project, 'app/build/outputs/apk/release/app-release.apk');
+  const apkBuffer = fs.readFileSync(source);
+  const sha256 = crypto.createHash('sha256').update(apkBuffer).digest('hex');
   fs.mkdirSync(outputDir, { recursive: true });
-
-  const manifestPath = path.resolve(
-    process.cwd(),
-    'android-app/app/src/main/AndroidManifest.xml'
-  );
-  const mainActivityPath = path.resolve(
-    process.cwd(),
-    'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'
-  );
-  const apiClientPath = path.resolve(
-    process.cwd(),
-    'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt'
-  );
-
-  const manifestXml = fs.existsSync(manifestPath)
-    ? fs.readFileSync(manifestPath, 'utf-8')
-    : '<manifest xmlns:android="http://schemas.android.com/apk/res/android"/>';
-  const mainActivityKt = fs.existsSync(mainActivityPath)
-    ? fs.readFileSync(mainActivityPath, 'utf-8')
-    : '';
-  const apiClientKt = fs.existsSync(apiClientPath)
-    ? fs.readFileSync(apiClientPath, 'utf-8')
-    : '';
-
-  const dexPayload = Buffer.from(
-    `Lcom/valerio/photocloud/MainActivity;\0Lcom/valerio/photocloud/PhotoCloudApiClient;\0${mainActivityKt.slice(0, 512)}\0${apiClientKt.slice(0, 512)}`,
-    'utf-8'
-  );
-  const dexHeader = Buffer.alloc(112);
-  dexHeader.write('dex\n039\0', 0, 'ascii');
-  const totalDexSize = dexHeader.length + dexPayload.length;
-  dexHeader.writeUInt32LE(totalDexSize, 32);
-  dexHeader.writeUInt32LE(112, 36);
-  dexHeader.writeUInt32LE(0x12345678, 40);
-  const dexBytes = Buffer.concat([dexHeader, dexPayload]);
-  const dexSha1 = crypto.createHash('sha1').update(dexBytes.subarray(32)).digest();
-  dexSha1.copy(dexBytes, 12);
-
-  const resourcesArsc = Buffer.from(
-    'RES_TABLE_PHOTOCLOUD_1_0_0_COM_VALERIO_PHOTOCLOUD',
-    'utf-8'
-  );
-
-  const iconPath = path.resolve(process.cwd(), 'public/pwa-192x192.png');
-  const iconBytes = fs.existsSync(iconPath)
-    ? fs.readFileSync(iconPath)
-    : Buffer.from('PNG_ICON', 'utf-8');
-
-  const manifestDigest = crypto.createHash('sha256').update(manifestXml).digest('base64');
-  const dexDigest = crypto.createHash('sha256').update(dexBytes).digest('base64');
-  const arscDigest = crypto.createHash('sha256').update(resourcesArsc).digest('base64');
-
-  const mfContent = [
-    'Manifest-Version: 1.0',
-    'Built-By: PhotoCloud Android Release Compiler',
-    'Created-By: Android Gradle 8.10.2 (Kotlin 2.0.21)',
-    '',
-    'Name: AndroidManifest.xml',
-    `SHA-256-Digest: ${manifestDigest}`,
-    '',
-    'Name: classes.dex',
-    `SHA-256-Digest: ${dexDigest}`,
-    '',
-    'Name: resources.arsc',
-    `SHA-256-Digest: ${arscDigest}`,
-    '',
-  ].join('\r\n');
-
-  const sfContent = [
-    'Signature-Version: 1.0',
-    'Created-By: 1.0 (Android SignApk)',
-    `SHA-256-Digest-Manifest: ${crypto.createHash('sha256').update(mfContent).digest('base64')}`,
-    '',
-    'Name: AndroidManifest.xml',
-    `SHA-256-Digest: ${manifestDigest}`,
-    '',
-    'Name: classes.dex',
-    `SHA-256-Digest: ${dexDigest}`,
-    '',
-  ].join('\r\n');
-
-  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-  });
-  const signature = crypto.sign('sha256', Buffer.from(sfContent, 'utf-8'), privateKey);
-  const pubKeyDer = publicKey.export({ type: 'spki', format: 'der' });
-
-  const apkZip = new JSZip();
-  apkZip.file('AndroidManifest.xml', manifestXml);
-  apkZip.file('classes.dex', dexBytes);
-  apkZip.file('resources.arsc', resourcesArsc);
-  apkZip.file('res/mipmap-xxxhdpi-v4/ic_launcher.png', iconBytes);
-  apkZip.file('META-INF/MANIFEST.MF', mfContent);
-  apkZip.file('META-INF/CERT.SF', sfContent);
-  apkZip.file('META-INF/CERT.RSA', Buffer.concat([pubKeyDer, signature]));
-
-  const apkBuffer = await apkZip.generateAsync({
-    type: 'nodebuffer',
-    compression: 'DEFLATE',
-  });
-
   const apkPath = path.join(outputDir, APK_FILENAME);
   fs.writeFileSync(apkPath, apkBuffer);
-
-  const gradleOutDir = path.resolve(
-    process.cwd(),
-    'android-app/app/build/outputs/apk/release'
-  );
-  fs.mkdirSync(gradleOutDir, { recursive: true });
-  fs.writeFileSync(path.join(gradleOutDir, APK_FILENAME), apkBuffer);
-
-  const sha256 = crypto.createHash('sha256').update(apkBuffer).digest('hex');
-
-  const outputMetadata = {
-    version: 3,
-    artifactType: {
-      type: 'APK',
-      kind: 'Directory',
-    },
-    applicationId: 'com.valerio.photocloud',
-    variantName: 'release',
-    elements: [
-      {
-        type: 'SINGLE',
-        filters: [],
-        attributes: [],
-        versionCode: 8,
-        versionName: '1.0.7',
-        outputFile: APK_FILENAME,
-        sha256,
-      },
-    ],
-    elementType: 'File',
-  };
-
-  const metadataPath = path.join(outputDir, 'output-metadata.json');
-  fs.writeFileSync(metadataPath, JSON.stringify(outputMetadata, null, 2), 'utf-8');
-  fs.writeFileSync(
-    path.join(gradleOutDir, 'output-metadata.json'),
-    JSON.stringify(outputMetadata, null, 2),
-    'utf-8'
-  );
-
-  return {
-    apkPath,
-    apkBuffer,
-    sha256,
-    metadataPath,
-  };
+  const metadataPath = path.join(outputDir, 'photocloud-release-build.json');
+  fs.writeFileSync(metadataPath, JSON.stringify({ apkFilename: APK_FILENAME, sha256 }, null, 2));
+  return { apkPath, apkBuffer, sha256, metadataPath };
 }
 
 /**

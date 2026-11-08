@@ -17,10 +17,6 @@ import {
   renderTrashTemplate,
 } from './templateRenderer';
 import {
-  compileSignedAndroidApk,
-  triggerGitHubActionsBuild,
-} from './githubReleasePublisher';
-import {
   DEFAULT_PHOTO_EDIT_STATE,
   PHOTO_FILTER_PRESETS,
   applyPresetToEditState,
@@ -199,14 +195,29 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(apiClientKt.includes('assignFilesToAlbum'));
   assert.ok(apiClientKt.includes('uploadEditedPhotoBytes'));
 
-  const outDir = path.resolve(process.cwd(), 'release');
-  const res = await compileSignedAndroidApk(outDir);
-  assert.ok(fs.existsSync(res.apkPath));
-  assert.ok(res.apkPath.endsWith('photocloud-release-v1.0.7-signed.apk'));
-  assert.equal(res.sha256.length, 64);
+  // No network calls, token usage or APK writes in unit tests.
+  assert.ok(workflowYaml.includes('workflow_dispatch:'));
+});
 
-  const actionsStatus = await triggerGitHubActionsBuild();
-  assert.equal(actionsStatus.repo, 'ValerioMassimoDeCecco/PhotoCloud');
-  assert.equal(actionsStatus.workflowFile, '.github/workflows/android-release.yml');
-  assert.equal(actionsStatus.releaseTag, 'v1.0.7');
+test('authenticated encryption detects tampering and reads legacy CFB', async () => {
+  const crypto = await import('node:crypto');
+  const { deriveKey, encryptedPlaintextSize } = await import('./crypto');
+  const key = 'test secret';
+  const plain = Buffer.from('hello');
+  const enc = encryptFile(plain, key);
+  assert.equal(encryptedPlaintextSize(enc), plain.length);
+  const altered = Buffer.from(enc); altered[altered.length - 1] ^= 1;
+  assert.throws(() => decryptFile(altered, key));
+  assert.throws(() => decryptFile(enc, 'wrong key'));
+  const salt = crypto.randomBytes(16), iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-cfb', deriveKey(key, salt), iv);
+  const legacy = Buffer.concat([salt, iv, cipher.update(plain), cipher.final()]);
+  assert.deepEqual(decryptFile(legacy, key), plain);
+  assert.equal(encryptedPlaintextSize(legacy), plain.length);
+});
+
+test('album names are escaped in HTML attributes', () => {
+  const html = renderGalleryTemplate([], ["x' onmouseover='alert(1)"]);
+  assert.ok(html.includes('&#39;'));
+  assert.ok(!html.includes("data-albums='[\"x'"));
 });

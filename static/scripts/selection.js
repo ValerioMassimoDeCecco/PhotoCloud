@@ -68,7 +68,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const chip = document.createElement('button');
             chip.type = 'button';
             chip.className = 'btn outlined album-chip-btn';
-            chip.innerHTML = `<span class="material-icons">${albumName === 'Senza Album' ? 'folder_off' : 'photo_album'}</span> ${albumName}`;
+            const icon = document.createElement('span');
+            icon.className = 'material-icons';
+            icon.textContent = albumName === 'Senza Album' ? 'folder_off' : 'photo_album';
+            chip.append(icon, document.createTextNode(` ${albumName}`));
             chip.addEventListener('click', async () => {
                 const targetAlbum = albumName === 'Senza Album' ? '' : albumName;
                 const files = Array.from(selectedFiles);
