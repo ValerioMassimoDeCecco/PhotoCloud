@@ -186,10 +186,10 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 
 ---
 
-### 🤖 4. Android (Installazione APK `v1.1.1` & Compilazione da Sorgente)
+### 🤖 4. Android (Installazione APK `v1.1.2` & Compilazione da Sorgente)
 
-#### Opzione A: Installare l'APK Firmato Pronto (`v1.1.1`)
-1. Scarica **`photocloud-release-v1.1.1-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases)** oppure dalla cartella locale `/release/photocloud-release-v1.1.1-signed.apk`.
+#### Opzione A: Installare l'APK Firmato Pronto (`v1.1.2`)
+1. Scarica **`photocloud-release-v1.1.2-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.1.2)** (le Release GitHub sono la sorgente ufficiale dell'APK firmato; `release/photocloud-release-build.json` ne riporta il checksum SHA-256). In alternativa puoi compilarlo localmente con la Opzione B (`/release/photocloud-release-v1.1.2-signed.apk`).
 2. Apri il file `.apk` sul tuo dispositivo Android per installarlo o aggiornare direttamente una versione precedente (`v1.0.4`–`v1.10`) senza perdere dati o configurazioni.
 3. Tocca il badge **Server** in alto a destra per inserire l'URL del tuo server PhotoCloud (`http://<IP-SERVER>:3000`), effettua il login con il tuo file `.json` e apri o modifica istantaneamente qualsiasi foto, video, PDF o documento Office.
 
@@ -199,7 +199,7 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 cd android-app
 gradle assembleRelease --no-daemon
 
-# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.1.1-signed.apk
+# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.1.2-signed.apk
 npm run release:apk
 ```
 
@@ -212,9 +212,9 @@ npm run release:apk
 | `npm run dev` | Avvia il server full-stack Express + Vite in modalità sviluppo sulla porta `3000`. |
 | `npm run build` | Compila i bundle frontend ottimizzati per la produzione. |
 | `npm start` | Avvia il server Node.js/TypeScript in modalità produzione. |
-| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, template e configurazione Android `v1.1.1`). |
+| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, template e configurazione Android `v1.1.2`). |
 | `npm run lint` | Verifica statica dei tipi TypeScript (`tsc --noEmit`). |
-| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.1.1-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
+| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.1.2-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
 
 ---
 
@@ -223,11 +223,11 @@ npm run release:apk
 ```text
 PhotoCloud/
 ├── .github/workflows/
-│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.1.1
+│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.1.2
 ├── android-app/                  # Progetto Nativo Android (Kotlin + Jetpack Compose Material You 120Hz)
 │   ├── app/
 │   │   ├── photocloud-release-key.jks  # Keystore RSA-2048 per firma APK
-│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.1.1 (versionCode 12)
+│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.1.2 (versionCode 13)
 │   │   └── src/main/
 │   │       ├── AndroidManifest.xml     # Permessi, FileProvider (content:// URI) e alias icone (Colorata + B/W)
 │   │       ├── java/com/valerio/photocloud/
@@ -237,7 +237,7 @@ PhotoCloud/
 │   │           ├── xml/file_paths.xml       # Percorsi autorizzati per FileProvider
 │   │           └── drawable/                # Icone Launcher Colorata e Monocromatica
 ├── release/
-│   ├── photocloud-release-v1.1.1-signed.apk # Pacchetto APK firmato v1.1.1 pronto per l'installazione
+│   ├── photocloud-release-v1.1.2-signed.apk # APK firmato v1.1.2 (build locale; nelle Release GitHub il binario ufficiale)
 │   └── photocloud-release-build.json        # Metadati e checksum SHA-256 della build
 ├── src/
 │   ├── lib/
