@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.1.2)
+# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.1.3)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -7,6 +7,19 @@
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
+
+---
+
+## ⚡ Novità Principali della Release `v1.1.3` (`versionCode 14`) — Fix APK: Controlli del Player Video nel Lightbox
+
+### Controlli del Video di Nuovo Disponibili nel Visualizzatore a Schermo Intero
+- **Problema**: toccando un video nella Galleria/Cestino si vedeva solo l'anteprima statica, senza alcun comando del player (niente play/pausa, seek bar o durata).
+- **Causa**: nel lightbox (`NativeLightboxModal`) il ramo `Image(loadedBitmap)` veniva valutato **prima** del ramo video; dopo la v1.1.2 i video hanno sempre una miniatura in cache RAM, quindi il `VideoView` + `MediaController` non veniva mai creato.
+- **Fix**:
+  - Il ramo video viene ora valutato **per primo**: i video passano sempre da `VideoView` + `MediaController` — un tap sul video mostra/nasconde i controlli (play/pausa, seek bar e durata).
+  - All'avvio i controlli vengono mostrati esplicitamente per 3 secondi (`controller.show(3000)`).
+  - Il pinch/pan del lightbox non intercetta più i touch sulla seek bar (`pointerInput` attivo solo per le immagini; `pointerInput(pageIndex, media.isVideo)`).
+  - La miniatura video resta come anteprima nella griglia e nel Cestino; per le foto tutto invariato (pan/pinch fino a 4x).
 
 ---
 
@@ -186,10 +199,10 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 
 ---
 
-### 🤖 4. Android (Installazione APK `v1.1.2` & Compilazione da Sorgente)
+### 🤖 4. Android (Installazione APK `v1.1.3` & Compilazione da Sorgente)
 
-#### Opzione A: Installare l'APK Firmato Pronto (`v1.1.2`)
-1. Scarica **`photocloud-release-v1.1.2-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.1.2)** (le Release GitHub sono la sorgente ufficiale dell'APK firmato; `release/photocloud-release-build.json` ne riporta il checksum SHA-256). In alternativa puoi compilarlo localmente con la Opzione B (`/release/photocloud-release-v1.1.2-signed.apk`).
+#### Opzione A: Installare l'APK Firmato Pronto (`v1.1.3`)
+1. Scarica **`photocloud-release-v1.1.3-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.1.3)** (le Release GitHub sono la sorgente ufficiale dell'APK firmato; `release/photocloud-release-build.json` ne riporta il checksum SHA-256). In alternativa puoi compilarlo localmente con la Opzione B (`/release/photocloud-release-v1.1.3-signed.apk`).
 2. Apri il file `.apk` sul tuo dispositivo Android per installarlo o aggiornare direttamente una versione precedente (`v1.0.4`–`v1.10`) senza perdere dati o configurazioni.
 3. Tocca il badge **Server** in alto a destra per inserire l'URL del tuo server PhotoCloud (`http://<IP-SERVER>:3000`), effettua il login con il tuo file `.json` e apri o modifica istantaneamente qualsiasi foto, video, PDF o documento Office.
 
@@ -199,7 +212,7 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 cd android-app
 gradle assembleRelease --no-daemon
 
-# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.1.2-signed.apk
+# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.1.3-signed.apk
 npm run release:apk
 ```
 
@@ -212,9 +225,9 @@ npm run release:apk
 | `npm run dev` | Avvia il server full-stack Express + Vite in modalità sviluppo sulla porta `3000`. |
 | `npm run build` | Compila i bundle frontend ottimizzati per la produzione. |
 | `npm start` | Avvia il server Node.js/TypeScript in modalità produzione. |
-| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, template e configurazione Android `v1.1.2`). |
+| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, template e configurazione Android `v1.1.3`). |
 | `npm run lint` | Verifica statica dei tipi TypeScript (`tsc --noEmit`). |
-| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.1.2-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
+| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.1.3-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
 
 ---
 
@@ -223,11 +236,11 @@ npm run release:apk
 ```text
 PhotoCloud/
 ├── .github/workflows/
-│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.1.2
+│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.1.3
 ├── android-app/                  # Progetto Nativo Android (Kotlin + Jetpack Compose Material You 120Hz)
 │   ├── app/
 │   │   ├── photocloud-release-key.jks  # Keystore RSA-2048 per firma APK
-│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.1.2 (versionCode 13)
+│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.1.3 (versionCode 14)
 │   │   └── src/main/
 │   │       ├── AndroidManifest.xml     # Permessi, FileProvider (content:// URI) e alias icone (Colorata + B/W)
 │   │       ├── java/com/valerio/photocloud/
@@ -237,7 +250,7 @@ PhotoCloud/
 │   │           ├── xml/file_paths.xml       # Percorsi autorizzati per FileProvider
 │   │           └── drawable/                # Icone Launcher Colorata e Monocromatica
 ├── release/
-│   ├── photocloud-release-v1.1.2-signed.apk # APK firmato v1.1.2 (build locale; nelle Release GitHub il binario ufficiale)
+│   ├── photocloud-release-v1.1.3-signed.apk # APK firmato v1.1.3 (build locale; nelle Release GitHub il binario ufficiale)
 │   └── photocloud-release-build.json        # Metadati e checksum SHA-256 della build
 ├── src/
 │   ├── lib/
