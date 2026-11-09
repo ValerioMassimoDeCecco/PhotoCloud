@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.1.3)
+# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.1.4)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -7,6 +7,19 @@
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
+
+---
+
+## ⚡ Novità Principali della Release `v1.1.4` (`versionCode 15`) — Fix APK: Crash con Upload Massivi (es. 51 foto)
+
+### Upload di Molti File Senza Esaurire la Memoria (OutOfMemoryError risolto)
+- **Problema**: selezionando ~51 foto l'app crashava durante il caricamento.
+- **Causa**: `uploadMediaUris` leggeva **tutti** i file selezionati per intero in RAM (`openInputStream(...).readBytes()`), ~8–12 MB per foto → centinaia di MB sul heap dell'app; inoltre `ProgressRequestBody` duplicava di nuovo tutto il batch in un buffer temporaneo `okio.Buffer` prima di scrivere sul socket. La prepare loop non era in alcun `try` → l'`OutOfMemoryError` propagava fuori dalla coroutine e abbatteva l'app.
+- **Fix** (memoria **costante ~16 KB**, indipendente dal numero/dimensione dei file):
+  - **`StreamingRequestBody`**: ogni file viene aperto come stream al momento della scrittura sul socket e scritto a chunk da 16 KB — nessun `ByteArray` di file in RAM.
+  - **`ProgressRequestBody` riscritto**: conta i byte scritti direttamente sul sink reale (`ForwardingSink`), senza alcun pre-buffering.
+  - Dimensioni lette via `OpenableColumns.SIZE`; se il provider non le dichiara, copia una-tantum in `cacheDir/upload_tmp_*` (eliminata sempre nel `finally`).
+  - Batch ridotto da 5 a **3 file**; protezione residua con `catch (Throwable)` e messaggio specifico per `OutOfMemoryError` (niente più crash: l'errore viene mostrato come notifica di trasferimento fallito).
 
 ---
 
@@ -199,10 +212,10 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 
 ---
 
-### 🤖 4. Android (Installazione APK `v1.1.3` & Compilazione da Sorgente)
+### 🤖 4. Android (Installazione APK `v1.1.4` & Compilazione da Sorgente)
 
-#### Opzione A: Installare l'APK Firmato Pronto (`v1.1.3`)
-1. Scarica **`photocloud-release-v1.1.3-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.1.3)** (le Release GitHub sono la sorgente ufficiale dell'APK firmato; `release/photocloud-release-build.json` ne riporta il checksum SHA-256). In alternativa puoi compilarlo localmente con la Opzione B (`/release/photocloud-release-v1.1.3-signed.apk`).
+#### Opzione A: Installare l'APK Firmato Pronto (`v1.1.4`)
+1. Scarica **`photocloud-release-v1.1.4-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.1.4)** (le Release GitHub sono la sorgente ufficiale dell'APK firmato; `release/photocloud-release-build.json` ne riporta il checksum SHA-256). In alternativa puoi compilarlo localmente con la Opzione B (`/release/photocloud-release-v1.1.4-signed.apk`).
 2. Apri il file `.apk` sul tuo dispositivo Android per installarlo o aggiornare direttamente una versione precedente (`v1.0.4`–`v1.10`) senza perdere dati o configurazioni.
 3. Tocca il badge **Server** in alto a destra per inserire l'URL del tuo server PhotoCloud (`http://<IP-SERVER>:3000`), effettua il login con il tuo file `.json` e apri o modifica istantaneamente qualsiasi foto, video, PDF o documento Office.
 
@@ -212,7 +225,7 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 cd android-app
 gradle assembleRelease --no-daemon
 
-# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.1.3-signed.apk
+# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.1.4-signed.apk
 npm run release:apk
 ```
 
@@ -225,9 +238,9 @@ npm run release:apk
 | `npm run dev` | Avvia il server full-stack Express + Vite in modalità sviluppo sulla porta `3000`. |
 | `npm run build` | Compila i bundle frontend ottimizzati per la produzione. |
 | `npm start` | Avvia il server Node.js/TypeScript in modalità produzione. |
-| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, template e configurazione Android `v1.1.3`). |
+| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, template e configurazione Android `v1.1.4`). |
 | `npm run lint` | Verifica statica dei tipi TypeScript (`tsc --noEmit`). |
-| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.1.3-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
+| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.1.4-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
 
 ---
 
@@ -236,11 +249,11 @@ npm run release:apk
 ```text
 PhotoCloud/
 ├── .github/workflows/
-│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.1.3
+│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.1.4
 ├── android-app/                  # Progetto Nativo Android (Kotlin + Jetpack Compose Material You 120Hz)
 │   ├── app/
 │   │   ├── photocloud-release-key.jks  # Keystore RSA-2048 per firma APK
-│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.1.3 (versionCode 14)
+│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.1.4 (versionCode 15)
 │   │   └── src/main/
 │   │       ├── AndroidManifest.xml     # Permessi, FileProvider (content:// URI) e alias icone (Colorata + B/W)
 │   │       ├── java/com/valerio/photocloud/
@@ -250,7 +263,7 @@ PhotoCloud/
 │   │           ├── xml/file_paths.xml       # Percorsi autorizzati per FileProvider
 │   │           └── drawable/                # Icone Launcher Colorata e Monocromatica
 ├── release/
-│   ├── photocloud-release-v1.1.3-signed.apk # APK firmato v1.1.3 (build locale; nelle Release GitHub il binario ufficiale)
+│   ├── photocloud-release-v1.1.4-signed.apk # APK firmato v1.1.4 (build locale; nelle Release GitHub il binario ufficiale)
 │   └── photocloud-release-build.json        # Metadati e checksum SHA-256 della build
 ├── src/
 │   ├── lib/

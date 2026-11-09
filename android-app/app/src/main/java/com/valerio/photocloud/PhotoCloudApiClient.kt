@@ -29,11 +29,16 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
+import okio.ForwardingSink
+import okio.buffer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InputStream
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.Locale
@@ -175,7 +180,34 @@ data class MediaItemModel(
 }
 
 /**
+ * Streaming RequestBody that reads from an InputStream provider on demand (constant memory)
+ * instead of buffering the whole payload. Used for multi-photo uploads.
+ */
+class StreamingRequestBody(
+    private val mediaType: MediaType?,
+    private val length: Long,
+    private val streamProvider: () -> InputStream
+) : RequestBody() {
+    override fun contentType(): MediaType? = mediaType
+
+    override fun contentLength(): Long = length
+
+    override fun writeTo(sink: BufferedSink) {
+        val buffer = ByteArray(16 * 1024)
+        streamProvider().use { input ->
+            while (true) {
+                val read = input.read(buffer)
+                if (read == -1) break
+                sink.write(buffer, 0, read)
+            }
+        }
+        sink.flush()
+    }
+}
+
+/**
  * RequestBody wrapper that reports live upload progress and bytes written.
+ * Streams straight into the real sink (constant memory, no pre-buffering).
  */
 class ProgressRequestBody(
     private val delegate: RequestBody,
@@ -191,21 +223,17 @@ class ProgressRequestBody(
 
     override fun writeTo(sink: BufferedSink) {
         val total = contentLength()
-        val buffer = ByteArray(16 * 1024)
-        val outStream = sink.outputStream()
-        // Write delegate into an in-memory buffer or pipe so we can chunk-report
-        val tempBuffer = okio.Buffer()
-        delegate.writeTo(tempBuffer)
-        val totalBytes = if (total > 0L) total else tempBuffer.size
-        var uploaded = 0L
-        val inputStream = tempBuffer.inputStream()
-        var read: Int
-        while (inputStream.read(buffer).also { read = it } != -1) {
-            outStream.write(buffer, 0, read)
-            uploaded += read
-            onBytesWritten(uploaded, totalBytes)
+        val countingSink = object : ForwardingSink(sink) {
+            private var written = 0L
+            override fun write(source: okio.Buffer, byteCount: Long) {
+                super.write(source, byteCount)
+                written += byteCount
+                onBytesWritten(written, total)
+            }
         }
-        outStream.flush()
+        val buffered = countingSink.buffer()
+        delegate.writeTo(buffered)
+        buffered.flush()
     }
 }
 
@@ -1303,21 +1331,21 @@ class PhotoCloudApiClient(
 
         val opId = "up_${System.currentTimeMillis()}"
         data class PreparedUploadFile(
+            val uri: Uri?,
+            val tempFile: File?,
             val displayName: String,
             val mimeType: String,
-            val bytes: ByteArray
+            val sizeBytes: Long
         )
 
+        // Temp files (used only when a content provider doesn't report the file size)
+        // are always removed in the finally block below.
+        val tempFilesToCleanup = mutableListOf<File>()
+        try {
         val prepared = mutableListOf<PreparedUploadFile>()
         var grandTotalBytes = 0L
 
         for (uri in uris) {
-            val bytes = try {
-                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            } catch (_: Exception) {
-                null
-            } ?: continue
-
             val mime = context.contentResolver.getType(uri) ?: "application/octet-stream"
             val rawName = resolveDisplayName(uri) ?: "file_${System.currentTimeMillis()}"
             val hasExt = rawName.contains('.') && rawName.substringAfterLast('.', "").isNotBlank()
@@ -1338,8 +1366,28 @@ class PhotoCloudApiClient(
                 "$rawName.$ext"
             }
 
-            prepared.add(PreparedUploadFile(finalName, mime, bytes))
-            grandTotalBytes += bytes.size.toLong()
+            // Do NOT read the whole file into memory: stream it at upload time.
+            // Some providers don't report the size: in that case copy once to the
+            // cache to measure it (streaming, constant memory).
+            var size = resolveSizeBytes(uri)
+            var tempFile: File? = null
+            if (size <= 0L) {
+                tempFile = copyUriToTempFile(uri, "upload_tmp_${System.currentTimeMillis()}_${tempFilesToCleanup.size}")
+                if (tempFile == null) continue
+                tempFilesToCleanup.add(tempFile)
+                size = tempFile.length()
+            }
+
+            prepared.add(
+                PreparedUploadFile(
+                    uri = if (tempFile == null) uri else null,
+                    tempFile = tempFile,
+                    displayName = finalName,
+                    mimeType = mime,
+                    sizeBytes = size
+                )
+            )
+            grandTotalBytes += size
         }
 
         if (prepared.isEmpty()) {
@@ -1370,7 +1418,7 @@ class PhotoCloudApiClient(
         )
 
         try {
-            val batchSize = 5
+            val batchSize = 3
             val batches = prepared.chunked(batchSize)
             val uploadedFilenames = mutableListOf<String>()
 
@@ -1379,13 +1427,18 @@ class PhotoCloudApiClient(
                 var batchPayloadBytes = 0L
 
                 for (item in batch) {
+                    val openItemStream: () -> InputStream = {
+                        item.tempFile?.let { FileInputStream(it) }
+                            ?: item.uri?.let { context.contentResolver.openInputStream(it) }
+                            ?: throw IOException("Impossibile aprire ${item.displayName}")
+                    }
                     multipartBuilder.addFormDataPart(
                         "file[]",
                         item.displayName,
-                        item.bytes.toRequestBody(item.mimeType.toMediaTypeOrNull())
+                        StreamingRequestBody(item.mimeType.toMediaTypeOrNull(), item.sizeBytes, openItemStream)
                     )
                     multipartBuilder.addFormDataPart("timestamp[]", System.currentTimeMillis().toString())
-                    batchPayloadBytes += item.bytes.size.toLong()
+                    batchPayloadBytes += item.sizeBytes
                     uploadedFilenames.add(item.displayName)
                 }
 
@@ -1467,7 +1520,12 @@ class PhotoCloudApiClient(
             )
 
             Pair(true, "$uploadedCount file caricati con successo")
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            val userMessage = if (e is OutOfMemoryError) {
+                "Memoria insufficiente: prova a caricare meno file alla volta"
+            } else {
+                "Errore durante il caricamento: ${e.localizedMessage ?: e.javaClass.simpleName}"
+            }
             onTransferUpdate(
                 TransferOperation(
                     id = opId,
@@ -1477,10 +1535,53 @@ class PhotoCloudApiClient(
                     totalBytes = grandTotalBytes,
                     speedBytesPerSec = 0L,
                     status = TransferStatus.ERROR,
-                    detail = e.localizedMessage ?: "Errore di rete"
+                    detail = userMessage
                 )
             )
-            Pair(false, "Errore durante il caricamento: ${e.localizedMessage}")
+            Pair(false, userMessage)
+        }
+        } finally {
+            tempFilesToCleanup.forEach { tmp ->
+                try {
+                    tmp.delete()
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    private fun resolveSizeBytes(uri: Uri): Long {
+        return try {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (idx >= 0) cursor.getLong(idx) else -1L
+                } else {
+                    -1L
+                }
+            } ?: -1L
+        } catch (_: Exception) {
+            -1L
+        }
+    }
+
+    private fun copyUriToTempFile(uri: Uri, baseName: String): File? {
+        return try {
+            val safeBase = baseName.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "upload_tmp" }
+            val target = File(context.cacheDir, safeBase)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(target).use { output ->
+                    val buffer = ByteArray(16 * 1024)
+                    var read: Int
+                    while (input.read(buffer).also { read = it } != -1) {
+                        output.write(buffer, 0, read)
+                    }
+                    output.flush()
+                }
+            } ?: return null
+            target
+        } catch (_: Exception) {
+            null
         }
     }
 

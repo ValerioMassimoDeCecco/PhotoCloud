@@ -266,7 +266,7 @@ test('Document Viewer Engine resolves MIME types and parses PDF, DOCX, XLSX, PPT
   assert.equal(csvSheet.rows.length, 2);
 });
 
-test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android v1.1.3 project with video thumbnails, long-press selection, SelectionActionsPanel and lightbox video controls are configured', async () => {
+test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android v1.1.4 project with video thumbnails, long-press selection, SelectionActionsPanel, lightbox video controls and streaming uploads are configured', async () => {
   const workflowPath = path.resolve(process.cwd(), '.github/workflows/android-release.yml');
   assert.ok(fs.existsSync(workflowPath));
   const workflowYaml = fs.readFileSync(workflowPath, 'utf-8');
@@ -278,7 +278,7 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
   assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
   assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));
-  assert.ok(workflowYaml.includes('photocloud-release-v1.1.3-signed.apk'));
+  assert.ok(workflowYaml.includes('photocloud-release-v1.1.4-signed.apk'));
   assert.equal(workflowYaml.includes('rm -f photocloud-release-key.jks'), false);
 
   const keystorePath = path.resolve(process.cwd(), 'android-app/app/photocloud-release-key.jks');
@@ -338,6 +338,8 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.equal(webGroupingJs.includes('window.location.reload()'), false);
   assert.ok(webUploadJs.includes('syncVaultItemsFromServer'));
   assert.equal(webUploadJs.includes('window.location.reload()'), false);
+  assert.ok(apiClientKt.includes('StreamingRequestBody'));
+  assert.ok(apiClientKt.includes('resolveSizeBytes'));
   assert.ok(apiClientKt.includes('thumbnailCache'));
   assert.ok(apiClientKt.includes('getRamThumbnailBitmap'));
   assert.ok(apiClientKt.includes('loadThumbnailBitmap'));
