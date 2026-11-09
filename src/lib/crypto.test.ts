@@ -18,10 +18,14 @@ import {
 } from './templateRenderer';
 import {
   DEFAULT_PHOTO_EDIT_STATE,
+  DEFAULT_NORMALIZED_CROP_BOX,
   PHOTO_FILTER_PRESETS,
   applyPresetToEditState,
   normalizeRotation,
   computeCropRect,
+  clampNormalizedCropBox,
+  dragNormalizedCropHandle,
+  normalizedBoxToPixelRect,
   transformRgbPixel,
 } from './photoEditorMath';
 
@@ -66,7 +70,7 @@ test('findDuplicateGroups detects identical file hashes and sorts filenames', ()
   assert.deepEqual(duplicates, [['a_original.jpg', 'b_copy.jpg']]);
 });
 
-test('photoEditorMath presets, rotation normalization, crop calculation, and RGB pixel transforms work accurately', () => {
+test('photoEditorMath presets, rotation normalization, manual draggable crop grid, and RGB pixel transforms work accurately', () => {
   assert.equal(Object.keys(PHOTO_FILTER_PRESETS).length, 7);
   const bwState = applyPresetToEditState(DEFAULT_PHOTO_EDIT_STATE, 'bw');
   assert.equal(bwState.filterPreset, 'bw');
@@ -87,6 +91,36 @@ test('photoEditorMath presets, rotation normalization, crop calculation, and RGB
   assert.equal(portraitCrop.height, 1000);
   assert.equal(portraitCrop.x, 100);
 
+  // Manual draggable crop box handles (free + locked aspect + interior move)
+  const draggedSe = dragNormalizedCropHandle(DEFAULT_NORMALIZED_CROP_BOX, 'se', -0.25, -0.2, 'free', 1600, 1200);
+  assert.ok(Math.abs(draggedSe.right - 0.75) < 1e-6);
+  assert.ok(Math.abs(draggedSe.bottom - 0.8) < 1e-6);
+
+  const pannedBox = dragNormalizedCropHandle(
+    { left: 0.1, top: 0.1, right: 0.6, bottom: 0.6 },
+    'move',
+    0.15,
+    0.2,
+    'free',
+    1600,
+    1200
+  );
+  assert.ok(Math.abs(pannedBox.left - 0.25) < 1e-6);
+  assert.ok(Math.abs(pannedBox.top - 0.3) < 1e-6);
+  assert.ok(Math.abs(pannedBox.right - 0.75) < 1e-6);
+  assert.ok(Math.abs(pannedBox.bottom - 0.8) < 1e-6);
+
+  const pixelRect = normalizedBoxToPixelRect(1000, 800, pannedBox);
+  assert.equal(pixelRect.x, 250);
+  assert.equal(pixelRect.y, 240);
+  assert.equal(pixelRect.width, 500);
+  assert.equal(pixelRect.height, 400);
+
+  const clamped = clampNormalizedCropBox({ left: -0.5, top: 0.95, right: 1.4, bottom: 0.96 });
+  assert.equal(clamped.left, 0);
+  assert.equal(clamped.right, 1);
+  assert.ok(clamped.bottom - clamped.top >= 0.08 - 1e-6);
+
   // Neutral state leaves pixel unchanged
   const [r0, g0, b0] = transformRgbPixel(120, 150, 200, DEFAULT_PHOTO_EDIT_STATE);
   assert.equal(r0, 120);
@@ -99,7 +133,7 @@ test('photoEditorMath presets, rotation normalization, crop calculation, and RGB
   assert.equal(gBw, bBw);
 });
 
-test('Templates render non-media Cloud File Manager, Album grouping, Photo Editor Modal, and Top-Right Transfer Center', () => {
+test('Templates render non-media Cloud File Manager, Album grouping, Photo Editor Modal with Draggable Crop Grid, and Top-Right Transfer Center', () => {
   const loginHtml = renderLoginTemplate();
   assert.ok(loginHtml.includes('Il tuo archivio foto/video sicuro'));
   assert.ok(loginHtml.includes('/static/styles/login.css'));
@@ -136,6 +170,9 @@ test('Templates render non-media Cloud File Manager, Album grouping, Photo Edito
   assert.ok(galleryHtml.includes('id="upload-indicator-container"'));
   assert.ok(galleryHtml.includes('id="upload-speed-badge"'));
   assert.ok(galleryHtml.includes('id="photo-editor-modal"'));
+  assert.ok(galleryHtml.includes('id="photo-editor-crop-overlay"'));
+  assert.ok(galleryHtml.includes('id="photo-editor-crop-box"'));
+  assert.ok(galleryHtml.includes('data-crop-handle="se"'));
   assert.ok(galleryHtml.includes('id="lightbox-edit-btn"'));
   assert.ok(galleryHtml.includes('/static/scripts/photo-editor.js'));
 
@@ -143,7 +180,7 @@ test('Templates render non-media Cloud File Manager, Album grouping, Photo Edito
   assert.ok(trashHtml.includes('Il cestino è vuoto'));
 });
 
-test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android v1.0.7 project are configured', async () => {
+test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android v1.0.8 project are configured', async () => {
   const workflowPath = path.resolve(process.cwd(), '.github/workflows/android-release.yml');
   assert.ok(fs.existsSync(workflowPath));
   const workflowYaml = fs.readFileSync(workflowPath, 'utf-8');
@@ -155,7 +192,7 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
   assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
   assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));
-  assert.ok(workflowYaml.includes('photocloud-release-v1.0.7-signed.apk'));
+  assert.ok(workflowYaml.includes('photocloud-release-v1.0.8-signed.apk'));
   assert.equal(workflowYaml.includes('rm -f photocloud-release-key.jks'), false);
 
   const keystorePath = path.resolve(process.cwd(), 'android-app/app/photocloud-release-key.jks');
@@ -186,6 +223,8 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(mainActivityKt.includes('TransferOperationsFloatingCard'));
   assert.ok(mainActivityKt.includes('AlbumManagerDialog'));
   assert.ok(mainActivityKt.includes('NativePhotoEditorModal'));
+  assert.ok(mainActivityKt.includes('NormalizedAndroidCropRect'));
+  assert.ok(mainActivityKt.includes('dragAndroidCropRect'));
   assert.ok(mainActivityKt.includes('renderEditedAndroidBitmap'));
   assert.ok(mainActivityKt.includes('ALBUM("Album")'));
   assert.ok(mainActivityKt.includes('VaultTab.FILES'));

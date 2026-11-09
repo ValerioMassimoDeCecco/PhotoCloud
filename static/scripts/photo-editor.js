@@ -24,8 +24,81 @@
         flipH: false,
         flipV: false,
         cropAspect: 'free',
+        cropBox: { left: 0, top: 0, right: 1, bottom: 1 },
+        showCropGrid: true, // Opens immediately with the draggable manual crop grid active
         preset: 'original',
     };
+
+    // Active drag state for the manual crop grid
+    let activeDrag = null;
+
+    function getRotatedDimensions() {
+        if (!sourceImage) return { width: 800, height: 600 };
+        const srcW = sourceImage.naturalWidth || sourceImage.width || 800;
+        const srcH = sourceImage.naturalHeight || sourceImage.height || 600;
+        const isRotated90 = editState.rotation === 90 || editState.rotation === 270;
+        return {
+            width: isRotated90 ? srcH : srcW,
+            height: isRotated90 ? srcW : srcH,
+            srcW,
+            srcH,
+        };
+    }
+
+    function clampCropBox(box, minSpan = 0.08) {
+        const span = Math.max(0.04, Math.min(0.5, minSpan));
+        let left = Math.max(0, Math.min(1 - span, box.left));
+        let top = Math.max(0, Math.min(1 - span, box.top));
+        let right = Math.max(left + span, Math.min(1, box.right));
+        let bottom = Math.max(top + span, Math.min(1, box.bottom));
+        if (right - left < span) {
+            if (left + span <= 1) right = left + span;
+            else left = Math.max(0, right - span);
+        }
+        if (bottom - top < span) {
+            if (top + span <= 1) bottom = top + span;
+            else top = Math.max(0, bottom - span);
+        }
+        return { left, top, right, bottom };
+    }
+
+    function fitAspectCropBox(w, h, aspect) {
+        if (!aspect || aspect === 'free') {
+            return { left: 0, top: 0, right: 1, bottom: 1 };
+        }
+        const ratioMap = {
+            '1:1': 1,
+            '4:5': 4 / 5,
+            '4:3': 4 / 3,
+            '16:9': 16 / 9,
+        };
+        const target = ratioMap[aspect] || 1;
+        const curr = w / h;
+        let cw = w;
+        let ch = h;
+        if (curr > target) {
+            cw = Math.max(1, Math.round(h * target));
+        } else {
+            ch = Math.max(1, Math.round(w / target));
+        }
+        const x = Math.floor((w - cw) / 2);
+        const y = Math.floor((h - ch) / 2);
+        return clampCropBox({
+            left: x / w,
+            top: y / h,
+            right: (x + cw) / w,
+            bottom: (y + ch) / h,
+        });
+    }
+
+    function getCroppedPixelRect(rotW, rotH) {
+        const safe = clampCropBox(editState.cropBox, 0.04);
+        const x = Math.max(0, Math.min(rotW - 1, Math.round(safe.left * rotW)));
+        const y = Math.max(0, Math.min(rotH - 1, Math.round(safe.top * rotH)));
+        const width = Math.max(1, Math.min(rotW - x, Math.round((safe.right - safe.left) * rotW)));
+        const height = Math.max(1, Math.min(rotH - y, Math.round((safe.bottom - safe.top) * rotH)));
+        return { x, y, width, height };
+    }
 
     function resetEditState() {
         editState.brightness = 0;
@@ -36,8 +109,47 @@
         editState.flipH = false;
         editState.flipV = false;
         editState.cropAspect = 'free';
+        editState.cropBox = { left: 0, top: 0, right: 1, bottom: 1 };
+        editState.showCropGrid = true;
         editState.preset = 'original';
         syncControlsFromState();
+    }
+
+    function syncCropOverlayDOM() {
+        const overlay = document.getElementById('photo-editor-crop-overlay');
+        const cropBoxEl = document.getElementById('photo-editor-crop-box');
+        const dimLabel = document.getElementById('crop-box-dimensions-label');
+        const resBadge = document.getElementById('editor-resolution-badge');
+        const toggleGridBtn = document.getElementById('editor-toggle-crop-grid-btn');
+
+        if (toggleGridBtn) {
+            toggleGridBtn.classList.toggle('active', editState.showCropGrid);
+        }
+
+        if (overlay) {
+            overlay.classList.toggle('active', Boolean(editState.showCropGrid && sourceImage));
+        }
+
+        const { width: rotW, height: rotH } = getRotatedDimensions();
+        const rect = getCroppedPixelRect(rotW, rotH);
+
+        if (cropBoxEl) {
+            const leftPct = (editState.cropBox.left * 100).toFixed(2);
+            const topPct = (editState.cropBox.top * 100).toFixed(2);
+            const widthPct = ((editState.cropBox.right - editState.cropBox.left) * 100).toFixed(2);
+            const heightPct = ((editState.cropBox.bottom - editState.cropBox.top) * 100).toFixed(2);
+            cropBoxEl.style.left = `${leftPct}%`;
+            cropBoxEl.style.top = `${topPct}%`;
+            cropBoxEl.style.width = `${widthPct}%`;
+            cropBoxEl.style.height = `${heightPct}%`;
+        }
+
+        if (dimLabel) {
+            dimLabel.textContent = `${rect.width} × ${rect.height} px`;
+        }
+        if (resBadge && sourceImage) {
+            resBadge.textContent = `${rect.width} × ${rect.height} px • Crittografia AES-256`;
+        }
     }
 
     function syncControlsFromState() {
@@ -73,53 +185,59 @@
         const flipVBtn = document.getElementById('editor-flip-v-btn');
         if (flipHBtn) flipHBtn.classList.toggle('active', editState.flipH);
         if (flipVBtn) flipVBtn.classList.toggle('active', editState.flipV);
+
+        syncCropOverlayDOM();
     }
 
-    function computeCropBox(w, h, aspect) {
-        if (!aspect || aspect === 'free') {
-            return { x: 0, y: 0, width: w, height: h };
+    function applyColorAdjustmentsToContext(ctx, width, height) {
+        if (
+            editState.brightness === 0 &&
+            editState.contrast === 0 &&
+            editState.saturation === 0 &&
+            editState.warmth === 0
+        ) {
+            return;
         }
-        const ratioMap = {
-            '1:1': 1,
-            '4:5': 4 / 5,
-            '4:3': 4 / 3,
-            '16:9': 16 / 9,
-        };
-        const target = ratioMap[aspect] || 1;
-        const curr = w / h;
-        let cw = w;
-        let ch = h;
-        if (curr > target) {
-            cw = Math.max(1, Math.round(h * target));
-        } else {
-            ch = Math.max(1, Math.round(w / target));
+        const imgData = ctx.getImageData(0, 0, width, height);
+        const data = imgData.data;
+
+        const bOffset = (editState.brightness / 100) * 90;
+        const cFactor = Math.pow((editState.contrast + 100) / 100, 2);
+        const sFactor = (editState.saturation + 100) / 100;
+        const wShift = (editState.warmth / 100) * 42;
+
+        for (let i = 0; i < data.length; i += 4) {
+            let r = data[i] + bOffset;
+            let g = data[i + 1] + bOffset;
+            let b = data[i + 2] + bOffset;
+
+            r = (r - 128) * cFactor + 128;
+            g = (g - 128) * cFactor + 128;
+            b = (b - 128) * cFactor + 128;
+
+            const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+            r = luma + (r - luma) * sFactor;
+            g = luma + (g - luma) * sFactor;
+            b = luma + (b - luma) * sFactor;
+
+            r += wShift;
+            g += wShift * 0.18;
+            b -= wShift;
+
+            data[i] = r < 0 ? 0 : r > 255 ? 255 : r;
+            data[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+            data[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
         }
-        return {
-            x: Math.floor((w - cw) / 2),
-            y: Math.floor((h - ch) / 2),
-            width: cw,
-            height: ch,
-        };
+        ctx.putImageData(imgData, 0, 0);
     }
 
-    function renderEditorCanvas() {
-        const canvas = document.getElementById('photo-editor-canvas');
-        const resBadge = document.getElementById('editor-resolution-badge');
-        if (!canvas || !sourceImage) return;
-
-        const srcW = sourceImage.naturalWidth || sourceImage.width || 800;
-        const srcH = sourceImage.naturalHeight || sourceImage.height || 600;
-
-        // First draw rotated & flipped full image onto an offscreen canvas
-        const isRotated90 = editState.rotation === 90 || editState.rotation === 270;
-        const rotW = isRotated90 ? srcH : srcW;
-        const rotH = isRotated90 ? srcW : srcH;
-
+    function createTransformedOffscreenCanvas() {
+        const { width: rotW, height: rotH, srcW, srcH } = getRotatedDimensions();
         const offCanvas = document.createElement('canvas');
         offCanvas.width = rotW;
         offCanvas.height = rotH;
-        const offCtx = offCanvas.getContext('2d');
-        if (!offCtx) return;
+        const offCtx = offCanvas.getContext('2d', { willReadFrequently: true });
+        if (!offCtx) return null;
 
         offCtx.save();
         offCtx.translate(rotW / 2, rotH / 2);
@@ -129,16 +247,63 @@
         offCtx.scale(scaleX, scaleY);
         offCtx.drawImage(sourceImage, -srcW / 2, -srcH / 2, srcW, srcH);
         offCtx.restore();
+        return offCanvas;
+    }
 
-        // Compute centered crop box on the rotated canvas
-        const crop = computeCropBox(rotW, rotH, editState.cropAspect);
-        canvas.width = crop.width;
-        canvas.height = crop.height;
+    function renderEditorCanvas() {
+        const canvas = document.getElementById('photo-editor-canvas');
+        if (!canvas || !sourceImage) return;
+
+        const offCanvas = createTransformedOffscreenCanvas();
+        if (!offCanvas) return;
+
+        const rotW = offCanvas.width;
+        const rotH = offCanvas.height;
+        const crop = getCroppedPixelRect(rotW, rotH);
 
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (!ctx) return;
 
-        ctx.drawImage(
+        if (editState.showCropGrid) {
+            // Show the full transformed image on the canvas and position the draggable crop grid overlay on top
+            canvas.width = rotW;
+            canvas.height = rotH;
+            ctx.drawImage(offCanvas, 0, 0, rotW, rotH);
+            applyColorAdjustmentsToContext(ctx, rotW, rotH);
+        } else {
+            // Show only the cropped region
+            canvas.width = crop.width;
+            canvas.height = crop.height;
+            ctx.drawImage(
+                offCanvas,
+                crop.x,
+                crop.y,
+                crop.width,
+                crop.height,
+                0,
+                0,
+                crop.width,
+                crop.height
+            );
+            applyColorAdjustmentsToContext(ctx, crop.width, crop.height);
+        }
+
+        syncCropOverlayDOM();
+    }
+
+    function buildFinalCroppedExportCanvas() {
+        if (!sourceImage) return null;
+        const offCanvas = createTransformedOffscreenCanvas();
+        if (!offCanvas) return null;
+
+        const crop = getCroppedPixelRect(offCanvas.width, offCanvas.height);
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = crop.width;
+        exportCanvas.height = crop.height;
+        const exportCtx = exportCanvas.getContext('2d', { willReadFrequently: true });
+        if (!exportCtx) return null;
+
+        exportCtx.drawImage(
             offCanvas,
             crop.x,
             crop.y,
@@ -149,51 +314,17 @@
             crop.width,
             crop.height
         );
-
-        // Apply pixel-accurate color adjustments (brightness, contrast, saturation, warmth)
-        if (
-            editState.brightness !== 0 ||
-            editState.contrast !== 0 ||
-            editState.saturation !== 0 ||
-            editState.warmth !== 0
-        ) {
-            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const data = imgData.data;
-
-            const bOffset = (editState.brightness / 100) * 90;
-            const cFactor = Math.pow((editState.contrast + 100) / 100, 2);
-            const sFactor = (editState.saturation + 100) / 100;
-            const wShift = (editState.warmth / 100) * 42;
-
-            for (let i = 0; i < data.length; i += 4) {
-                let r = data[i] + bOffset;
-                let g = data[i + 1] + bOffset;
-                let b = data[i + 2] + bOffset;
-
-                r = (r - 128) * cFactor + 128;
-                g = (g - 128) * cFactor + 128;
-                b = (b - 128) * cFactor + 128;
-
-                const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-                r = luma + (r - luma) * sFactor;
-                g = luma + (g - luma) * sFactor;
-                b = luma + (b - luma) * sFactor;
-
-                r += wShift;
-                g += wShift * 0.18;
-                b -= wShift;
-
-                data[i] = r < 0 ? 0 : r > 255 ? 255 : r;
-                data[i + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
-                data[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
-            }
-            ctx.putImageData(imgData, 0, 0);
-        }
-
-        if (resBadge) {
-            resBadge.textContent = `${canvas.width} × ${canvas.height} px • Crittografia AES-256`;
-        }
+        applyColorAdjustmentsToContext(exportCtx, crop.width, crop.height);
+        return exportCanvas;
     }
+
+    window.setManualCropBox = function (left, top, right, bottom) {
+        editState.cropBox = clampCropBox({ left, top, right, bottom });
+        syncCropOverlayDOM();
+        if (!editState.showCropGrid) {
+            renderEditorCanvas();
+        }
+    };
 
     window.openPhotoEditor = function (filename, event) {
         if (event) {
@@ -218,6 +349,9 @@
         img.crossOrigin = 'anonymous';
         img.onload = function () {
             sourceImage = img;
+            // Immediately open with the draggable manual crop grid active on the loaded image
+            editState.showCropGrid = true;
+            editState.cropBox = { left: 0, top: 0, right: 1, bottom: 1 };
             renderEditorCanvas();
         };
         img.onerror = function () {
@@ -232,15 +366,17 @@
             modal.style.display = 'none';
         }
         sourceImage = null;
+        activeDrag = null;
     };
 
     async function saveEditedPhoto(mode) {
         if (isSaving || !sourceImage || !currentFilename) return;
-        const canvas = document.getElementById('photo-editor-canvas');
         const resBadge = document.getElementById('editor-resolution-badge');
         const saveCopyBtn = document.getElementById('editor-save-copy-btn');
         const saveOverwriteBtn = document.getElementById('editor-save-overwrite-btn');
-        if (!canvas) return;
+
+        const exportCanvas = buildFinalCroppedExportCanvas();
+        if (!exportCanvas) return;
 
         isSaving = true;
         if (saveCopyBtn) saveCopyBtn.disabled = true;
@@ -248,7 +384,7 @@
         if (resBadge) resBadge.textContent = 'Crittografia e salvataggio sul server...';
 
         try {
-            const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.94));
+            const blob = await new Promise((resolve) => exportCanvas.toBlob(resolve, 'image/jpeg', 0.94));
             if (!blob) throw new Error('Impossibile esportare il canvas');
 
             const formData = new FormData();
@@ -266,7 +402,6 @@
             }
 
             if (mode === 'overwrite') {
-                // Refresh any matching image in DOM & Lightbox with cache-buster
                 const cacheBustUrl = `/media/${encodeURIComponent(currentFilename)}?t=${Date.now()}`;
                 document.querySelectorAll('.media-card-wrapper').forEach((wrap) => {
                     if (wrap.getAttribute('data-filename') === currentFilename) {
@@ -280,7 +415,6 @@
                 }
                 window.closePhotoEditor();
             } else {
-                // Saved as a new copy: reload gallery so the new photo card appears immediately
                 window.closePhotoEditor();
                 window.location.reload();
             }
@@ -295,11 +429,74 @@
         }
     }
 
+    function applyDragDelta(startBox, handle, dxNorm, dyNorm) {
+        const minSpan = 0.08;
+        if (handle === 'move') {
+            const clampedDx = Math.max(-startBox.left, Math.min(1 - startBox.right, dxNorm));
+            const clampedDy = Math.max(-startBox.top, Math.min(1 - startBox.bottom, dyNorm));
+            return {
+                left: startBox.left + clampedDx,
+                top: startBox.top + clampedDy,
+                right: startBox.right + clampedDx,
+                bottom: startBox.bottom + clampedDy,
+            };
+        }
+
+        let { left, top, right, bottom } = startBox;
+        if (handle.includes('w')) {
+            left = Math.max(0, Math.min(right - minSpan, startBox.left + dxNorm));
+        }
+        if (handle.includes('e')) {
+            right = Math.min(1, Math.max(left + minSpan, startBox.right + dxNorm));
+        }
+        if (handle.includes('n')) {
+            top = Math.max(0, Math.min(bottom - minSpan, startBox.top + dyNorm));
+        }
+        if (handle.includes('s')) {
+            bottom = Math.min(1, Math.max(top + minSpan, startBox.bottom + dyNorm));
+        }
+
+        if (editState.cropAspect !== 'free') {
+            const ratioMap = { '1:1': 1, '4:5': 4 / 5, '4:3': 4 / 3, '16:9': 16 / 9 };
+            const targetPixelRatio = ratioMap[editState.cropAspect] || 1;
+            const { width: rotW, height: rotH } = getRotatedDimensions();
+            const imgRatio = Math.max(1, rotW) / Math.max(1, rotH);
+            const normRatio = targetPixelRatio / imgRatio;
+
+            const newW = right - left;
+            const newH = bottom - top;
+
+            if (handle === 'n' || handle === 's') {
+                const desiredW = Math.min(1, Math.max(minSpan, newH * normRatio));
+                const centerX = (left + right) / 2;
+                left = Math.max(0, Math.min(1 - desiredW, centerX - desiredW / 2));
+                right = left + desiredW;
+            } else {
+                const desiredH = Math.min(1, Math.max(minSpan, newW / normRatio));
+                if (handle.includes('n')) {
+                    top = Math.max(0, bottom - desiredH);
+                    bottom = top + desiredH;
+                } else if (handle.includes('s')) {
+                    bottom = Math.min(1, top + desiredH);
+                    top = bottom - desiredH;
+                } else {
+                    const centerY = (top + bottom) / 2;
+                    top = Math.max(0, Math.min(1 - desiredH, centerY - desiredH / 2));
+                    bottom = top + desiredH;
+                }
+            }
+        }
+
+        return clampCropBox({ left, top, right, bottom }, minSpan);
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         const closeBtn = document.getElementById('editor-close-btn');
         const resetBtn = document.getElementById('editor-reset-btn');
         const saveCopyBtn = document.getElementById('editor-save-copy-btn');
         const saveOverwriteBtn = document.getElementById('editor-save-overwrite-btn');
+        const toggleCropGridBtn = document.getElementById('editor-toggle-crop-grid-btn');
+        const cropOverlay = document.getElementById('photo-editor-crop-overlay');
 
         if (closeBtn) closeBtn.addEventListener('click', () => window.closePhotoEditor());
         if (resetBtn) {
@@ -310,6 +507,67 @@
         }
         if (saveCopyBtn) saveCopyBtn.addEventListener('click', () => saveEditedPhoto('copy'));
         if (saveOverwriteBtn) saveOverwriteBtn.addEventListener('click', () => saveEditedPhoto('overwrite'));
+
+        if (toggleCropGridBtn) {
+            toggleCropGridBtn.addEventListener('click', () => {
+                editState.showCropGrid = !editState.showCropGrid;
+                renderEditorCanvas();
+            });
+        }
+
+        // Interactive Pointer Dragging for Manual Crop Grid (8 handles + interior pan)
+        if (cropOverlay) {
+            cropOverlay.addEventListener('pointerdown', (e) => {
+                const targetEl = e.target.closest('[data-crop-handle]');
+                if (!targetEl || !sourceImage) return;
+                const handle = targetEl.getAttribute('data-crop-handle') || 'move';
+                const rect = cropOverlay.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return;
+
+                e.preventDefault();
+                e.stopPropagation();
+                if (targetEl.setPointerCapture) {
+                    try {
+                        targetEl.setPointerCapture(e.pointerId);
+                    } catch {
+                        // ignore
+                    }
+                }
+
+                activeDrag = {
+                    pointerId: e.pointerId,
+                    handle,
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    overlayWidth: rect.width,
+                    overlayHeight: rect.height,
+                    startBox: { ...editState.cropBox },
+                };
+            });
+
+            window.addEventListener('pointermove', (e) => {
+                if (!activeDrag || e.pointerId !== activeDrag.pointerId) return;
+                e.preventDefault();
+                const dxNorm = (e.clientX - activeDrag.startX) / Math.max(1, activeDrag.overlayWidth);
+                const dyNorm = (e.clientY - activeDrag.startY) / Math.max(1, activeDrag.overlayHeight);
+                editState.cropBox = applyDragDelta(
+                    activeDrag.startBox,
+                    activeDrag.handle,
+                    dxNorm,
+                    dyNorm
+                );
+                syncCropOverlayDOM();
+            });
+
+            const finishDrag = (e) => {
+                if (!activeDrag || (e && e.pointerId !== undefined && e.pointerId !== activeDrag.pointerId)) {
+                    return;
+                }
+                activeDrag = null;
+            };
+            window.addEventListener('pointerup', finishDrag);
+            window.addEventListener('pointercancel', finishDrag);
+        }
 
         // Filter Preset Chips
         document.querySelectorAll('.editor-preset-chip').forEach((btn) => {
@@ -350,12 +608,20 @@
         if (rotLeft) {
             rotLeft.addEventListener('click', () => {
                 editState.rotation = (editState.rotation + 270) % 360;
+                const { width: rotW, height: rotH } = getRotatedDimensions();
+                if (editState.cropAspect !== 'free') {
+                    editState.cropBox = fitAspectCropBox(rotW, rotH, editState.cropAspect);
+                }
                 renderEditorCanvas();
             });
         }
         if (rotRight) {
             rotRight.addEventListener('click', () => {
                 editState.rotation = (editState.rotation + 90) % 360;
+                const { width: rotW, height: rotH } = getRotatedDimensions();
+                if (editState.cropAspect !== 'free') {
+                    editState.cropBox = fitAspectCropBox(rotW, rotH, editState.cropAspect);
+                }
                 renderEditorCanvas();
             });
         }
@@ -378,6 +644,11 @@
         document.querySelectorAll('.editor-crop-chip').forEach((btn) => {
             btn.addEventListener('click', () => {
                 editState.cropAspect = btn.getAttribute('data-crop') || 'free';
+                editState.showCropGrid = true;
+                const { width: rotW, height: rotH } = getRotatedDimensions();
+                if (editState.cropAspect !== 'free') {
+                    editState.cropBox = fitAspectCropBox(rotW, rotH, editState.cropAspect);
+                }
                 syncControlsFromState();
                 renderEditorCanvas();
             });

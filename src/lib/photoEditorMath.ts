@@ -1,5 +1,16 @@
 export type CropAspectRatio = 'free' | '1:1' | '4:3' | '4:5' | '16:9';
 
+export type CropDragHandle =
+  | 'nw'
+  | 'n'
+  | 'ne'
+  | 'e'
+  | 'se'
+  | 's'
+  | 'sw'
+  | 'w'
+  | 'move';
+
 export type PhotoFilterPresetId =
   | 'original'
   | 'vivid'
@@ -8,6 +19,13 @@ export type PhotoFilterPresetId =
   | 'cinema'
   | 'cool'
   | 'vintage';
+
+export interface NormalizedCropBox {
+  left: number; // 0..1
+  top: number; // 0..1
+  right: number; // 0..1
+  bottom: number; // 0..1
+}
 
 export interface PhotoEditState {
   brightness: number; // -100 to +100
@@ -18,6 +36,7 @@ export interface PhotoEditState {
   flipH: boolean;
   flipV: boolean;
   cropAspect: CropAspectRatio;
+  cropBox: NormalizedCropBox;
   filterPreset: PhotoFilterPresetId;
 }
 
@@ -28,6 +47,13 @@ export interface CropRect {
   height: number;
 }
 
+export const DEFAULT_NORMALIZED_CROP_BOX: NormalizedCropBox = {
+  left: 0,
+  top: 0,
+  right: 1,
+  bottom: 1,
+};
+
 export const DEFAULT_PHOTO_EDIT_STATE: PhotoEditState = {
   brightness: 0,
   contrast: 0,
@@ -37,6 +63,7 @@ export const DEFAULT_PHOTO_EDIT_STATE: PhotoEditState = {
   flipH: false,
   flipV: false,
   cropAspect: 'free',
+  cropBox: { ...DEFAULT_NORMALIZED_CROP_BOX },
   filterPreset: 'original',
 };
 
@@ -120,6 +147,155 @@ export function normalizeRotation(deg: number): number {
   const mod = ((deg % 360) + 360) % 360;
   if (mod === 90 || mod === 180 || mod === 270) return mod;
   return 0;
+}
+
+export function clampNormalizedCropBox(
+  box: NormalizedCropBox,
+  minSpan = 0.08
+): NormalizedCropBox {
+  const span = Math.max(0.02, Math.min(0.5, minSpan));
+  let left = Math.max(0, Math.min(1 - span, box.left));
+  let top = Math.max(0, Math.min(1 - span, box.top));
+  let right = Math.max(left + span, Math.min(1, box.right));
+  let bottom = Math.max(top + span, Math.min(1, box.bottom));
+
+  if (right - left < span) {
+    if (left + span <= 1) right = left + span;
+    else left = Math.max(0, right - span);
+  }
+  if (bottom - top < span) {
+    if (top + span <= 1) bottom = top + span;
+    else top = Math.max(0, bottom - span);
+  }
+
+  return { left, top, right, bottom };
+}
+
+export function fitAspectNormalizedCropBox(
+  srcWidth: number,
+  srcHeight: number,
+  aspect: CropAspectRatio
+): NormalizedCropBox {
+  const rect = computeCropRect(srcWidth, srcHeight, aspect);
+  const w = Math.max(1, srcWidth);
+  const h = Math.max(1, srcHeight);
+  return clampNormalizedCropBox({
+    left: rect.x / w,
+    top: rect.y / h,
+    right: (rect.x + rect.width) / w,
+    bottom: (rect.y + rect.height) / h,
+  });
+}
+
+export function dragNormalizedCropHandle(
+  startBox: NormalizedCropBox,
+  handle: CropDragHandle,
+  dxNorm: number,
+  dyNorm: number,
+  aspect: CropAspectRatio = 'free',
+  srcWidth = 1000,
+  srcHeight = 1000,
+  minSpan = 0.08
+): NormalizedCropBox {
+  const span = Math.max(0.04, Math.min(0.5, minSpan));
+  const boxW = startBox.right - startBox.left;
+  const boxH = startBox.bottom - startBox.top;
+
+  if (handle === 'move') {
+    const clampedDx = Math.max(-startBox.left, Math.min(1 - startBox.right, dxNorm));
+    const clampedDy = Math.max(-startBox.top, Math.min(1 - startBox.bottom, dyNorm));
+    return {
+      left: startBox.left + clampedDx,
+      top: startBox.top + clampedDy,
+      right: startBox.right + clampedDx,
+      bottom: startBox.bottom + clampedDy,
+    };
+  }
+
+  let { left, top, right, bottom } = startBox;
+
+  if (handle.includes('w')) {
+    left = Math.max(0, Math.min(right - span, startBox.left + dxNorm));
+  }
+  if (handle.includes('e')) {
+    right = Math.min(1, Math.max(left + span, startBox.right + dxNorm));
+  }
+  if (handle.includes('n')) {
+    top = Math.max(0, Math.min(bottom - span, startBox.top + dyNorm));
+  }
+  if (handle.includes('s')) {
+    bottom = Math.min(1, Math.max(top + span, startBox.bottom + dyNorm));
+  }
+
+  if (aspect !== 'free') {
+    const ratioMap: Record<Exclude<CropAspectRatio, 'free'>, number> = {
+      '1:1': 1,
+      '4:3': 4 / 3,
+      '4:5': 4 / 5,
+      '16:9': 16 / 9,
+    };
+    const targetPixelRatio = ratioMap[aspect] || 1;
+    const imgRatio = Math.max(1, srcWidth) / Math.max(1, srcHeight);
+    // Normalized width / Normalized height = targetPixelRatio / imgRatio
+    const normRatio = targetPixelRatio / imgRatio;
+
+    const newW = right - left;
+    const newH = bottom - top;
+
+    if (handle === 'n' || handle === 's') {
+      const desiredW = Math.min(1, Math.max(span, newH * normRatio));
+      const centerX = (left + right) / 2;
+      left = Math.max(0, Math.min(1 - desiredW, centerX - desiredW / 2));
+      right = left + desiredW;
+    } else {
+      const desiredH = Math.min(1, Math.max(span, newW / normRatio));
+      if (handle.includes('n')) {
+        top = Math.max(0, bottom - desiredH);
+        bottom = top + desiredH;
+      } else if (handle.includes('s')) {
+        bottom = Math.min(1, top + desiredH);
+        top = bottom - desiredH;
+      } else {
+        const centerY = (top + bottom) / 2;
+        top = Math.max(0, Math.min(1 - desiredH, centerY - desiredH / 2));
+        bottom = top + desiredH;
+      }
+    }
+
+    // Ensure aspect-locked box stays within [0, 1]
+    if (right > 1 || bottom > 1 || left < 0 || top < 0) {
+      return clampNormalizedCropBox({ left, top, right, bottom }, span);
+    }
+  }
+
+  if (right - left < span || bottom - top < span) {
+    return clampNormalizedCropBox(
+      {
+        left: startBox.left,
+        top: startBox.top,
+        right: startBox.left + Math.max(span, boxW),
+        bottom: startBox.top + Math.max(span, boxH),
+      },
+      span
+    );
+  }
+
+  return clampNormalizedCropBox({ left, top, right, bottom }, span);
+}
+
+export function normalizedBoxToPixelRect(
+  srcWidth: number,
+  srcHeight: number,
+  box: NormalizedCropBox
+): CropRect {
+  const w = Math.max(1, Math.floor(srcWidth));
+  const h = Math.max(1, Math.floor(srcHeight));
+  const safe = clampNormalizedCropBox(box, 0.02);
+  const x = Math.max(0, Math.min(w - 1, Math.round(safe.left * w)));
+  const y = Math.max(0, Math.min(h - 1, Math.round(safe.top * h)));
+  const width = Math.max(1, Math.min(w - x, Math.round((safe.right - safe.left) * w)));
+  const height = Math.max(1, Math.min(h - y, Math.round((safe.bottom - safe.top) * h)));
+  return { x, y, width, height };
 }
 
 export function computeCropRect(

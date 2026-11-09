@@ -35,6 +35,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.scrollBy
@@ -119,6 +120,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
@@ -126,6 +128,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -135,6 +138,8 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.hypot
 
 enum class GroupingMode(val label: String) {
     NONE("Tutti"),
@@ -4239,6 +4244,145 @@ val ANDROID_PHOTO_PRESETS = listOf(
     AndroidPhotoPreset("vintage", "Vintage", 8f, -12f, -25f, 32f)
 )
 
+enum class AndroidCropHandle {
+    NW, N, NE, E, SE, S, SW, W, MOVE
+}
+
+data class NormalizedAndroidCropRect(
+    val left: Float = 0f,
+    val top: Float = 0f,
+    val right: Float = 1f,
+    val bottom: Float = 1f
+)
+
+fun clampAndroidCropRect(
+    rect: NormalizedAndroidCropRect,
+    minSpan: Float = 0.08f
+): NormalizedAndroidCropRect {
+    val span = minSpan.coerceIn(0.04f, 0.5f)
+    var l = rect.left.coerceIn(0f, 1f - span)
+    var t = rect.top.coerceIn(0f, 1f - span)
+    var r = rect.right.coerceIn(l + span, 1f)
+    var b = rect.bottom.coerceIn(t + span, 1f)
+    if (r - l < span) {
+        if (l + span <= 1f) r = l + span else l = (r - span).coerceAtLeast(0f)
+    }
+    if (b - t < span) {
+        if (t + span <= 1f) b = t + span else t = (b - span).coerceAtLeast(0f)
+    }
+    return NormalizedAndroidCropRect(l, t, r, b)
+}
+
+fun fitAndroidAspectCropRect(
+    srcW: Int,
+    srcH: Int,
+    cropRatio: String
+): NormalizedAndroidCropRect {
+    val targetRatio: Float = when (cropRatio) {
+        "1:1" -> 1f
+        "4:5" -> 4f / 5f
+        "4:3" -> 4f / 3f
+        "16:9" -> 16f / 9f
+        else -> return NormalizedAndroidCropRect(0f, 0f, 1f, 1f)
+    }
+    val w = srcW.coerceAtLeast(1).toFloat()
+    val h = srcH.coerceAtLeast(1).toFloat()
+    val currentRatio = w / h
+    var cropW = w
+    var cropH = h
+    if (currentRatio > targetRatio) {
+        cropW = (h * targetRatio).coerceIn(1f, w)
+    } else {
+        cropH = (w / targetRatio).coerceIn(1f, h)
+    }
+    val x = ((w - cropW) / 2f).coerceAtLeast(0f)
+    val y = ((h - cropH) / 2f).coerceAtLeast(0f)
+    return clampAndroidCropRect(
+        NormalizedAndroidCropRect(
+            left = x / w,
+            top = y / h,
+            right = (x + cropW) / w,
+            bottom = (y + cropH) / h
+        )
+    )
+}
+
+fun dragAndroidCropRect(
+    start: NormalizedAndroidCropRect,
+    handle: AndroidCropHandle,
+    dxNorm: Float,
+    dyNorm: Float,
+    cropRatio: String,
+    imgW: Int,
+    imgH: Int,
+    minSpan: Float = 0.08f
+): NormalizedAndroidCropRect {
+    if (handle == AndroidCropHandle.MOVE) {
+        val clampedDx = dxNorm.coerceIn(-start.left, 1f - start.right)
+        val clampedDy = dyNorm.coerceIn(-start.top, 1f - start.bottom)
+        return NormalizedAndroidCropRect(
+            left = start.left + clampedDx,
+            top = start.top + clampedDy,
+            right = start.right + clampedDx,
+            bottom = start.bottom + clampedDy
+        )
+    }
+
+    var l = start.left
+    var t = start.top
+    var r = start.right
+    var b = start.bottom
+
+    if (handle == AndroidCropHandle.NW || handle == AndroidCropHandle.W || handle == AndroidCropHandle.SW) {
+        l = (start.left + dxNorm).coerceIn(0f, r - minSpan)
+    }
+    if (handle == AndroidCropHandle.NE || handle == AndroidCropHandle.E || handle == AndroidCropHandle.SE) {
+        r = (start.right + dxNorm).coerceIn(l + minSpan, 1f)
+    }
+    if (handle == AndroidCropHandle.NW || handle == AndroidCropHandle.N || handle == AndroidCropHandle.NE) {
+        t = (start.top + dyNorm).coerceIn(0f, b - minSpan)
+    }
+    if (handle == AndroidCropHandle.SW || handle == AndroidCropHandle.S || handle == AndroidCropHandle.SE) {
+        b = (start.bottom + dyNorm).coerceIn(t + minSpan, 1f)
+    }
+
+    val targetPixelRatio: Float? = when (cropRatio) {
+        "1:1" -> 1f
+        "4:5" -> 4f / 5f
+        "4:3" -> 4f / 3f
+        "16:9" -> 16f / 9f
+        else -> null
+    }
+
+    if (targetPixelRatio != null) {
+        val imgRatio = imgW.coerceAtLeast(1).toFloat() / imgH.coerceAtLeast(1).toFloat()
+        val normRatio = targetPixelRatio / imgRatio
+        val newW = r - l
+        val newH = b - t
+        if (handle == AndroidCropHandle.N || handle == AndroidCropHandle.S) {
+            val desiredW = (newH * normRatio).coerceIn(minSpan, 1f)
+            val cx = (l + r) / 2f
+            l = (cx - desiredW / 2f).coerceIn(0f, 1f - desiredW)
+            r = l + desiredW
+        } else {
+            val desiredH = (newW / normRatio).coerceIn(minSpan, 1f)
+            if (handle == AndroidCropHandle.NW || handle == AndroidCropHandle.NE) {
+                t = (b - desiredH).coerceAtLeast(0f)
+                b = t + desiredH
+            } else if (handle == AndroidCropHandle.SW || handle == AndroidCropHandle.SE) {
+                b = (t + desiredH).coerceAtMost(1f)
+                t = b - desiredH
+            } else {
+                val cy = (t + b) / 2f
+                t = (cy - desiredH / 2f).coerceIn(0f, 1f - desiredH)
+                b = t + desiredH
+            }
+        }
+    }
+
+    return clampAndroidCropRect(NormalizedAndroidCropRect(l, t, r, b), minSpan)
+}
+
 fun renderEditedAndroidBitmap(
     source: android.graphics.Bitmap,
     brightness: Float,
@@ -4248,7 +4392,8 @@ fun renderEditedAndroidBitmap(
     rotationDegrees: Int,
     flipH: Boolean,
     flipV: Boolean,
-    cropRatio: String
+    cropRect: NormalizedAndroidCropRect = NormalizedAndroidCropRect(),
+    applyCrop: Boolean = true
 ): android.graphics.Bitmap {
     val normRot = ((rotationDegrees % 360) + 360) % 360
     val matrix = android.graphics.Matrix()
@@ -4268,29 +4413,11 @@ fun renderEditedAndroidBitmap(
     val srcW = transformed.width.coerceAtLeast(1)
     val srcH = transformed.height.coerceAtLeast(1)
 
-    val targetRatio: Float? = when (cropRatio) {
-        "1:1" -> 1f
-        "4:5" -> 4f / 5f
-        "4:3" -> 4f / 3f
-        "16:9" -> 16f / 9f
-        else -> null
-    }
-
-    var cropX = 0
-    var cropY = 0
-    var cropW = srcW
-    var cropH = srcH
-
-    if (targetRatio != null && targetRatio > 0f) {
-        val currentRatio = srcW.toFloat() / srcH.toFloat()
-        if (currentRatio > targetRatio) {
-            cropW = (srcH * targetRatio).toInt().coerceIn(1, srcW)
-            cropX = ((srcW - cropW) / 2).coerceAtLeast(0)
-        } else if (currentRatio < targetRatio) {
-            cropH = (srcW / targetRatio).toInt().coerceIn(1, srcH)
-            cropY = ((srcH - cropH) / 2).coerceAtLeast(0)
-        }
-    }
+    val safeBox = clampAndroidCropRect(cropRect, 0.04f)
+    val cropX = if (applyCrop) (safeBox.left * srcW).toInt().coerceIn(0, srcW - 1) else 0
+    val cropY = if (applyCrop) (safeBox.top * srcH).toInt().coerceIn(0, srcH - 1) else 0
+    val cropW = if (applyCrop) ((safeBox.right - safeBox.left) * srcW).toInt().coerceIn(1, srcW - cropX) else srcW
+    val cropH = if (applyCrop) ((safeBox.bottom - safeBox.top) * srcH).toInt().coerceIn(1, srcH - cropY) else srcH
 
     val outBitmap = android.graphics.Bitmap.createBitmap(
         cropW,
@@ -4359,6 +4486,10 @@ fun NativePhotoEditorModal(
     var flipV by remember { mutableStateOf(false) }
     var cropRatio by remember { mutableStateOf("free") }
 
+    // Manual Draggable Crop Grid is immediately open when entering photo edit mode
+    var showCropGrid by remember { mutableStateOf(true) }
+    var cropRect by remember { mutableStateOf(NormalizedAndroidCropRect(0f, 0f, 1f, 1f)) }
+
     LaunchedEffect(filename) {
         if (sourceBitmap == null) {
             isLoading = true
@@ -4367,7 +4498,9 @@ fun NativePhotoEditorModal(
         }
     }
 
-    val previewBitmap = remember(
+    // Stage bitmap: when showCropGrid is true, render the full rotated/filtered photo and draw the interactive crop grid on top;
+    // when showCropGrid is false, render the cropped preview directly.
+    val stageBitmap = remember(
         sourceBitmap,
         brightness,
         contrast,
@@ -4376,7 +4509,8 @@ fun NativePhotoEditorModal(
         rotationDegrees,
         flipH,
         flipV,
-        cropRatio
+        cropRect,
+        showCropGrid
     ) {
         val src = sourceBitmap ?: return@remember null
         renderEditedAndroidBitmap(
@@ -4388,8 +4522,20 @@ fun NativePhotoEditorModal(
             rotationDegrees = rotationDegrees,
             flipH = flipH,
             flipV = flipV,
-            cropRatio = cropRatio
+            cropRect = cropRect,
+            applyCrop = !showCropGrid
         )
+    }
+
+    val croppedWidthPx = remember(stageBitmap, cropRect, showCropGrid) {
+        val bmp = stageBitmap ?: return@remember 0
+        if (!showCropGrid) bmp.width
+        else ((cropRect.right - cropRect.left) * bmp.width).toInt().coerceAtLeast(1)
+    }
+    val croppedHeightPx = remember(stageBitmap, cropRect, showCropGrid) {
+        val bmp = stageBitmap ?: return@remember 0
+        if (!showCropGrid) bmp.height
+        else ((cropRect.bottom - cropRect.top) * bmp.height).toInt().coerceAtLeast(1)
     }
 
     fun resetEdits() {
@@ -4402,15 +4548,29 @@ fun NativePhotoEditorModal(
         flipH = false
         flipV = false
         cropRatio = "free"
+        cropRect = NormalizedAndroidCropRect(0f, 0f, 1f, 1f)
+        showCropGrid = true
     }
 
     fun saveEditedPhoto(overwrite: Boolean) {
-        val currentPreview = previewBitmap ?: return
+        val src = sourceBitmap ?: return
         if (isSaving) return
         isSaving = true
         scope.launch {
+            val finalCroppedBmp = renderEditedAndroidBitmap(
+                source = src,
+                brightness = brightness,
+                contrast = contrast,
+                saturation = saturation,
+                warmth = warmth,
+                rotationDegrees = rotationDegrees,
+                flipH = flipH,
+                flipV = flipV,
+                cropRect = cropRect,
+                applyCrop = true
+            )
             val outStream = java.io.ByteArrayOutputStream()
-            currentPreview.compress(android.graphics.Bitmap.CompressFormat.JPEG, 94, outStream)
+            finalCroppedBmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 94, outStream)
             val jpegBytes = outStream.toByteArray()
             val (ok, msg) = apiClient.uploadEditedPhotoBytes(
                 originalFilename = filename,
@@ -4466,9 +4626,9 @@ fun NativePhotoEditorModal(
                             color = Color.White
                         )
                         Text(
-                            text = filename,
+                            text = if (croppedWidthPx > 0) "$croppedWidthPx × $croppedHeightPx px • Trascina griglia per ritagliare" else filename,
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color.White.copy(alpha = 0.65f),
+                            color = Color(0xFFA8C7FA),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -4485,27 +4645,193 @@ fun NativePhotoEditorModal(
                 }
             }
 
-            // Live Image Preview Stage
+            // Live Image Preview Stage + Interactive Draggable Manual Crop Grid Overlay
+            var stageSize by remember { mutableStateOf(IntSize.Zero) }
+            var activeDragHandle by remember { mutableStateOf<AndroidCropHandle?>(null) }
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .padding(horizontal = 16.dp, vertical = 6.dp)
                     .clip(RoundedCornerShape(22.dp))
-                    .background(Color(0xFF14141C)),
+                    .background(Color(0xFF14141C))
+                    .onSizeChanged { stageSize = it },
                 contentAlignment = Alignment.Center
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(color = Color.White)
-                } else if (previewBitmap != null) {
-                    Image(
-                        bitmap = previewBitmap.asImageBitmap(),
-                        contentDescription = "Anteprima Modifica",
-                        contentScale = ContentScale.Fit,
+                } else if (stageBitmap != null) {
+                    val bmpW = stageBitmap.width.coerceAtLeast(1)
+                    val bmpH = stageBitmap.height.coerceAtLeast(1)
+
+                    Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(12.dp)
-                    )
+                            .padding(14.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            bitmap = stageBitmap.asImageBitmap(),
+                            contentDescription = "Anteprima Modifica",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize()
+                        )
+
+                        if (showCropGrid) {
+                            Canvas(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .pointerInput(bmpW, bmpH, cropRatio) {
+                                        detectDragGestures(
+                                            onDragStart = { touchOffset ->
+                                                val cw = size.width.toFloat()
+                                                val ch = size.height.toFloat()
+                                                if (cw <= 0f || ch <= 0f) return@detectDragGestures
+                                                val imgAspect = bmpW.toFloat() / bmpH.toFloat()
+                                                val boxAspect = cw / ch
+                                                val fitW = if (imgAspect > boxAspect) cw else ch * imgAspect
+                                                val fitH = if (imgAspect > boxAspect) cw / imgAspect else ch
+                                                val offX = (cw - fitW) / 2f
+                                                val offY = (ch - fitH) / 2f
+
+                                                val cLeft = offX + cropRect.left * fitW
+                                                val cTop = offY + cropRect.top * fitH
+                                                val cRight = offX + cropRect.right * fitW
+                                                val cBottom = offY + cropRect.bottom * fitH
+                                                val cMidX = (cLeft + cRight) / 2f
+                                                val cMidY = (cTop + cBottom) / 2f
+                                                val hitRadius = 42.dp.toPx()
+
+                                                activeDragHandle = when {
+                                                    hypot(touchOffset.x - cLeft, touchOffset.y - cTop) <= hitRadius -> AndroidCropHandle.NW
+                                                    hypot(touchOffset.x - cRight, touchOffset.y - cTop) <= hitRadius -> AndroidCropHandle.NE
+                                                    hypot(touchOffset.x - cRight, touchOffset.y - cBottom) <= hitRadius -> AndroidCropHandle.SE
+                                                    hypot(touchOffset.x - cLeft, touchOffset.y - cBottom) <= hitRadius -> AndroidCropHandle.SW
+                                                    hypot(touchOffset.x - cMidX, touchOffset.y - cTop) <= hitRadius || (abs(touchOffset.y - cTop) <= hitRadius * 0.7f && touchOffset.x in cLeft..cRight) -> AndroidCropHandle.N
+                                                    hypot(touchOffset.x - cMidX, touchOffset.y - cBottom) <= hitRadius || (abs(touchOffset.y - cBottom) <= hitRadius * 0.7f && touchOffset.x in cLeft..cRight) -> AndroidCropHandle.S
+                                                    hypot(touchOffset.x - cLeft, touchOffset.y - cMidY) <= hitRadius || (abs(touchOffset.x - cLeft) <= hitRadius * 0.7f && touchOffset.y in cTop..cBottom) -> AndroidCropHandle.W
+                                                    hypot(touchOffset.x - cRight, touchOffset.y - cMidY) <= hitRadius || (abs(touchOffset.x - cRight) <= hitRadius * 0.7f && touchOffset.y in cTop..cBottom) -> AndroidCropHandle.E
+                                                    touchOffset.x in cLeft..cRight && touchOffset.y in cTop..cBottom -> AndroidCropHandle.MOVE
+                                                    else -> AndroidCropHandle.MOVE
+                                                }
+                                            },
+                                            onDrag = { change, dragAmount ->
+                                                change.consume()
+                                                val handle = activeDragHandle ?: return@detectDragGestures
+                                                val cw = size.width.toFloat()
+                                                val ch = size.height.toFloat()
+                                                if (cw <= 0f || ch <= 0f) return@detectDragGestures
+                                                val imgAspect = bmpW.toFloat() / bmpH.toFloat()
+                                                val boxAspect = cw / ch
+                                                val fitW = (if (imgAspect > boxAspect) cw else ch * imgAspect).coerceAtLeast(1f)
+                                                val fitH = (if (imgAspect > boxAspect) cw / imgAspect else ch).coerceAtLeast(1f)
+
+                                                val dxNorm = dragAmount.x / fitW
+                                                val dyNorm = dragAmount.y / fitH
+                                                cropRect = dragAndroidCropRect(
+                                                    start = cropRect,
+                                                    handle = handle,
+                                                    dxNorm = dxNorm,
+                                                    dyNorm = dyNorm,
+                                                    cropRatio = cropRatio,
+                                                    imgW = bmpW,
+                                                    imgH = bmpH
+                                                )
+                                            },
+                                            onDragEnd = { activeDragHandle = null },
+                                            onDragCancel = { activeDragHandle = null }
+                                        )
+                                    }
+                            ) {
+                                val cw = size.width
+                                val ch = size.height
+                                val imgAspect = bmpW.toFloat() / bmpH.toFloat()
+                                val boxAspect = cw / ch
+                                val fitW = if (imgAspect > boxAspect) cw else ch * imgAspect
+                                val fitH = if (imgAspect > boxAspect) cw / imgAspect else ch
+                                val offX = (cw - fitW) / 2f
+                                val offY = (ch - fitH) / 2f
+
+                                val cLeft = offX + cropRect.left * fitW
+                                val cTop = offY + cropRect.top * fitH
+                                val cRight = offX + cropRect.right * fitW
+                                val cBottom = offY + cropRect.bottom * fitH
+                                val cWidth = (cRight - cLeft).coerceAtLeast(1f)
+                                val cHeight = (cBottom - cTop).coerceAtLeast(1f)
+
+                                val scrimColor = Color(0xAA06070C)
+                                // Top scrim
+                                drawRect(color = scrimColor, topLeft = Offset(offX, offY), size = Size(fitW, (cTop - offY).coerceAtLeast(0f)))
+                                // Bottom scrim
+                                drawRect(color = scrimColor, topLeft = Offset(offX, cBottom), size = Size(fitW, (offY + fitH - cBottom).coerceAtLeast(0f)))
+                                // Left scrim
+                                drawRect(color = scrimColor, topLeft = Offset(offX, cTop), size = Size((cLeft - offX).coerceAtLeast(0f), cHeight))
+                                // Right scrim
+                                drawRect(color = scrimColor, topLeft = Offset(cRight, cTop), size = Size((offX + fitW - cRight).coerceAtLeast(0f), cHeight))
+
+                                // Rule of Thirds 3x3 Grid Lines
+                                val gridColor = Color.White.copy(alpha = 0.45f)
+                                val thirdW = cWidth / 3f
+                                val thirdH = cHeight / 3f
+                                drawLine(gridColor, Offset(cLeft + thirdW, cTop), Offset(cLeft + thirdW, cBottom), strokeWidth = 1.dp.toPx())
+                                drawLine(gridColor, Offset(cLeft + thirdW * 2f, cTop), Offset(cLeft + thirdW * 2f, cBottom), strokeWidth = 1.dp.toPx())
+                                drawLine(gridColor, Offset(cLeft, cTop + thirdH), Offset(cRight, cTop + thirdH), strokeWidth = 1.dp.toPx())
+                                drawLine(gridColor, Offset(cLeft, cTop + thirdH * 2f), Offset(cRight, cTop + thirdH * 2f), strokeWidth = 1.dp.toPx())
+
+                                // Outer white crop border
+                                drawRect(
+                                    color = Color.White,
+                                    topLeft = Offset(cLeft, cTop),
+                                    size = Size(cWidth, cHeight),
+                                    style = Stroke(width = 2.dp.toPx())
+                                )
+
+                                // 4 Corner Handles (Material You Accent #A8C7FA)
+                                val handleRadius = 8.dp.toPx()
+                                val accentColor = Color(0xFFA8C7FA)
+                                listOf(
+                                    Offset(cLeft, cTop),
+                                    Offset(cRight, cTop),
+                                    Offset(cRight, cBottom),
+                                    Offset(cLeft, cBottom)
+                                ).forEach { corner ->
+                                    drawCircle(color = Color(0xFF041E49), radius = handleRadius + 2.dp.toPx(), center = corner)
+                                    drawCircle(color = accentColor, radius = handleRadius, center = corner)
+                                }
+
+                                // 4 Edge Pill Handles
+                                val edgeW = 24.dp.toPx()
+                                val edgeThick = 6.dp.toPx()
+                                val cMidX = (cLeft + cRight) / 2f
+                                val cMidY = (cTop + cBottom) / 2f
+                                drawRoundRect(
+                                    color = Color.White,
+                                    topLeft = Offset(cMidX - edgeW / 2f, cTop - edgeThick / 2f),
+                                    size = Size(edgeW, edgeThick),
+                                    cornerRadius = CornerRadius(edgeThick, edgeThick)
+                                )
+                                drawRoundRect(
+                                    color = Color.White,
+                                    topLeft = Offset(cMidX - edgeW / 2f, cBottom - edgeThick / 2f),
+                                    size = Size(edgeW, edgeThick),
+                                    cornerRadius = CornerRadius(edgeThick, edgeThick)
+                                )
+                                drawRoundRect(
+                                    color = Color.White,
+                                    topLeft = Offset(cLeft - edgeThick / 2f, cMidY - edgeW / 2f),
+                                    size = Size(edgeThick, edgeW),
+                                    cornerRadius = CornerRadius(edgeThick, edgeThick)
+                                )
+                                drawRoundRect(
+                                    color = Color.White,
+                                    topLeft = Offset(cRight - edgeThick / 2f, cMidY - edgeW / 2f),
+                                    size = Size(edgeThick, edgeW),
+                                    cornerRadius = CornerRadius(edgeThick, edgeThick)
+                                )
+                            }
+                        }
+                    }
                 } else {
                     Text(
                         text = "Impossibile caricare la foto per la modifica",
@@ -4530,7 +4856,108 @@ fun NativePhotoEditorModal(
                         .padding(horizontal = 18.dp, vertical = 14.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // 1. Filter Presets
+                    // 1. Transform & Interactive Manual Crop Grid
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "RITAGLIO MANUALE TRASCINABILE & RUOTA",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        FilterChip(
+                            selected = showCropGrid,
+                            onClick = { showCropGrid = !showCropGrid },
+                            label = {
+                                Text(
+                                    if (showCropGrid) "Griglia Attiva" else "Mostra Griglia",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            shape = CircleShape
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            "free" to "Libero (Manuale)",
+                            "1:1" to "1:1 Quadrato",
+                            "4:5" to "4:5 Ritratto",
+                            "4:3" to "4:3 Foto",
+                            "16:9" to "16:9 Cinema"
+                        ).forEach { (ratioKey, ratioLabel) ->
+                            FilterChip(
+                                selected = cropRatio == ratioKey,
+                                onClick = {
+                                    cropRatio = ratioKey
+                                    showCropGrid = true
+                                    val bmp = stageBitmap
+                                    if (bmp != null && ratioKey != "free") {
+                                        cropRect = fitAndroidAspectCropRect(bmp.width, bmp.height, ratioKey)
+                                    }
+                                },
+                                label = { Text(ratioLabel) },
+                                shape = CircleShape
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                rotationDegrees = (rotationDegrees - 90 + 360) % 360
+                                val bmp = stageBitmap
+                                if (bmp != null && cropRatio != "free") {
+                                    cropRect = fitAndroidAspectCropRect(bmp.height, bmp.width, cropRatio)
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text("-90°", fontWeight = FontWeight.Bold)
+                        }
+                        FilledTonalButton(
+                            onClick = {
+                                rotationDegrees = (rotationDegrees + 90) % 360
+                                val bmp = stageBitmap
+                                if (bmp != null && cropRatio != "free") {
+                                    cropRect = fitAndroidAspectCropRect(bmp.height, bmp.width, cropRatio)
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text("+90°", fontWeight = FontWeight.Bold)
+                        }
+                        FilledTonalButton(
+                            onClick = { flipH = !flipH },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text("Specchia O.", fontWeight = FontWeight.Bold, maxLines = 1)
+                        }
+                        FilledTonalButton(
+                            onClick = { flipV = !flipV },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text("Specchia V.", fontWeight = FontWeight.Bold, maxLines = 1)
+                        }
+                    }
+
+                    // 2. Filter Presets
                     Text(
                         text = "FILTRI RAPIDI",
                         style = MaterialTheme.typography.labelSmall,
@@ -4554,69 +4981,6 @@ fun NativePhotoEditorModal(
                                     warmth = preset.warmth
                                 },
                                 label = { Text(preset.label, fontWeight = FontWeight.SemiBold) },
-                                shape = CircleShape
-                            )
-                        }
-                    }
-
-                    // 2. Transform & Aspect Ratio Crop
-                    Text(
-                        text = "TRASFORMA & RITAGLIA",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        FilledTonalButton(
-                            onClick = { rotationDegrees = (rotationDegrees - 90 + 360) % 360 },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
-                            Text("-90°", fontWeight = FontWeight.Bold)
-                        }
-                        FilledTonalButton(
-                            onClick = { rotationDegrees = (rotationDegrees + 90) % 360 },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
-                            Text("+90°", fontWeight = FontWeight.Bold)
-                        }
-                        FilledTonalButton(
-                            onClick = { flipH = !flipH },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
-                            Text("Specchia O.", fontWeight = FontWeight.Bold, maxLines = 1)
-                        }
-                        FilledTonalButton(
-                            onClick = { flipV = !flipV },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
-                            Text("Specchia V.", fontWeight = FontWeight.Bold, maxLines = 1)
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        listOf(
-                            "free" to "Libero",
-                            "1:1" to "1:1 Quadrato",
-                            "4:5" to "4:5 Ritratto",
-                            "4:3" to "4:3 Foto",
-                            "16:9" to "16:9 Cinema"
-                        ).forEach { (ratioKey, ratioLabel) ->
-                            FilterChip(
-                                selected = cropRatio == ratioKey,
-                                onClick = { cropRatio = ratioKey },
-                                label = { Text(ratioLabel) },
                                 shape = CircleShape
                             )
                         }
@@ -4672,7 +5036,7 @@ fun NativePhotoEditorModal(
                     ) {
                         OutlinedButton(
                             onClick = { saveEditedPhoto(overwrite = true) },
-                            enabled = !isSaving && previewBitmap != null,
+                            enabled = !isSaving && stageBitmap != null,
                             shape = CircleShape,
                             modifier = Modifier.weight(1f).height(48.dp)
                         ) {
@@ -4680,7 +5044,7 @@ fun NativePhotoEditorModal(
                         }
                         Button(
                             onClick = { saveEditedPhoto(overwrite = false) },
-                            enabled = !isSaving && previewBitmap != null,
+                            enabled = !isSaving && stageBitmap != null,
                             shape = CircleShape,
                             modifier = Modifier.weight(1f).height(48.dp)
                         ) {
@@ -4733,4 +5097,5 @@ private fun EditorSliderControl(
         )
     }
 }
+
 

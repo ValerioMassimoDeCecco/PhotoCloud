@@ -330,20 +330,196 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 16px;
+    padding: 18px;
     background: radial-gradient(circle at center, #161720 0%, #09090d 100%);
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.photo-editor-canvas-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    max-width: 100%;
+    max-height: 46dvh;
+    border-radius: 14px;
+    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.65);
     overflow: hidden;
 }
 
 #photo-editor-canvas {
+    display: block;
     max-width: 100%;
     max-height: 46dvh;
     width: auto;
     height: auto;
     object-fit: contain;
-    border-radius: 16px;
-    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.65);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    pointer-events: none;
+}
+
+.photo-editor-crop-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+    display: none;
+    touch-action: none;
+}
+
+.photo-editor-crop-overlay.active {
+    display: block;
+}
+
+.photo-editor-crop-box {
+    position: absolute;
+    box-sizing: border-box;
+    border: 2px solid #ffffff;
+    box-shadow: 0 0 0 9999px rgba(5, 6, 10, 0.66), inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+    cursor: move;
+    pointer-events: auto;
+    touch-action: none;
+}
+
+.crop-grid-line {
+    position: absolute;
+    background: rgba(255, 255, 255, 0.42);
+    pointer-events: none;
+    box-shadow: 0 0 2px rgba(0, 0, 0, 0.45);
+}
+
+.crop-grid-h1 {
+    left: 0;
+    right: 0;
+    top: 33.3333%;
+    height: 1px;
+}
+
+.crop-grid-h2 {
+    left: 0;
+    right: 0;
+    top: 66.6667%;
+    height: 1px;
+}
+
+.crop-grid-v1 {
+    top: 0;
+    bottom: 0;
+    left: 33.3333%;
+    width: 1px;
+}
+
+.crop-grid-v2 {
+    top: 0;
+    bottom: 0;
+    left: 66.6667%;
+    width: 1px;
+}
+
+.crop-box-dimensions-label {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(9, 10, 15, 0.78);
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    white-space: nowrap;
+    pointer-events: none;
+    backdrop-filter: blur(8px);
+}
+
+.crop-handle {
+    position: absolute;
+    z-index: 4;
+    pointer-events: auto;
+    touch-action: none;
+}
+
+/* 4 Corner Handles — High-visibility tactile L/Pill corners */
+.crop-handle-nw,
+.crop-handle-ne,
+.crop-handle-se,
+.crop-handle-sw {
+    width: 22px;
+    height: 22px;
+    background: #a8c7fa;
+    border: 2.5px solid #041e49;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+}
+
+.crop-handle-nw {
+    top: -10px;
+    left: -10px;
+    cursor: nwse-resize;
+}
+
+.crop-handle-ne {
+    top: -10px;
+    right: -10px;
+    cursor: nesw-resize;
+}
+
+.crop-handle-se {
+    bottom: -10px;
+    right: -10px;
+    cursor: nwse-resize;
+}
+
+.crop-handle-sw {
+    bottom: -10px;
+    left: -10px;
+    cursor: nesw-resize;
+}
+
+/* 4 Edge Handles — Pill bars along N, E, S, W */
+.crop-handle-n,
+.crop-handle-s {
+    left: 50%;
+    transform: translateX(-50%);
+    width: 34px;
+    height: 10px;
+    background: #ffffff;
+    border: 1.5px solid #041e49;
+    border-radius: 999px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+    cursor: ns-resize;
+}
+
+.crop-handle-n {
+    top: -6px;
+}
+
+.crop-handle-s {
+    bottom: -6px;
+}
+
+.crop-handle-e,
+.crop-handle-w {
+    top: 50%;
+    transform: translateY(-50%);
+    width: 10px;
+    height: 34px;
+    background: #ffffff;
+    border: 1.5px solid #041e49;
+    border-radius: 999px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+    cursor: ew-resize;
+}
+
+.crop-handle-e {
+    right: -6px;
+}
+
+.crop-handle-w {
+    left: -6px;
 }
 
 .photo-editor-controls {

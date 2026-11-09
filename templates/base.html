@@ -84,8 +84,32 @@
             </div>
         </header>
 
-        <div class="photo-editor-stage">
-            <canvas id="photo-editor-canvas" data-testid="photo-editor-canvas"></canvas>
+        <div class="photo-editor-stage" id="photo-editor-stage">
+            <div class="photo-editor-canvas-wrapper" id="photo-editor-canvas-wrapper">
+                <canvas id="photo-editor-canvas" data-testid="photo-editor-canvas"></canvas>
+                <div id="photo-editor-crop-overlay" class="photo-editor-crop-overlay active" data-testid="photo-editor-crop-overlay" aria-label="Griglia di ritaglio manuale trascinabile">
+                    <div id="photo-editor-crop-box" class="photo-editor-crop-box" data-crop-handle="move" style="left: 0%; top: 0%; width: 100%; height: 100%;">
+                        <!-- Rule of Thirds 3x3 Grid Lines -->
+                        <div class="crop-grid-line crop-grid-h1"></div>
+                        <div class="crop-grid-line crop-grid-h2"></div>
+                        <div class="crop-grid-line crop-grid-v1"></div>
+                        <div class="crop-grid-line crop-grid-v2"></div>
+
+                        <!-- Live Cropped Pixel Dimensions Readout -->
+                        <div id="crop-box-dimensions-label" class="crop-box-dimensions-label">Ritaglio Manuale</div>
+
+                        <!-- 8 Interactive Drag Handles (4 Corners + 4 Edges) -->
+                        <div class="crop-handle crop-handle-nw" data-crop-handle="nw" title="Trascina angolo alto-sinistra"></div>
+                        <div class="crop-handle crop-handle-n" data-crop-handle="n" title="Trascina bordo superiore"></div>
+                        <div class="crop-handle crop-handle-ne" data-crop-handle="ne" title="Trascina angolo alto-destra"></div>
+                        <div class="crop-handle crop-handle-e" data-crop-handle="e" title="Trascina bordo destro"></div>
+                        <div class="crop-handle crop-handle-se" data-crop-handle="se" title="Trascina angolo basso-destra"></div>
+                        <div class="crop-handle crop-handle-s" data-crop-handle="s" title="Trascina bordo inferiore"></div>
+                        <div class="crop-handle crop-handle-sw" data-crop-handle="sw" title="Trascina angolo basso-sinistra"></div>
+                        <div class="crop-handle crop-handle-w" data-crop-handle="w" title="Trascina bordo sinistro"></div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <section class="photo-editor-controls">
@@ -138,6 +162,10 @@
             <!-- Transform & Crop Toolbar -->
             <div class="editor-transform-toolbar">
                 <div class="editor-tool-group">
+                    <button type="button" class="editor-tool-btn active" id="editor-toggle-crop-grid-btn" title="Mostra/Nascondi griglia di ritaglio trascinabile">
+                        <span class="material-icons">grid_on</span>
+                        <span>Griglia Ritaglio</span>
+                    </button>
                     <button type="button" class="editor-tool-btn" id="editor-rotate-left-btn" title="Ruota di -90°">
                         <span class="material-icons">rotate_left</span>
                         <span>-90°</span>
