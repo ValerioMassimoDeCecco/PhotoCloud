@@ -4505,7 +4505,10 @@ fun NativeLightboxModal(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(pageIndex) {
+                    .pointerInput(pageIndex, media.isVideo) {
+                        // Per i video il touch va lasciato al player: lo swipe sulla seek bar
+                        // non deve essere rubato dal pinch/pan del lightbox.
+                        if (media.isVideo) return@pointerInput
                         detectTransformGestures { _, pan, zoom, _ ->
                             val newScale = (zoomScale * zoom).coerceIn(1f, 4f)
                             zoomScale = newScale
@@ -4521,21 +4524,10 @@ fun NativeLightboxModal(
                 contentAlignment = Alignment.Center
             ) {
                 val loadedBitmap = bmp
-                if (loadedBitmap != null) {
-                    Image(
-                        bitmap = loadedBitmap.asImageBitmap(),
-                        contentDescription = media.filename,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer(
-                                scaleX = zoomScale,
-                                scaleY = zoomScale,
-                                translationX = offsetX,
-                                translationY = offsetY
-                            )
-                    )
-                } else if (media.isVideo) {
+                if (media.isVideo) {
+                    // Le anteprime RAM dei video (v1.1.2) non devono MAI coprire il player:
+                    // i video passano sempre da VideoView + MediaController (play/pausa, seek, durata),
+                    // altrimenti si vede solo l'immagine statica senza alcun controllo.
                     val videoUrl = apiClient.getMediaUrl(media.filename, fromTrash)
                     val cookieHeader = apiClient.getCookieHeaderForCurrentServer()
                     AndroidView(
@@ -4551,12 +4543,27 @@ fun NativeLightboxModal(
                                 )
                                 setOnPreparedListener { mp ->
                                     mp.isLooping = true
+                                    controller.show(3000)
                                     if (autoplayVideos) {
                                         start()
                                     }
                                 }
                             }
                         }
+                    )
+                } else if (loadedBitmap != null) {
+                    Image(
+                        bitmap = loadedBitmap.asImageBitmap(),
+                        contentDescription = media.filename,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer(
+                                scaleX = zoomScale,
+                                scaleY = zoomScale,
+                                translationX = offsetX,
+                                translationY = offsetY
+                            )
                     )
                 } else if (isLoading) {
                     CircularProgressIndicator(color = Color.White)
