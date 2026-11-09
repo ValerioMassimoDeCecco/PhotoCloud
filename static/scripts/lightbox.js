@@ -107,9 +107,7 @@ window.openLightbox = function(url, isVideo, index, allMedia) {
     }
 
     lightbox.style.display = 'flex';
-    requestAnimationFrame(() => {
-        lightbox.classList.add('active');
-    });
+    lightbox.classList.add('active');
 
     showMediaAtIndex(currentIndex);
     document.addEventListener('keydown', handleKeydown);
@@ -120,18 +118,16 @@ window.closeLightbox = function() {
     if (!lightbox) return;
 
     lightbox.classList.remove('active');
-    setTimeout(() => {
-        lightbox.style.display = 'none';
-        if (lightboxVideo) {
-            lightboxVideo.pause();
-            if (lightboxVideoSource) lightboxVideoSource.setAttribute('src', '');
-            lightboxVideo.style.display = 'none';
-        }
-        if (lightboxImg) {
-            lightboxImg.removeAttribute('src');
-            lightboxImg.style.display = 'none';
-        }
-    }, 180);
+    lightbox.style.display = 'none';
+    if (lightboxVideo) {
+        lightboxVideo.pause();
+        if (lightboxVideoSource) lightboxVideoSource.setAttribute('src', '');
+        lightboxVideo.style.display = 'none';
+    }
+    if (lightboxImg) {
+        lightboxImg.removeAttribute('src');
+        lightboxImg.style.display = 'none';
+    }
 
     document.removeEventListener('keydown', handleKeydown);
 };
@@ -149,6 +145,21 @@ window.navigateMedia = function(direction, event) {
 
     showMediaAtIndex(currentIndex);
 };
+
+function preloadAdjacentMedia(index) {
+    if (mediaList.length <= 1) return;
+    const neighbors = [
+        (index + 1) % mediaList.length,
+        (index - 1 + mediaList.length) % mediaList.length,
+    ];
+    neighbors.forEach((idx) => {
+        const url = resolveMediaUrl(mediaList[idx]);
+        if (url && !/\.(mp4|mov|webm|mkv|avi)$/i.test(url.split('?')[0])) {
+            const preloadImg = new Image();
+            preloadImg.src = url;
+        }
+    });
+}
 
 function showMediaAtIndex(index) {
     const {
@@ -198,11 +209,9 @@ function showMediaAtIndex(index) {
     } else if (lightboxImg) {
         if (lightboxVideo) lightboxVideo.style.display = 'none';
         lightboxImg.style.display = 'block';
-        lightboxImg.style.opacity = '0.4';
-        lightboxImg.onload = () => {
-            lightboxImg.style.opacity = '1';
-        };
+        lightboxImg.style.opacity = '1';
         lightboxImg.setAttribute('src', mediaUrl);
+        preloadAdjacentMedia(index);
     }
 }
 

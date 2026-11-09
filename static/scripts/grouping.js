@@ -24,118 +24,117 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     function renderGroups() {
-        galleryGrid.style.opacity = '0';
+        allElements = allElements.filter(el => el.isConnected || el.parentElement);
+        galleryGrid.innerHTML = '';
 
-        setTimeout(() => {
-            allElements = allElements.filter(el => el.isConnected || el.parentElement);
-            galleryGrid.innerHTML = '';
+        const filtered = allElements.filter(el => {
+            const isMedia = el.dataset.isMedia !== 'false';
+            return currentViewTab === 'media' ? isMedia : !isMedia;
+        });
 
-            const filtered = allElements.filter(el => {
-                const isMedia = el.dataset.isMedia !== 'false';
-                return currentViewTab === 'media' ? isMedia : !isMedia;
+        if (mainViewTitle) {
+            mainViewTitle.textContent = currentViewTab === 'media' ? 'Il tuo archivio' : 'File Manager Cloud';
+        }
+        if (mediaCountEl) {
+            mediaCountEl.textContent = `${filtered.length} elementi`;
+        }
+        if (groupingControlsWrap) {
+            groupingControlsWrap.style.display = currentViewTab === 'media' ? 'inline-flex' : 'none';
+        }
+
+        if (filtered.length === 0) {
+            const emptyDiv = document.createElement('div');
+            emptyDiv.className = 'empty-state';
+            emptyDiv.innerHTML = currentViewTab === 'media'
+                ? `<span class="material-icons">photo_library</span>
+                   <h3>Nessuna foto o video</h3>
+                   <p>Tocca + Carica nella barra in basso per aggiungere foto o video.</p>`
+                : `<span class="material-icons">folder_open</span>
+                   <h3>Nessun file nel File Manager Cloud</h3>
+                   <p>Tocca + Carica per caricare PDF, archivi ZIP, APK, documenti o audio.</p>`;
+            galleryGrid.appendChild(emptyDiv);
+            galleryGrid.style.opacity = '1';
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+
+        if (currentViewTab === 'files') {
+            // Cloud File Manager: group non-media files by Category (and Album if assigned)
+            const groups = new Map();
+            filtered.forEach(el => {
+                const cat = el.dataset.category || 'other';
+                const title = categoryLabels[cat] || 'Altri File Cloud';
+                if (!groups.has(title)) groups.set(title, []);
+                groups.get(title).push(el);
             });
 
-            if (mainViewTitle) {
-                mainViewTitle.textContent = currentViewTab === 'media' ? 'Il tuo archivio' : 'File Manager Cloud';
-            }
-            if (mediaCountEl) {
-                mediaCountEl.textContent = `${filtered.length} elementi`;
-            }
-            if (groupingControlsWrap) {
-                groupingControlsWrap.style.display = currentViewTab === 'media' ? 'inline-flex' : 'none';
-            }
+            groups.forEach((items, title) => {
+                const groupContainer = document.createElement('div');
+                groupContainer.className = 'media-group';
 
-            if (filtered.length === 0) {
-                const emptyDiv = document.createElement('div');
-                emptyDiv.className = 'empty-state';
-                emptyDiv.innerHTML = currentViewTab === 'media'
-                    ? `<span class="material-icons">photo_library</span>
-                       <h3>Nessuna foto o video</h3>
-                       <p>Tocca + Carica nella barra in basso per aggiungere foto o video.</p>`
-                    : `<span class="material-icons">folder_open</span>
-                       <h3>Nessun file nel File Manager Cloud</h3>
-                       <p>Tocca + Carica per caricare PDF, archivi ZIP, APK, documenti o audio.</p>`;
-                galleryGrid.appendChild(emptyDiv);
-                galleryGrid.style.opacity = '1';
-                return;
-            }
+                const groupTitle = document.createElement('h2');
+                groupTitle.className = 'group-title';
+                groupTitle.textContent = `${title} (${items.length})`;
 
-            if (currentViewTab === 'files') {
-                // Cloud File Manager: group non-media files by Category (and Album if assigned)
+                const groupGrid = document.createElement('div');
+                groupGrid.className = 'media-group-grid cloud-files-grid';
+                items.forEach(el => groupGrid.appendChild(el));
+
+                groupContainer.appendChild(groupTitle);
+                groupContainer.appendChild(groupGrid);
+                fragment.appendChild(groupContainer);
+            });
+        } else {
+            const level = groupBySelect.value;
+            if (level === 'none') {
+                const groupGrid = document.createElement('div');
+                groupGrid.className = 'media-group-grid';
+                filtered.forEach(el => groupGrid.appendChild(el));
+                fragment.appendChild(groupGrid);
+            } else {
                 const groups = new Map();
                 filtered.forEach(el => {
-                    const cat = el.dataset.category || 'other';
-                    const title = categoryLabels[cat] || 'Altri File Cloud';
-                    if (!groups.has(title)) groups.set(title, []);
-                    groups.get(title).push(el);
+                    let key = '';
+                    if (level === 'album') {
+                        key = (el.dataset.album || '').trim() || 'Senza Album';
+                    } else {
+                        const timestamp = parseFloat(el.dataset.timestamp) * 1000;
+                        const date = new Date(timestamp);
+                        if (level === 'day') {
+                            key = date.toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' });
+                        } else if (level === 'month') {
+                            key = date.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
+                        } else if (level === 'year') {
+                            key = date.getFullYear().toString();
+                        }
+                    }
+
+                    if (!groups.has(key)) groups.set(key, []);
+                    groups.get(key).push(el);
                 });
 
-                groups.forEach((items, title) => {
+                groups.forEach((media, title) => {
                     const groupContainer = document.createElement('div');
                     groupContainer.className = 'media-group';
 
                     const groupTitle = document.createElement('h2');
                     groupTitle.className = 'group-title';
-                    groupTitle.textContent = `${title} (${items.length})`;
+                    groupTitle.textContent = `${title} (${media.length})`;
 
                     const groupGrid = document.createElement('div');
-                    groupGrid.className = 'media-group-grid cloud-files-grid';
-                    items.forEach(el => groupGrid.appendChild(el));
+                    groupGrid.className = 'media-group-grid';
+                    media.forEach(el => groupGrid.appendChild(el));
 
                     groupContainer.appendChild(groupTitle);
                     groupContainer.appendChild(groupGrid);
-                    galleryGrid.appendChild(groupContainer);
+                    fragment.appendChild(groupContainer);
                 });
-            } else {
-                const level = groupBySelect.value;
-                if (level === 'none') {
-                    const groupGrid = document.createElement('div');
-                    groupGrid.className = 'media-group-grid';
-                    filtered.forEach(el => groupGrid.appendChild(el));
-                    galleryGrid.appendChild(groupGrid);
-                } else {
-                    const groups = new Map();
-                    filtered.forEach(el => {
-                        let key = '';
-                        if (level === 'album') {
-                            key = (el.dataset.album || '').trim() || 'Senza Album';
-                        } else {
-                            const timestamp = parseFloat(el.dataset.timestamp) * 1000;
-                            const date = new Date(timestamp);
-                            if (level === 'day') {
-                                key = date.toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' });
-                            } else if (level === 'month') {
-                                key = date.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
-                            } else if (level === 'year') {
-                                key = date.getFullYear().toString();
-                            }
-                        }
-
-                        if (!groups.has(key)) groups.set(key, []);
-                        groups.get(key).push(el);
-                    });
-
-                    groups.forEach((media, title) => {
-                        const groupContainer = document.createElement('div');
-                        groupContainer.className = 'media-group';
-
-                        const groupTitle = document.createElement('h2');
-                        groupTitle.className = 'group-title';
-                        groupTitle.textContent = `${title} (${media.length})`;
-
-                        const groupGrid = document.createElement('div');
-                        groupGrid.className = 'media-group-grid';
-                        media.forEach(el => groupGrid.appendChild(el));
-
-                        groupContainer.appendChild(groupTitle);
-                        groupContainer.appendChild(groupGrid);
-                        galleryGrid.appendChild(groupContainer);
-                    });
-                }
             }
+        }
 
-            galleryGrid.style.opacity = '1';
-        }, 160);
+        galleryGrid.appendChild(fragment);
+        galleryGrid.style.opacity = '1';
     }
 
     window.refreshGalleryGrouping = renderGroups;

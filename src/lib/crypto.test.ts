@@ -266,7 +266,7 @@ test('Document Viewer Engine resolves MIME types and parses PDF, DOCX, XLSX, PPT
   assert.equal(csvSheet.rows.length, 2);
 });
 
-test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android v1.0.9 project are configured', async () => {
+test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android v1.10 project with 0ms Instant Photo Editor are configured', async () => {
   const workflowPath = path.resolve(process.cwd(), '.github/workflows/android-release.yml');
   assert.ok(fs.existsSync(workflowPath));
   const workflowYaml = fs.readFileSync(workflowPath, 'utf-8');
@@ -278,7 +278,7 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
   assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
   assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));
-  assert.ok(workflowYaml.includes('photocloud-release-v1.0.9-signed.apk'));
+  assert.ok(workflowYaml.includes('photocloud-release-v1.10-signed.apk'));
   assert.equal(workflowYaml.includes('rm -f photocloud-release-key.jks'), false);
 
   const keystorePath = path.resolve(process.cwd(), 'android-app/app/photocloud-release-key.jks');
@@ -296,15 +296,25 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
     path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt'),
     'utf-8'
   );
+  const webPhotoEditorJs = fs.readFileSync(
+    path.resolve(process.cwd(), 'static/scripts/photo-editor.js'),
+    'utf-8'
+  );
 
   assert.equal(mainActivityKt.includes('android.webkit.WebView'), false);
   assert.equal(mainActivityKt.includes('showTransferPopup = true'), false);
   assert.ok(mainActivityKt.includes('hadRunningTransfers'));
+  assert.ok(mainActivityKt.includes('renderGeometryPreviewBitmap'));
+  assert.ok(mainActivityKt.includes('buildGpuComposeColorFilter'));
+  assert.ok(mainActivityKt.includes('previewSourceBitmap'));
+  assert.ok(mainActivityKt.includes('optimisticRemovedGallery'));
   assert.ok(mainActivityKt.includes('NativeDocumentViewerModal'));
   assert.ok(mainActivityKt.includes('NativePdfRendererView'));
   assert.ok(mainActivityKt.includes('NativeWordDocumentView'));
   assert.ok(mainActivityKt.includes('NativeSpreadsheetDocumentView'));
   assert.ok(mainActivityKt.includes('NativePresentationDocumentView'));
+  assert.ok(webPhotoEditorJs.includes('previewSourceCanvas'));
+  assert.ok(webPhotoEditorJs.includes('buildPreviewSourceCanvas'));
   assert.ok(apiClientKt.includes('FileProvider.getUriForFile'));
   assert.ok(apiClientKt.includes('openFileWithExternalAppChooser'));
   assert.ok(apiClientKt.includes('downloadFileToCache'));

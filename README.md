@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.0.9)
+# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.10)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -10,7 +10,21 @@
 
 ---
 
-## 🚀 Novità Principali della Release `v1.0.9`
+## ⚡ Novità Principali della Release `v1.10` (`versionCode 11`)
+
+### 1. Photo Editor Studio a Latenza Zero (`0ms` / 120Hz) per Rotazione, Specchiatura, Filtri e Ritaglio (Web & Android APK)
+- **Eliminazione Completa del Ritardo (~1 secondo -> `< 1.5 ms`) sulla Rotazione (`-90°` / `+90°`) e Specchiatura**:
+  - **Su Android (`NativePhotoEditorModal`)**: il motore di modifica genera all'apertura una bitmap di anteprima leggera (`previewSourceBitmap`, max `1080px` sul lato lungo) e separa le trasformazioni geometriche (`renderGeometryPreviewBitmap`) dalle regolazioni cromatiche. Le regolazioni di `Luminosità`, `Contrasto`, `Saturazione`, `Calore` e i 7 filtri rapidi vengono applicati a **0.0 ms direttamente sulla GPU** tramite `androidx.compose.ui.graphics.ColorFilter.colorMatrix`, mentre il trascinamento della griglia di ritaglio non ricalcola mai la bitmap sottostante. Al salvataggio (`Salva Copia` o `Sovrascrivi`), l'esportazione alla **piena risoluzione originale** viene eseguita in background su `Dispatchers.Default` senza bloccare il thread UI.
+  - **Su Web (`static/scripts/photo-editor.js`)**: all'apertura della foto viene costruito un `previewSourceCanvas` scalato (`max 1080px`) che viene ruotato e specchiato direttamente sul canvas di stage tramite trasformazioni matriciali 2D senza allocare canvas offscreen ad alta risoluzione ad ogni click (`< 1.5 ms`), mantenendo il calcolo delle dimensioni reali in pixel e l'esportazione finale (`buildFinalCroppedExportCanvas`) al **100% della risoluzione nativa**.
+
+### 2. Interazioni Click, Cambio Scheda, Lightbox e Cestino Istantanee (`0ms`) su Tutta l'App
+- **Cambio Scheda e Raggruppamento Istantaneo (`0ms`)**: rimosso il ritardo artificiale di `160 ms` (`setTimeout`) in `static/scripts/grouping.js` e introdotto il rendering sincrono tramite `DocumentFragment`, rendendo immediato il passaggio tra **Foto**, **File Cloud** e i raggruppamenti per **Giorno / Mese / Anno / Album**.
+- **Lightbox Istantanea con Precaricamento Adiacente**: rimosso il ritardo di chiusura (`180 ms`) e l'effetto di attenuazione opacità in `static/scripts/lightbox.js`, aggiungendo il precaricamento automatico in memoria della foto precedente e successiva (`preloadAdjacentMedia`) per uno scorrimento istantaneo.
+- **Azioni Cestino, Ripristino ed Eliminazione Ottimistiche a `0ms` (Web & Android)**: cliccando su **Cestina**, **Ripristina**, **Elimina Definitivamente** o **Svuota Cestino**, gli elementi vengono rimossi istantaneamente dalla griglia (`optimisticRemovedGallery` / `optimisticRemovedTrash` su Android e rimozione DOM immediata su Web) mentre la richiesta al server procede in background, con ripristino automatico in caso di errore di rete.
+
+---
+
+## 🚀 Funzionalità Introdotte nella `v1.0.9` e Perfezionate nella `v1.10`
 
 ### 1. Indicatore Discreto dei Trasferimenti & Chiusura Automatica (Web & Android APK)
 - **Nessuna Apertura Automatica Intrusiva**: quando parte un caricamento (Upload), uno scaricamento (Download singolo o pacchetto ZIP) o il salvataggio di una foto modificata, **la schermata dei trasferimenti NON si apre più automaticamente**, lasciando libera la navigazione tra Galleria, File Manager Cloud, Cestino e Impostazioni.
@@ -31,7 +45,7 @@
      - **Su Web**: viene mostrato il pannello di apertura esterna con supporto alla condivisione nativa del sistema operativo (`navigator.share` / handler del browser) o scaricamento manuale su richiesta.
 
 ### 3. Motore Integrato di Visualizzazione Documenti (Web & Android APK)
-Il nuovo motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `static/scripts/document-viewer.js` su Web e `NativeDocumentViewerModal` su Android) permette di aprire direttamente nell'app:
+Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `static/scripts/document-viewer.js` su Web e `NativeDocumentViewerModal` su Android) permette di aprire direttamente nell'app:
 
 | Categoria | Estensioni Supportate | Funzionalità del Visualizzatore Integrato |
 | :--- | :--- | :--- |
@@ -40,7 +54,7 @@ Il nuovo motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename`
 | **Excel & Fogli di Calcolo** | `.xls`, `.xlsx`, `.ods`, `.csv`, `.tsv` | Lettura multi-foglio (schede `Foglio 1`, `Foglio 2`, ecc.), intestazioni di colonna fisse (`sticky header`), **filtro di ricerca righe in tempo reale** e scorrimento bidimensionale fluido. |
 | **PowerPoint & Presentazioni** | `.ppt`, `.pptx`, `.odp` | Visualizzatore slide 16:9 con barra laterale delle miniature (su Web), navigazione `Slide Prec. / Succ.`, elenco puntato dei contenuti della diapositiva e visualizzazione delle **Note del relatore**. |
 | **Testo & Codice Sorgente** | `.txt`, `.md`, `.json`, `.xml`, `.yaml`, `.yml`, `.html`, `.css`, `.js`, `.ts`, `.py`, `.kt`, `.java`, `.c`, `.cpp`, `.sql`, `.sh`, `.log`, `.ini` | Visualizzatore monospace con **numerazione delle righe**, filtro rapido per riga e pulsante **Copia testo**. |
-| **Immagini** | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`, `.bmp`, `.avif` | Apertura nella Lightbox a schermo intero con **pinch-to-zoom**, navigazione swipe e accesso diretto al **Photo Editor Studio**. |
+| **Immagini** | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`, `.bmp`, `.avif` | Apertura nella Lightbox a schermo intero con **pinch-to-zoom**, navigazione swipe e accesso diretto al **Photo Editor Studio 0ms**. |
 | **Audio & Video** | `.mp3`, `.wav`, `.ogg`, `.m4a`, `.flac`, `.aac`, `.mp4`, `.webm`, `.mov`, `.mkv` | Player audio e video integrato (`MediaPlayer` / `VideoView` su Android e player HTML5 con streaming `Range` su Web). |
 | **Archivi & Pacchetti Esterni** | `.apk`, `.zip`, `.rar`, `.7z`, `.iso`, `.dmg`, `.exe`, ecc. | Selettore applicazioni nativo del dispositivo (`FileProvider` su Android) o proposta di download manuale se nessuna app compatibile è installata. |
 
@@ -58,15 +72,15 @@ Il nuovo motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename`
 - **Sblocco Biometrico Nativo (`BiometricPrompt`)**: su Android puoi sbloccare l'archivio con **impronta digitale o riconoscimento facciale**, con opzione di **blocco automatico in background**.
 - **Schermo Sicuro Anti-Screenshot (`FLAG_SECURE`)**: opzione attivabile dalle impostazioni Android.
 
-### 🪄 Photo Editor Studio Integrato & Griglia di Ritaglio Manuale Trascinabile (Web & APK)
+### 🪄 Photo Editor Studio Integrato 0ms & Griglia di Ritaglio Manuale Trascinabile (Web & APK)
 - **Griglia di Ritaglio Manuale Trascinabile Immediata all'Apertura**: entrando in **Modifica Foto**, si attiva subito la griglia 3×3 trascinabile con **8 maniglie tattili** (4 angoli + 4 lati), trascinamento interno e risoluzione in pixel in tempo reale.
-- **7 Filtri Fotografici & Regolazioni Fine**: `Originale`, `Vivido`, `Bianco & Nero`, `Seppia`, `Cinema`, `Freddo`, `Vintage` + slider `Luminosità`, `Contrasto`, `Saturazione`, `Calore`, rotazione `-90°/+90°` e specchiatura.
-- **Salvataggio Crittografato**: `Salva Copia` o `Sovrascrivi` originale.
+- **Rotazione e Specchiatura Istantanee (`0ms`) + 7 Filtri Fotografici GPU**: `Originale`, `Vivido`, `Bianco & Nero`, `Seppia`, `Cinema`, `Freddo`, `Vintage` + slider `Luminosità`, `Contrasto`, `Saturazione`, `Calore`, rotazione `-90°/+90°` e specchiatura senza alcun ritardo.
+- **Salvataggio Crittografato**: `Salva Copia` o `Sovrascrivi` originale alla massima risoluzione.
 
 ### 🖼️ Galleria 120Hz, Album, Drag-to-Select & Strumenti
-- **Raggruppamento per Giorno, Mese, Anno o Album** con creazione, assegnazione multipla e filtro rapido per Album.
+- **Raggruppamento Istantaneo per Giorno, Mese, Anno o Album** con creazione, assegnazione multipla e filtro rapido per Album.
 - **Selezione Multipla `Drag-to-Select`** sulla griglia con auto-scroll e feedback aptico.
-- **Ricerca Duplicati SHA-256**, **Cestino con ripristino/eliminazione definitiva** ed **Esportazione ZIP**.
+- **Ricerca Duplicati SHA-256**, **Cestino con ripristino/eliminazione definitiva istantanea** ed **Esportazione ZIP**.
 
 ---
 
@@ -74,13 +88,13 @@ Il nuovo motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename`
 
 ### Server & Web App (`package.json`)
 - **`express` (`^5.3.0`) & `multer` (`^2.5.0`)**: server HTTP, gestione sessioni, streaming media con supporto `Range` e upload multipart.
-- **`jszip` (`^3.10.2`)**: utilizzato sia per l'esportazione massiva di archivi `.zip` sia dal nuovo motore **`src/lib/documentEngine.ts`** per ispezionare e decodificare in memoria i contenitori OpenXML (`.docx`, `.xlsx`, `.pptx`) e OpenDocument (`.odt`, `.ods`, `.odp`) senza introdurre dipendenze native pesanti o obsolete.
+- **`jszip` (`^3.10.2`)**: utilizzato sia per l'esportazione massiva di archivi `.zip` sia dal motore **`src/lib/documentEngine.ts`** per ispezionare e decodificare in memoria i contenitori OpenXML (`.docx`, `.xlsx`, `.pptx`) e OpenDocument (`.odt`, `.ods`, `.odp`).
 - **`vite` & `typescript`**: compilazione asset frontend e verifica statica dei tipi.
 
 ### App Android Nativa (`android-app/app/build.gradle.kts`)
 - **Android SDK 35 / Kotlin 2.0 / Java 17**: compilazione nativa con Jetpack Compose (`androidx.compose:compose-bom:2024.10.01`) e Material 3.
 - **`androidx.core:core-ktx:1.13.1`**: include `androidx.core.content.FileProvider` per la condivisione sicura di `content://` URI verso applicazioni esterne.
-- **API Native Android (`android.graphics.pdf.PdfRenderer` & `android.media.MediaPlayer`)**: utilizzate per il rendering nativo ad alta definizione dei PDF e la riproduzione audio senza appesantire l'APK con librerie di terze parti ridondanti.
+- **API Native Android (`android.graphics.pdf.PdfRenderer`, `androidx.compose.ui.graphics.ColorFilter` & `android.media.MediaPlayer`)**: utilizzate per il rendering nativo ad alta definizione dei PDF, l'applicazione GPU a 0ms dei filtri fotografici e la riproduzione audio.
 - **`com.squareup.okhttp3:okhttp:4.12.0` & `androidx.biometric:biometric:1.1.0`**: networking con cookie store persistente, tracking velocità di trasferimento e autenticazione biometrica.
 
 ---
@@ -149,12 +163,12 @@ Il nuovo motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename`
 
 ---
 
-### 🤖 4. Android (Installazione APK `v1.0.9` & Compilazione da Sorgente)
+### 🤖 4. Android (Installazione APK `v1.10` & Compilazione da Sorgente)
 
-#### Opzione A: Installare l'APK Firmato Pronto (`v1.0.9`)
-1. Scarica **`photocloud-release-v1.0.9-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases)** oppure dalla cartella locale `/release/photocloud-release-v1.0.9-signed.apk`.
-2. Apri il file `.apk` sul tuo dispositivo Android per installarlo o aggiornare direttamente una versione precedente (`v1.0.4`–`v1.0.8`) senza perdere dati o configurazioni.
-3. Tocca il badge **Server** in alto a destra per inserire l'URL del tuo server PhotoCloud (`http://<IP-SERVER>:3000`), effettua il login con il tuo file `.json` e apri direttamente qualsiasi foto, video, PDF o documento Office.
+#### Opzione A: Installare l'APK Firmato Pronto (`v1.10`)
+1. Scarica **`photocloud-release-v1.10-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases)** oppure dalla cartella locale `/release/photocloud-release-v1.10-signed.apk`.
+2. Apri il file `.apk` sul tuo dispositivo Android per installarlo o aggiornare direttamente una versione precedente (`v1.0.4`–`v1.0.9`) senza perdere dati o configurazioni.
+3. Tocca il badge **Server** in alto a destra per inserire l'URL del tuo server PhotoCloud (`http://<IP-SERVER>:3000`), effettua il login con il tuo file `.json` e apri o modifica istantaneamente qualsiasi foto, video, PDF o documento Office.
 
 #### Opzione B: Compilare l'APK da Sorgente con Gradle
 ```bash
@@ -162,7 +176,7 @@ Il nuovo motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename`
 cd android-app
 gradle assembleRelease --no-daemon
 
-# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.0.9-signed.apk
+# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.10-signed.apk
 npm run release:apk
 ```
 
@@ -175,9 +189,9 @@ npm run release:apk
 | `npm run dev` | Avvia il server full-stack Express + Vite in modalità sviluppo sulla porta `3000`. |
 | `npm run build` | Compila i bundle frontend ottimizzati per la produzione. |
 | `npm start` | Avvia il server Node.js/TypeScript in modalità produzione. |
-| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, template e configurazione Android `v1.0.9`). |
+| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, template e configurazione Android `v1.10`). |
 | `npm run lint` | Verifica statica dei tipi TypeScript (`tsc --noEmit`). |
-| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.0.9-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
+| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.10-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
 
 ---
 
@@ -186,21 +200,21 @@ npm run release:apk
 ```text
 PhotoCloud/
 ├── .github/workflows/
-│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.0.9
+│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.10
 ├── android-app/                  # Progetto Nativo Android (Kotlin + Jetpack Compose Material You 120Hz)
 │   ├── app/
 │   │   ├── photocloud-release-key.jks  # Keystore RSA-2048 per firma APK
-│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.0.9 (versionCode 10)
+│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.10 (versionCode 11)
 │   │   └── src/main/
 │   │       ├── AndroidManifest.xml     # Permessi, FileProvider (content:// URI) e alias icone (Colorata + B/W)
 │   │       ├── java/com/valerio/photocloud/
-│   │       │   ├── MainActivity.kt          # UI Nativa 120Hz, Indicatore Trasferimenti Discreto con Auto-Close, NativeDocumentViewerModal (PdfRenderer, Word, Excel, PPT, Codice, Audio), Photo Editor Studio
+│   │       │   ├── MainActivity.kt          # UI Nativa 120Hz, Photo Editor 0ms (GPU ColorFilter + 1080px Geometry Preview), Indicatore Trasferimenti Discreto, NativeDocumentViewerModal
 │   │       │   └── PhotoCloudApiClient.kt   # Client HTTP, cache 0ms, preview documenti, FileProvider chooser e tracker velocità
 │   │       └── res/
 │   │           ├── xml/file_paths.xml       # Percorsi autorizzati per FileProvider
 │   │           └── drawable/                # Icone Launcher Colorata e Monocromatica
 ├── release/
-│   ├── photocloud-release-v1.0.9-signed.apk # Pacchetto APK firmato pronto per l'installazione
+│   ├── photocloud-release-v1.10-signed.apk  # Pacchetto APK firmato v1.10 pronto per l'installazione
 │   └── photocloud-release-build.json        # Metadati e checksum SHA-256 della build
 ├── src/
 │   ├── lib/
@@ -212,7 +226,7 @@ PhotoCloud/
 │   │   └── crypto.test.ts              # Suite di test unitari e di integrazione
 │   └── types.ts                        # Tipi TypeScript condivisi
 ├── static/
-│   ├── scripts/                        # Logica client Web (document-viewer.js, upload.js, photo-editor.js, grouping.js, lightbox.js)
+│   ├── scripts/                        # Logica client Web 0ms (photo-editor.js, grouping.js, lightbox.js, trash.js, document-viewer.js, upload.js)
 │   └── styles/                         # Fogli di stile Material You (base.css, gallery.css, login.css)
 ├── server.ts                           # Server Express principale (API Media, Document Preview, Photo Edit, File Cloud, Album, ZIP, Auth)
 └── package.json

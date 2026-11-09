@@ -13,7 +13,9 @@
 
     let currentFilename = '';
     let sourceImage = null;
+    let previewSourceCanvas = null;
     let isSaving = false;
+    const MAX_PREVIEW_DIMENSION = 1080;
 
     const editState = {
         brightness: 0,
@@ -231,8 +233,32 @@
         ctx.putImageData(imgData, 0, 0);
     }
 
-    function createTransformedOffscreenCanvas() {
-        const { width: rotW, height: rotH, srcW, srcH } = getRotatedDimensions();
+    function buildPreviewSourceCanvas(img) {
+        const srcW = img.naturalWidth || img.width || 800;
+        const srcH = img.naturalHeight || img.height || 600;
+        const maxSide = Math.max(srcW, srcH, 1);
+        const scale = maxSide > MAX_PREVIEW_DIMENSION ? MAX_PREVIEW_DIMENSION / maxSide : 1;
+        const prevW = Math.max(1, Math.round(srcW * scale));
+        const prevH = Math.max(1, Math.round(srcH * scale));
+        const c = document.createElement('canvas');
+        c.width = prevW;
+        c.height = prevH;
+        const cCtx = c.getContext('2d', { willReadFrequently: true });
+        if (cCtx) {
+            cCtx.drawImage(img, 0, 0, prevW, prevH);
+        }
+        return c;
+    }
+
+    function createTransformedOffscreenCanvas(usePreview = false) {
+        const baseImg = usePreview && previewSourceCanvas ? previewSourceCanvas : sourceImage;
+        if (!baseImg) return null;
+        const srcW = baseImg.naturalWidth || baseImg.width || 800;
+        const srcH = baseImg.naturalHeight || baseImg.height || 600;
+        const isRotated90 = editState.rotation === 90 || editState.rotation === 270;
+        const rotW = isRotated90 ? srcH : srcW;
+        const rotH = isRotated90 ? srcW : srcH;
+
         const offCanvas = document.createElement('canvas');
         offCanvas.width = rotW;
         offCanvas.height = rotH;
@@ -245,7 +271,7 @@
         const scaleX = editState.flipH ? -1 : 1;
         const scaleY = editState.flipV ? -1 : 1;
         offCtx.scale(scaleX, scaleY);
-        offCtx.drawImage(sourceImage, -srcW / 2, -srcH / 2, srcW, srcH);
+        offCtx.drawImage(baseImg, -srcW / 2, -srcH / 2, srcW, srcH);
         offCtx.restore();
         return offCanvas;
     }
@@ -254,26 +280,35 @@
         const canvas = document.getElementById('photo-editor-canvas');
         if (!canvas || !sourceImage) return;
 
-        const offCanvas = createTransformedOffscreenCanvas();
-        if (!offCanvas) return;
-
-        const rotW = offCanvas.width;
-        const rotH = offCanvas.height;
-        const crop = getCroppedPixelRect(rotW, rotH);
+        const basePreview = previewSourceCanvas || sourceImage;
+        const prevSrcW = basePreview.naturalWidth || basePreview.width || 800;
+        const prevSrcH = basePreview.naturalHeight || basePreview.height || 600;
+        const isRotated90 = editState.rotation === 90 || editState.rotation === 270;
+        const prevRotW = isRotated90 ? prevSrcH : prevSrcW;
+        const prevRotH = isRotated90 ? prevSrcW : prevSrcH;
 
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (!ctx) return;
 
         if (editState.showCropGrid) {
-            // Show the full transformed image on the canvas and position the draggable crop grid overlay on top
-            canvas.width = rotW;
-            canvas.height = rotH;
-            ctx.drawImage(offCanvas, 0, 0, rotW, rotH);
-            applyColorAdjustmentsToContext(ctx, rotW, rotH);
+            // Fast 0ms path: draw transformed previewSourceCanvas directly onto stage canvas without allocating offCanvas
+            if (canvas.width !== prevRotW) canvas.width = prevRotW;
+            if (canvas.height !== prevRotH) canvas.height = prevRotH;
+            ctx.clearRect(0, 0, prevRotW, prevRotH);
+            ctx.save();
+            ctx.translate(prevRotW / 2, prevRotH / 2);
+            ctx.rotate((editState.rotation * Math.PI) / 180);
+            ctx.scale(editState.flipH ? -1 : 1, editState.flipV ? -1 : 1);
+            ctx.drawImage(basePreview, -prevSrcW / 2, -prevSrcH / 2, prevSrcW, prevSrcH);
+            ctx.restore();
+            applyColorAdjustmentsToContext(ctx, prevRotW, prevRotH);
         } else {
-            // Show only the cropped region
-            canvas.width = crop.width;
-            canvas.height = crop.height;
+            // Show only the cropped region using lightweight preview canvas
+            const offCanvas = createTransformedOffscreenCanvas(true);
+            if (!offCanvas) return;
+            const crop = getCroppedPixelRect(offCanvas.width, offCanvas.height);
+            if (canvas.width !== crop.width) canvas.width = crop.width;
+            if (canvas.height !== crop.height) canvas.height = crop.height;
             ctx.drawImage(
                 offCanvas,
                 crop.x,
@@ -293,7 +328,7 @@
 
     function buildFinalCroppedExportCanvas() {
         if (!sourceImage) return null;
-        const offCanvas = createTransformedOffscreenCanvas();
+        const offCanvas = createTransformedOffscreenCanvas(false);
         if (!offCanvas) return null;
 
         const crop = getCroppedPixelRect(offCanvas.width, offCanvas.height);
@@ -349,6 +384,7 @@
         img.crossOrigin = 'anonymous';
         img.onload = function () {
             sourceImage = img;
+            previewSourceCanvas = buildPreviewSourceCanvas(img);
             // Immediately open with the draggable manual crop grid active on the loaded image
             editState.showCropGrid = true;
             editState.cropBox = { left: 0, top: 0, right: 1, bottom: 1 };
@@ -366,6 +402,7 @@
             modal.style.display = 'none';
         }
         sourceImage = null;
+        previewSourceCanvas = null;
         activeDrag = null;
     };
 

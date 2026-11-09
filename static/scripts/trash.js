@@ -26,10 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function removeCard(button) {
     const card = button.closest('.media-card-wrapper');
     if (card) {
-        card.style.transition = 'opacity 0.3s, transform 0.3s';
-        card.style.opacity = '0';
-        card.style.transform = 'scale(0.8)';
-        setTimeout(() => card.remove(), 300);
+        card.remove();
     }
 }
 
@@ -37,20 +34,22 @@ async function handleRestore(button) {
     const filename = button.dataset.filename;
     if (!confirm(`Vuoi davvero ripristinare "${filename}"?`)) return;
 
+    removeCard(button);
+    updateCount(-1);
+
     try {
         const response = await fetch(`/restore/${encodeURIComponent(filename)}`, {
             method: 'POST',
             headers: { 'Accept': 'application/json' },
         });
         const result = await response.json();
-        if (result.success) {
-            removeCard(button);
-            updateCount(-1);
-        } else {
+        if (!result.success) {
             alert(`Errore: ${result.error || 'Impossibile ripristinare il file.'}`);
+            window.location.reload();
         }
     } catch (error) {
         alert('Errore di comunicazione con il server.');
+        window.location.reload();
     }
 }
 
@@ -58,20 +57,22 @@ async function handlePermanentDelete(button) {
     const filename = button.dataset.filename;
     if (!confirm(`ATTENZIONE: Stai per eliminare definitivamente "${filename}". L'azione è irreversibile. Continuare?`)) return;
 
+    removeCard(button);
+    updateCount(-1);
+
     try {
         const response = await fetch(`/delete_permanent/${encodeURIComponent(filename)}`, {
             method: 'POST',
             headers: { 'Accept': 'application/json' },
         });
         const result = await response.json();
-        if (result.success) {
-            removeCard(button);
-            updateCount(-1);
-        } else {
+        if (!result.success) {
             alert(`Errore: ${result.error || 'Impossibile eliminare il file.'}`);
+            window.location.reload();
         }
     } catch (error) {
         alert('Errore di comunicazione con il server.');
+        window.location.reload();
     }
 }
 

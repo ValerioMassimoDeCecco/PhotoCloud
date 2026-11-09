@@ -411,6 +411,17 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
         
         const form = button.closest('form');
         const cardWrapper = form.closest('.media-card-wrapper');
+        const parentNode = cardWrapper ? cardWrapper.parentNode : null;
+        const nextSibling = cardWrapper ? cardWrapper.nextSibling : null;
+
+        if (cardWrapper) {
+            cardWrapper.remove();
+        }
+        const countElement = document.getElementById('media-count');
+        if (countElement) {
+            let currentCount = parseInt(countElement.textContent) || 0;
+            countElement.textContent = \`\${Math.max(0, currentCount - 1)} elementi\`;
+        }
         
         try {
             const response = await fetch(form.action, {
@@ -423,20 +434,16 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
             
             const result = await response.json();
 
-            if (result.success) {
-                cardWrapper.style.transition = 'opacity 0.22s ease, transform 0.22s ease';
-                cardWrapper.style.opacity = '0';
-                cardWrapper.style.transform = 'scale(0.85)';
-                setTimeout(() => {
-                    cardWrapper.remove();
-                    const countElement = document.getElementById('media-count');
-                    let currentCount = parseInt(countElement.textContent) || 0;
-                    countElement.textContent = \`\${Math.max(0, currentCount - 1)} elementi\`;
-                }, 220);
-            } else {
+            if (!result.success) {
+                if (parentNode && cardWrapper) {
+                    parentNode.insertBefore(cardWrapper, nextSibling);
+                }
                 alert(\`Errore: \${result.error || 'Impossibile spostare il file nel cestino'}\`);
             }
         } catch (error) {
+            if (parentNode && cardWrapper) {
+                parentNode.insertBefore(cardWrapper, nextSibling);
+            }
             alert('Errore di comunicazione con il server.');
             console.error('Errore durante lo spostamento nel cestino:', error);
         }
