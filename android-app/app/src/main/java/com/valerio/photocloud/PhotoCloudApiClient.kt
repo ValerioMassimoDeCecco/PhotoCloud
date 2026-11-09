@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -122,10 +123,7 @@ data class MediaItemModel(
     val album: String = ""
 ) {
     val isVideo: Boolean
-        get() {
-            val lower = filename.lowercase(Locale.ROOT)
-            return lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".webm") || lower.endsWith(".mkv")
-        }
+        get() = detectIsVideoFilename(filename)
 
     val extensionBadge: String
         get() {
@@ -154,6 +152,12 @@ data class MediaItemModel(
         fun detectIsMediaFilename(name: String): Boolean {
             val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
             return ext in MEDIA_EXTENSIONS
+        }
+
+        fun detectIsVideoFilename(name: String): Boolean {
+            val lower = name.lowercase(Locale.ROOT)
+            return lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".webm") ||
+                lower.endsWith(".mkv") || lower.endsWith(".avi")
         }
 
         fun detectFileCategory(name: String): String {
@@ -500,6 +504,72 @@ class PhotoCloudApiClient(
         }
     }
 
+    private fun scaleBitmapToMaxEdge(bmp: Bitmap, maxEdge: Int): Bitmap {
+        val maxDim = maxOf(bmp.width, bmp.height)
+        if (maxDim <= maxEdge || maxDim <= 0) return bmp
+        val scale = maxEdge.toFloat() / maxDim
+        val w = (bmp.width * scale).toInt().coerceAtLeast(1)
+        val h = (bmp.height * scale).toInt().coerceAtLeast(1)
+        return try {
+            val scaled = Bitmap.createScaledBitmap(bmp, w, h, true)
+            if (scaled != bmp) {
+                try {
+                    bmp.recycle()
+                } catch (_: Exception) {
+                }
+            }
+            scaled
+        } catch (_: Exception) {
+            bmp
+        }
+    }
+
+    private fun decodeVideoThumbnailFromFile(file: File, maxEdge: Int = 380): Bitmap? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.getFrameAtTime()
+            frame?.let { scaleBitmapToMaxEdge(it, maxEdge) }
+        } catch (_: Exception) {
+            null
+        } finally {
+            try {
+                retriever.release()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Fast path for videos: the server supports HTTP Range, so MediaMetadataRetriever
+     * only needs to stream the container metadata + an early frame instead of the whole file.
+     * Falls back to a full download in the caller when this fails (e.g. self-signed HTTPS).
+     */
+    private fun decodeVideoThumbnailFromUrl(url: String, maxEdge: Int = 380): Bitmap? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            val cookie = getCookieHeaderForCurrentServer()
+            val headers = if (cookie.isNotBlank()) mapOf("Cookie" to cookie) else emptyMap()
+            retriever.setDataSource(url, headers)
+            val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.getFrameAtTime()
+            frame?.let { scaleBitmapToMaxEdge(it, maxEdge) }
+        } catch (_: Exception) {
+            null
+        } finally {
+            try {
+                retriever.release()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun decodeMediaThumbnailFromFile(file: File, isVideo: Boolean, maxEdge: Int = 380): Bitmap? {
+        return if (isVideo) decodeVideoThumbnailFromFile(file, maxEdge)
+        else decodeThumbnailFromFile(file, maxEdge)
+    }
+
     /**
      * Pure O(1) RAM-only thumbnail lookup (0.001ms). NEVER performs disk I/O on the Main UI Thread.
      */
@@ -551,13 +621,22 @@ class PhotoCloudApiClient(
         if (!MediaItemModel.detectIsMediaFilename(filename)) return@withContext null
         val cacheKey = "$fromTrash:$filename"
         thumbnailCache.get(cacheKey)?.let { return@withContext it }
+        val isVideo = MediaItemModel.detectIsVideoFilename(filename)
 
         val diskFile = diskCacheFile(filename, fromTrash)
         if (diskFile.exists() && diskFile.length() > 0L) {
-            val thumbBmp = decodeThumbnailFromFile(diskFile, 380)
+            val thumbBmp = decodeMediaThumbnailFromFile(diskFile, isVideo, 380)
             if (thumbBmp != null) {
                 thumbnailCache.put(cacheKey, thumbBmp)
                 return@withContext thumbBmp
+            }
+        }
+
+        if (isVideo) {
+            // Fast path: stream only container metadata + an early frame via HTTP Range
+            decodeVideoThumbnailFromUrl(getMediaUrl(filename, fromTrash), 380)?.let { thumb ->
+                thumbnailCache.put(cacheKey, thumb)
+                return@withContext thumb
             }
         }
 
@@ -580,7 +659,8 @@ class PhotoCloudApiClient(
                 } catch (_: Exception) {
                 }
 
-                val thumbBmp = decodeThumbnailFromFile(diskFile, 380) ?: BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                val thumbBmp = decodeMediaThumbnailFromFile(diskFile, isVideo, 380)
+                    ?: if (!isVideo) BitmapFactory.decodeByteArray(bytes, 0, bytes.size) else null
                 if (thumbBmp != null) {
                     thumbnailCache.put(cacheKey, thumbBmp)
                 }
@@ -606,7 +686,7 @@ class PhotoCloudApiClient(
                 if (diskBmp != null) {
                     bitmapCache.put(cacheKey, diskBmp)
                     if (thumbnailCache.get(cacheKey) == null) {
-                        decodeThumbnailFromFile(diskFile, 380)?.let { thumbnailCache.put(cacheKey, it) }
+                        decodeMediaThumbnailFromFile(diskFile, MediaItemModel.detectIsVideoFilename(filename), 380)?.let { thumbnailCache.put(cacheKey, it) }
                     }
                     return@withContext diskBmp
                 }
@@ -640,7 +720,7 @@ class PhotoCloudApiClient(
                 if (bmp != null) {
                     bitmapCache.put(cacheKey, bmp)
                     if (thumbnailCache.get(cacheKey) == null) {
-                        decodeThumbnailFromFile(diskFile, 380)?.let { thumbnailCache.put(cacheKey, it) }
+                        decodeMediaThumbnailFromFile(diskFile, MediaItemModel.detectIsVideoFilename(filename), 380)?.let { thumbnailCache.put(cacheKey, it) }
                     }
                 }
                 bmp

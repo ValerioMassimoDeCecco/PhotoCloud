@@ -278,7 +278,7 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
   assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
   assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));
-  assert.ok(workflowYaml.includes('photocloud-release-v1.1.1-signed.apk'));
+  assert.ok(workflowYaml.includes('photocloud-release-v1.1.2-signed.apk'));
   assert.equal(workflowYaml.includes('rm -f photocloud-release-key.jks'), false);
 
   const keystorePath = path.resolve(process.cwd(), 'android-app/app/photocloud-release-key.jks');
@@ -341,6 +341,14 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(apiClientKt.includes('thumbnailCache'));
   assert.ok(apiClientKt.includes('getRamThumbnailBitmap'));
   assert.ok(apiClientKt.includes('loadThumbnailBitmap'));
+  assert.ok(apiClientKt.includes('MediaMetadataRetriever'));
+  assert.ok(apiClientKt.includes('decodeVideoThumbnailFromUrl'));
+  assert.ok(apiClientKt.includes('decodeVideoThumbnailFromFile'));
+  assert.ok(apiClientKt.includes('detectIsVideoFilename'));
+  assert.ok(mainActivityKt.includes('SelectionActionsPanel'));
+  assert.ok(mainActivityKt.includes('toggleGallerySelectionFromLongPress'));
+  assert.ok(mainActivityKt.includes('gridLongPressToggleAtMs'));
+  assert.ok(mainActivityKt.includes('Sposta in album…'));
   assert.ok(apiClientKt.includes('FileProvider.getUriForFile'));
   assert.ok(apiClientKt.includes('openFileWithExternalAppChooser'));
   assert.ok(apiClientKt.includes('downloadFileToCache'));

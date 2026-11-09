@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.1.1)
+# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.1.2)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -7,6 +7,26 @@
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
+
+---
+
+## ⚡ Novità Principali della Release `v1.1.2` (`versionCode 13`) — Fix APK: Anteprime Video, Long-Press Selezione e Pannello Opzioni
+
+### 1. Anteprime (Thumbnail) dei Video nella Galleria Android APK
+- **Prima**: i video nella griglia mostravano solo l'icona play generica — nessuna anteprima.
+- **Ora**: `MediaGridTile` carica il primo frame del video come miniatura tramite `MediaMetadataRetriever`:
+  - **Fast path via HTTP Range** (`decodeVideoThumbnailFromUrl`): il server PhotoCloud supporta `Range (206 Partial Content)`, quindi il retriever scarica solo i metadati del contenitore e un frame iniziale invece dell'intero file; la chiamata passa il cookie di sessione già autenticato.
+  - **Fallback su download completo in cache** (`decodeVideoThumbnailFromFile`) quando lo streaming del frame non è disponibile (es. HTTPS con certificato self-signed), con scala a `380px` e salvataggio nella `thumbnailCache` RAM.
+  - La miniatura video viene renderizzata con `ContentScale.Crop` + badge play sovrapposto (se `showVideoBadge`), esattamente come le foto.
+
+### 2. Selezione con Pressione Prolungata (Long-Press) di Nuovo Funzionante
+- **Bug**: il `pointerInput` della griglia (`detectDragGesturesAfterLongPress`) e l'`onLongClick` del tile eseguivano **due toggle opposti** per lo stesso gesto, annullandosi a vicenda — era impossibile selezionare qualunque media con la pressione prolungata.
+- **Fix**: nuovo toggle condiviso `toggleGallerySelectionFromLongPress` con **debounce a 400ms** (`gridLongPressToggleAtMs`): esattamente un toggle per long-press, da qualunque percorso arrivi (tile o griglia), mantenendo il **Drag-to-Select** con auto-scroll funzionante. Haptic feedback una sola volta per gesto.
+
+### 3. Pannello Opzioni per i File Scelti (`SelectionActionsPanel`)
+- **Tenendo premuto** su un media/file compaiono sopra la barra inferiore le **opzioni per i file scelti**: conteggio elementi selezionati, **Seleziona tutti / Deseleziona tutti** e chiusura della selezione.
+- Azioni disponibili: **Sposta in album…** (apre il gestore album: assegnare i file scelti a un album esistente, spostarli rimuovendoli dall'album corrente o crearne uno nuovo), **Scarica** (singolo o Archivio ZIP con indicatore di trasferimento), **Cestina** (con conferma opzionale).
+- Il pannello sostituisce la precedente barra di selezione slim, è disponibile sia nella **Galleria** sia in **File Cloud**, e funziona con le stesse operazioni ottimistiche della v1.1.1.
 
 ---
 
