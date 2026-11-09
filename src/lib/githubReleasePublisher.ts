@@ -38,8 +38,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.1.1';
-const APK_FILENAME = 'photocloud-release-v1.1.1-signed.apk';
+const DEFAULT_TAG = 'v1.1.2';
+const APK_FILENAME = 'photocloud-release-v1.1.2-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */

@@ -1629,6 +1629,23 @@ fun NativeVaultScreen(
         }
     }
 
+    // Long-press selection on the gallery grid is handled both by the grid-level
+    // pointerInput (drag-to-select) and by each tile's onLongClick: debounce the two
+    // paths so exactly one toggle happens per long-press gesture.
+    var gridLongPressToggleAtMs by remember { mutableLongStateOf(0L) }
+    val toggleGallerySelectionFromLongPress: (String) -> Unit = { fn ->
+        val now = System.currentTimeMillis()
+        if (now - gridLongPressToggleAtMs >= 400L) {
+            gridLongPressToggleAtMs = now
+            triggerHaptic(longPress = true)
+            selectedFilenames = if (selectedFilenames.contains(fn)) {
+                selectedFilenames - fn
+            } else {
+                selectedFilenames + fn
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Minimalist Material You Top Header with Top-Right Transfer Center Button
@@ -1995,17 +2012,11 @@ fun NativeVaultScreen(
                                             val hitFn = findMediaFilenameAtOffset(galleryGridState, startOffset)
                                             val idx = gallerySortedItems.indexOfFirst { it.filename == hitFn }
                                             if (idx >= 0 && hitFn != null) {
-                                                triggerHaptic(longPress = true)
+                                                toggleGallerySelectionFromLongPress(hitFn)
                                                 dragStartIndex = idx
                                                 dragLastIndex = idx
                                                 selectionSnapshotBeforeDrag = selectedFilenames
-                                                val shouldSelect = !selectedFilenames.contains(hitFn)
-                                                dragAddingSelection = shouldSelect
-                                                selectedFilenames = if (shouldSelect) {
-                                                    selectedFilenames + hitFn
-                                                } else {
-                                                    selectedFilenames - hitFn
-                                                }
+                                                dragAddingSelection = selectedFilenames.contains(hitFn)
                                             } else {
                                                 dragStartIndex = null
                                                 dragLastIndex = null
@@ -2103,12 +2114,9 @@ fun NativeVaultScreen(
                                         },
                                         onLongClick = {
                                             if (currentTab == VaultTab.GALLERY) {
-                                                triggerHaptic(longPress = true)
-                                                selectedFilenames = if (isSelected) {
-                                                    selectedFilenames - mediaItem.filename
-                                                } else {
-                                                    selectedFilenames + mediaItem.filename
-                                                }
+                                                // Debounced against the grid-level pointerInput so exactly
+                                                // one toggle happens per long-press gesture.
+                                                toggleGallerySelectionFromLongPress(mediaItem.filename)
                                             }
                                         },
                                         onRestore = null,
@@ -2344,95 +2352,65 @@ fun NativeVaultScreen(
                 enter = slideInVertically { it } + fadeIn(),
                 exit = slideOutVertically { it } + fadeOut()
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    tonalElevation = 8.dp,
-                    shadowElevation = 12.dp,
-                    modifier = Modifier.padding(bottom = 10.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        FilledTonalButton(
-                            onClick = { showAlbumDialog = true },
-                            shape = CircleShape,
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                        ) {
-                            Icon(Icons.Default.PhotoAlbum, contentDescription = null, modifier = Modifier.size(17.dp))
-                            Spacer(Modifier.width(5.dp))
-                            Text("Album")
-                        }
-
-                        FilledTonalButton(
-                            onClick = {
-                                val toDownload = selectedFilenames.toList()
-                                scope.launch {
-                                    if (toDownload.size == 1) {
-                                        val (_, msg) = apiClient.saveSingleMediaToDownloads(
-                                            filename = toDownload.first(),
-                                            fromTrash = false,
-                                            onTransferUpdate = { op -> upsertTransferOperation(op) }
-                                        )
-                                        onShowInfo(msg)
-                                    } else {
-                                        val (_, msg) = apiClient.downloadZipToDevice(
-                                            filenames = toDownload,
-                                            onTransferUpdate = { op -> upsertTransferOperation(op) }
-                                        )
-                                        onShowInfo(msg)
-                                    }
-                                    selectedFilenames = emptySet()
-                                }
-                            },
-                            shape = CircleShape,
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(17.dp))
-                            Spacer(Modifier.width(5.dp))
-                            Text("Scarica (${selectedFilenames.size})")
-                        }
-
-                        Button(
-                            onClick = {
-                                val toTrash = selectedFilenames.toList()
-                                if (custom.confirmBeforeTrash) {
-                                    pendingTrashConfirmFilenames = toTrash
-                                } else {
-                                    optimisticRemovedGallery = optimisticRemovedGallery + toTrash
-                                    selectedFilenames = emptySet()
-                                    scope.launch {
-                                        if (apiClient.moveBatchToTrash(toTrash)) {
-                                            onShowInfo("${toTrash.size} elementi spostati nel cestino")
-                                            onRefresh()
-                                        } else {
-                                            optimisticRemovedGallery = optimisticRemovedGallery - toTrash.toSet()
-                                        }
-                                    }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer
-                            ),
-                            shape = CircleShape,
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                        ) {
-                            Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(17.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Cestina")
-                        }
-
-                        IconButton(
-                            onClick = { selectedFilenames = emptySet() },
-                            modifier = Modifier.size(34.dp)
-                        ) {
-                            Icon(Icons.Default.Close, contentDescription = "Deseleziona")
-                        }
+                val selectableFilenames = remember(currentTab, gallerySortedItems, filesSortedItems) {
+                    if (currentTab == VaultTab.GALLERY) {
+                        gallerySortedItems.map { it.filename }.toSet()
+                    } else {
+                        filesSortedItems.map { it.filename }.toSet()
                     }
                 }
+                val allSelected = selectableFilenames.isNotEmpty() && selectableFilenames.all { selectedFilenames.contains(it) }
+                SelectionActionsPanel(
+                    selectedCount = selectedFilenames.size,
+                    allSelected = allSelected,
+                    onToggleSelectAll = {
+                        triggerHaptic()
+                        selectedFilenames = if (allSelected) emptySet() else selectableFilenames
+                    },
+                    onMoveToAlbum = {
+                        triggerHaptic()
+                        showAlbumDialog = true
+                    },
+                    onDownload = {
+                        val toDownload = selectedFilenames.toList()
+                        scope.launch {
+                            if (toDownload.size == 1) {
+                                val (_, msg) = apiClient.saveSingleMediaToDownloads(
+                                    filename = toDownload.first(),
+                                    fromTrash = false,
+                                    onTransferUpdate = { op -> upsertTransferOperation(op) }
+                                )
+                                onShowInfo(msg)
+                            } else {
+                                val (_, msg) = apiClient.downloadZipToDevice(
+                                    filenames = toDownload,
+                                    onTransferUpdate = { op -> upsertTransferOperation(op) }
+                                )
+                                onShowInfo(msg)
+                            }
+                            selectedFilenames = emptySet()
+                        }
+                    },
+                    onTrash = {
+                        val toTrash = selectedFilenames.toList()
+                        if (custom.confirmBeforeTrash) {
+                            pendingTrashConfirmFilenames = toTrash
+                        } else {
+                            optimisticRemovedGallery = optimisticRemovedGallery + toTrash
+                            selectedFilenames = emptySet()
+                            scope.launch {
+                                if (apiClient.moveBatchToTrash(toTrash)) {
+                                    onShowInfo("${toTrash.size} elementi spostati nel cestino")
+                                    onRefresh()
+                                } else {
+                                    optimisticRemovedGallery = optimisticRemovedGallery - toTrash.toSet()
+                                }
+                            }
+                        }
+                    },
+                    onClearSelection = { selectedFilenames = emptySet() },
+                    modifier = Modifier.padding(bottom = 10.dp)
+                )
             }
 
             val barHeight = if (custom.compactFloatingBar) 54.dp else 64.dp
@@ -3409,6 +3387,130 @@ fun NativeCloudFileManagerScreen(
     }
 }
 
+/**
+ * Options panel shown when one or more files/media are selected (typically right after a long-press).
+ * Offers batch actions for the chosen files: move them to another album, download them,
+ * move them to the trash, select/deselect everything.
+ */
+@Composable
+fun SelectionActionsPanel(
+    selectedCount: Int,
+    allSelected: Boolean,
+    onToggleSelectAll: () -> Unit,
+    onMoveToAlbum: () -> Unit,
+    onDownload: () -> Unit,
+    onTrash: () -> Unit,
+    onClearSelection: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(26.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+        tonalElevation = 8.dp,
+        shadowElevation = 12.dp,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Text(
+                            text = "$selectedCount",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (selectedCount == 1) "1 elemento selezionato" else "$selectedCount elementi selezionati",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "Scegli cosa fare con la selezione",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                TextButton(
+                    onClick = onToggleSelectAll,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(if (allSelected) "Deseleziona tutti" else "Seleziona tutti")
+                }
+                IconButton(
+                    onClick = onClearSelection,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "Deseleziona tutto")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+            ) {
+                FilledTonalButton(
+                    onClick = onMoveToAlbum,
+                    shape = CircleShape,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Icon(Icons.Default.PhotoAlbum, contentDescription = null, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Sposta in album…")
+                }
+
+                FilledTonalButton(
+                    onClick = onDownload,
+                    shape = CircleShape,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Scarica ($selectedCount)")
+                }
+
+                Button(
+                    onClick = onTrash,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    ),
+                    shape = CircleShape,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Cestina")
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun AlbumManagerDialog(
     albums: List<String>,
@@ -4121,13 +4223,13 @@ fun MediaGridTile(
 ) {
     var bitmap by remember(item.filename, fromTrash) {
         mutableStateOf(
-            if (item.isMedia && !item.isVideo) apiClient.getRamThumbnailBitmap(item.filename, fromTrash) else null
+            if (item.isMedia) apiClient.getRamThumbnailBitmap(item.filename, fromTrash) else null
         )
     }
     var loadFailed by remember(item.filename) { mutableStateOf(false) }
 
     LaunchedEffect(item.filename, fromTrash) {
-        if (item.isMedia && bitmap == null && !item.isVideo) {
+        if (item.isMedia && bitmap == null) {
             val loaded = apiClient.loadThumbnailBitmap(item.filename, fromTrash)
             if (loaded != null) {
                 bitmap = loaded
@@ -4172,6 +4274,27 @@ fun MediaGridTile(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
+                if (item.isVideo && showVideoBadge) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color.Black.copy(alpha = 0.48f),
+                            modifier = Modifier.size(42.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = "Video",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             } else if (!item.isMedia) {
                 Column(
                     modifier = Modifier
