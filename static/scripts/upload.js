@@ -2,12 +2,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileInput = document.getElementById('file-input');
     const uploadForm = document.getElementById('upload-form');
     const container = document.getElementById('upload-indicator-container');
-    if (!fileInput || !container || !uploadForm) return;
+    if (!container) return;
 
     const gem = document.getElementById('upload-gem');
     const progressArc = document.getElementById('upload-progress-arc');
     const icon = document.getElementById('upload-indicator-icon');
     const percentageText = document.getElementById('upload-indicator-percentage');
+    const activeCountBadge = document.getElementById('upload-active-count-badge');
     const speedBadge = document.getElementById('upload-speed-badge');
 
     const cardTitle = document.getElementById('upload-card-title');
@@ -15,10 +16,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const cardStatus = document.getElementById('upload-card-status');
     const closeButton = document.getElementById('upload-close-btn');
 
-    const radius = progressArc.r.baseVal.value;
+    const radius = progressArc && progressArc.r ? progressArc.r.baseVal.value : 16;
     const circumference = 2 * Math.PI * radius;
-    progressArc.style.strokeDasharray = `${circumference} ${circumference}`;
-    progressArc.style.strokeDashoffset = circumference;
+    if (progressArc) {
+        progressArc.style.strokeDasharray = `${circumference} ${circumference}`;
+        progressArc.style.strokeDashoffset = circumference;
+    }
+
+    // State for concurrent transfers
+    // Map<opId, { id, name, type, loadedBytes, totalBytes, speedBps, status: 'running'|'completed'|'failed'|'cancelled', cancelFn?: () => void }>
+    const operationsState = new Map();
+    let autoCloseTimeoutId = null;
 
     function formatBytes(bytes) {
         if (!bytes || bytes <= 0) return '0 B';
@@ -36,8 +44,78 @@ document.addEventListener('DOMContentLoaded', () => {
     function setProgress(percent) {
         const clamped = Math.max(0, Math.min(100, percent));
         const offset = circumference - (clamped / 100) * circumference;
-        progressArc.style.strokeDashoffset = offset;
-        percentageText.textContent = `${Math.round(clamped)}%`;
+        if (progressArc) progressArc.style.strokeDashoffset = offset;
+        if (percentageText) percentageText.textContent = `${Math.round(clamped)}%`;
+    }
+
+    function cancelPendingAutoClose() {
+        if (autoCloseTimeoutId) {
+            clearTimeout(autoCloseTimeoutId);
+            autoCloseTimeoutId = null;
+        }
+    }
+
+    function syncGlobalTransferIndicator() {
+        const allOps = Array.from(operationsState.values());
+        const runningOps = allOps.filter(op => op.status === 'running');
+        const runningCount = runningOps.length;
+
+        if (runningCount > 0) {
+            cancelPendingAutoClose();
+            // Show discreet top-right icon WITHOUT auto-expanding the floating card
+            container.classList.add('has-active-transfers');
+            gem.classList.add('is-uploading');
+            if (progressArc) progressArc.style.stroke = 'var(--primary)';
+
+            if (activeCountBadge) {
+                activeCountBadge.textContent = String(runningCount);
+                activeCountBadge.style.display = runningCount > 1 ? 'inline-flex' : 'none';
+            }
+
+            const totalBytes = runningOps.reduce((sum, op) => sum + Math.max(0, op.totalBytes || 0), 0);
+            const loadedBytes = runningOps.reduce((sum, op) => sum + Math.max(0, op.loadedBytes || 0), 0);
+            const totalSpeed = runningOps.reduce((sum, op) => sum + Math.max(0, op.speedBps || 0), 0);
+            const overallPct = totalBytes > 0 ? (loadedBytes / totalBytes) * 100 : 0;
+
+            setProgress(overallPct);
+
+            const hasUpload = runningOps.some(op => op.type === 'upload');
+            const hasDownload = runningOps.some(op => op.type === 'download');
+            if (icon) {
+                icon.textContent = hasUpload && hasDownload ? 'swap_vert' : (hasUpload ? 'upload' : 'download');
+            }
+
+            if (speedBadge) {
+                speedBadge.textContent = `${formatSpeed(totalSpeed)} • ${formatBytes(loadedBytes)} / ${formatBytes(totalBytes)}`;
+            }
+            if (cardTitle) {
+                cardTitle.textContent = runningCount === 1
+                    ? (runningOps[0].type === 'download' ? 'Scaricamento in corso...' : 'Caricamento in corso...')
+                    : `${runningCount} trasferimenti attivi`;
+            }
+            if (cardStatus) {
+                cardStatus.textContent = `${runningCount} in corso • ${Math.round(overallPct)}% (${formatSpeed(totalSpeed)})`;
+            }
+        } else {
+            // All active transfers have finished (completed, failed, or cancelled)
+            gem.classList.remove('is-uploading');
+            if (activeCountBadge) {
+                activeCountBadge.style.display = 'none';
+                activeCountBadge.textContent = '0';
+            }
+
+            // Schedule automatic closure of the transfer screen & hiding of the indicator
+            cancelPendingAutoClose();
+            autoCloseTimeoutId = setTimeout(() => {
+                const stillRunning = Array.from(operationsState.values()).some(op => op.status === 'running');
+                if (!stillRunning) {
+                    container.classList.remove('expanded');
+                    container.classList.remove('has-active-transfers');
+                    setProgress(0);
+                    if (icon) icon.textContent = 'swap_vert';
+                }
+            }, 600);
+        }
     }
 
     function toggleExpand(e) {
@@ -45,7 +123,6 @@ document.addEventListener('DOMContentLoaded', () => {
         container.classList.toggle('expanded');
     }
 
-    // Close floating menu when clicking outside
     document.addEventListener('click', (e) => {
         if (!container.contains(e.target)) {
             container.classList.remove('expanded');
@@ -53,119 +130,179 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function clearEmptyPlaceholder() {
+        if (!fileList) return;
         const emptyItem = fileList.querySelector('.transfer-empty-item');
         if (emptyItem) emptyItem.remove();
     }
 
-    // Expose global helper so selection.js ZIP downloads and direct file downloads appear in the top-right Transfer Center
-    window.registerTransferOperation = function ({ id, name, type, totalBytes }) {
+    // Expose global helper for inspection and testing
+    window.getTransferCenterState = function () {
+        const allOps = Array.from(operationsState.values());
+        const runningOps = allOps.filter(op => op.status === 'running');
+        return {
+            runningCount: runningOps.length,
+            totalTracked: allOps.length,
+            isExpanded: container.classList.contains('expanded'),
+            isIndicatorVisible: container.classList.contains('has-active-transfers')
+        };
+    };
+
+    // Expose global helper so ZIP downloads, direct downloads, photo editor saves, and batch uploads share the same Transfer Center
+    window.registerTransferOperation = function ({ id, name, type, totalBytes, onCancel }) {
         clearEmptyPlaceholder();
-        let li = fileList.querySelector(`[data-op-id="${id}"]`);
-        if (!li) {
+        const opId = id || `op_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+        const opRecord = {
+            id: opId,
+            name: name || 'File',
+            type: type === 'download' ? 'download' : 'upload',
+            loadedBytes: 0,
+            totalBytes: totalBytes || 0,
+            speedBps: 0,
+            status: 'running',
+            cancelFn: typeof onCancel === 'function' ? onCancel : null
+        };
+        operationsState.set(opId, opRecord);
+
+        let li = fileList ? fileList.querySelector(`[data-op-id="${CSS.escape(opId)}"]`) : null;
+        if (!li && fileList) {
             li = document.createElement('li');
             li.className = 'upload-file-item';
-            li.dataset.opId = id;
+            li.dataset.opId = opId;
             li.innerHTML = `
-                <span class="material-icons">${type === 'download' ? 'download' : 'upload'}</span>
+                <span class="material-icons">${opRecord.type === 'download' ? 'download' : 'upload'}</span>
                 <div class="file-info">
                     <span class="file-name"></span>
                     <span class="file-status">In avvio...</span>
                 </div>
+                <button type="button" class="btn icon transfer-cancel-btn" title="Annulla trasferimento" style="display: none; width: 28px; height: 28px;">
+                    <span class="material-icons" style="font-size: 16px;">close</span>
+                </button>
             `;
-            li.querySelector('.file-name').textContent = name;
+            li.querySelector('.file-name').textContent = opRecord.name;
+            const cancelBtn = li.querySelector('.transfer-cancel-btn');
+            if (cancelBtn && opRecord.cancelFn) {
+                cancelBtn.style.display = 'inline-flex';
+                cancelBtn.addEventListener('click', (ev) => {
+                    ev.stopPropagation();
+                    if (opRecord.status === 'running' && opRecord.cancelFn) {
+                        opRecord.cancelFn();
+                    }
+                });
+            }
             fileList.prepend(li);
         }
-        gem.classList.add('is-uploading');
-        icon.textContent = type === 'download' ? 'download' : 'upload';
-        container.classList.add('expanded');
+
+        // IMPORTANT: Do NOT auto-expand container! Only show the discreet active indicator.
+        syncGlobalTransferIndicator();
+
         return {
+            id: opId,
+            setCancelHandler(fn) {
+                opRecord.cancelFn = fn;
+                const cancelBtn = li ? li.querySelector('.transfer-cancel-btn') : null;
+                if (cancelBtn && typeof fn === 'function') {
+                    cancelBtn.style.display = 'inline-flex';
+                    cancelBtn.onclick = (ev) => {
+                        ev.stopPropagation();
+                        if (opRecord.status === 'running' && opRecord.cancelFn) {
+                            opRecord.cancelFn();
+                        }
+                    };
+                }
+            },
             update(loadedBytes, total, speedBps, statusLabel) {
-                const pct = total > 0 ? (loadedBytes / total) * 100 : 0;
-                setProgress(pct);
-                if (speedBadge) {
-                    speedBadge.textContent = `${formatSpeed(speedBps)} • ${formatBytes(loadedBytes)} / ${formatBytes(total)}`;
-                }
-                const st = li.querySelector('.file-status');
+                if (opRecord.status !== 'running') return;
+                opRecord.loadedBytes = Math.max(0, loadedBytes || 0);
+                opRecord.totalBytes = Math.max(opRecord.loadedBytes, total || opRecord.totalBytes || 0);
+                opRecord.speedBps = Math.max(0, speedBps || 0);
+
+                const pct = opRecord.totalBytes > 0 ? (opRecord.loadedBytes / opRecord.totalBytes) * 100 : 0;
+                const st = li ? li.querySelector('.file-status') : null;
                 if (st) {
-                    st.textContent = statusLabel || `${Math.round(pct)}% • ${formatBytes(loadedBytes)} / ${formatBytes(total)} (${formatSpeed(speedBps)})`;
+                    st.textContent = statusLabel || `${Math.round(pct)}% • ${formatBytes(opRecord.loadedBytes)} / ${formatBytes(opRecord.totalBytes)} (${formatSpeed(opRecord.speedBps)})`;
                 }
-                cardTitle.textContent = type === 'download' ? 'Scaricamento in corso...' : 'Caricamento in corso...';
+                syncGlobalTransferIndicator();
             },
             complete(finalBytes, elapsedSec) {
-                setProgress(100);
-                gem.classList.remove('is-uploading');
-                icon.textContent = 'swap_vert';
-                const avgSpeed = elapsedSec > 0 ? finalBytes / elapsedSec : finalBytes;
-                if (speedBadge) {
-                    speedBadge.textContent = `Completato • ${formatBytes(finalBytes)} (${formatSpeed(avgSpeed)})`;
-                }
-                const st = li.querySelector('.file-status');
+                const resolvedBytes = finalBytes !== undefined ? finalBytes : opRecord.totalBytes;
+                opRecord.loadedBytes = resolvedBytes;
+                opRecord.totalBytes = resolvedBytes;
+                opRecord.speedBps = elapsedSec > 0 ? resolvedBytes / elapsedSec : opRecord.speedBps;
+                opRecord.status = 'completed';
+
+                const cancelBtn = li ? li.querySelector('.transfer-cancel-btn') : null;
+                if (cancelBtn) cancelBtn.style.display = 'none';
+
+                const st = li ? li.querySelector('.file-status') : null;
                 if (st) {
-                    st.textContent = `Completato • ${formatBytes(finalBytes)}`;
+                    st.textContent = `Completato • ${formatBytes(resolvedBytes)}`;
                     st.classList.add('completed');
                 }
-                cardTitle.textContent = 'Operazione Completata';
-                cardStatus.textContent = `${name} completato (${formatBytes(finalBytes)})`;
+                if (cardTitle) cardTitle.textContent = 'Operazione Completata';
+                if (cardStatus) cardStatus.textContent = `${opRecord.name} completato (${formatBytes(resolvedBytes)})`;
+
+                syncGlobalTransferIndicator();
+            },
+            cancel(reason) {
+                opRecord.status = 'cancelled';
+                opRecord.speedBps = 0;
+
+                const cancelBtn = li ? li.querySelector('.transfer-cancel-btn') : null;
+                if (cancelBtn) cancelBtn.style.display = 'none';
+
+                const st = li ? li.querySelector('.file-status') : null;
+                if (st) {
+                    st.textContent = reason || 'Annullato';
+                    st.classList.add('error');
+                }
+                if (cardTitle) cardTitle.textContent = 'Trasferimento Annullato';
+                if (cardStatus) cardStatus.textContent = `${opRecord.name}: annullato`;
+
+                syncGlobalTransferIndicator();
             },
             fail(errMsg) {
-                gem.classList.remove('is-uploading');
-                icon.textContent = 'error';
-                const st = li.querySelector('.file-status');
+                opRecord.status = 'failed';
+                opRecord.speedBps = 0;
+
+                const cancelBtn = li ? li.querySelector('.transfer-cancel-btn') : null;
+                if (cancelBtn) cancelBtn.style.display = 'none';
+
+                const st = li ? li.querySelector('.file-status') : null;
                 if (st) {
                     st.textContent = `Errore: ${errMsg}`;
                     st.classList.add('error');
                 }
-                cardTitle.textContent = 'Errore Trasferimento';
-                cardStatus.textContent = errMsg;
+                if (cardTitle) cardTitle.textContent = 'Errore Trasferimento';
+                if (cardStatus) cardStatus.textContent = errMsg;
+
+                syncGlobalTransferIndicator();
             }
         };
     };
 
     window.trackDirectDownload = function (_event, filename, sizeBytes) {
         const tracker = window.registerTransferOperation({
-            id: `dl_${Date.now()}`,
+            id: `dl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             name: filename,
             type: 'download',
             totalBytes: sizeBytes || 0
         });
-        tracker.update(sizeBytes || 0, sizeBytes || 0, (sizeBytes || 1024 * 512) * 2, 'Download avviato...');
-        setTimeout(() => tracker.complete(sizeBytes || 0, 0.4), 600);
+        tracker.update(Math.round((sizeBytes || 0) * 0.5), sizeBytes || 0, (sizeBytes || 1024 * 512) * 2, 'Scaricamento avviato...');
+        setTimeout(() => tracker.complete(sizeBytes || 0, 0.35), 450);
     };
 
-    function showInitialUI(files, totalBytes) {
-        clearEmptyPlaceholder();
-        files.forEach(file => {
-            const li = document.createElement('li');
-            li.className = 'upload-file-item';
-            li.innerHTML = `
-                <span class="material-icons">upload_file</span>
-                <div class="file-info">
-                    <span class="file-name"></span>
-                    <span class="file-status">In coda • ${formatBytes(file.size)}</span>
-                </div>
-            `;
-            li.querySelector('.file-name').textContent = file.name;
-            li.dataset.filename = file.name;
-            fileList.prepend(li);
-        });
-
-        icon.textContent = 'upload';
-        gem.classList.add('is-uploading');
-        setProgress(0);
-        cardTitle.textContent = `Caricamento (${files.length} file)`;
-        if (speedBadge) {
-            speedBadge.textContent = `0 KB/s • 0 B / ${formatBytes(totalBytes)}`;
-        }
-        cardStatus.textContent = `Invio di ${files.length} file (${formatBytes(totalBytes)})...`;
-        progressArc.style.stroke = 'var(--primary)';
-        container.classList.add('expanded');
-    }
-
-    function uploadSingleBatch(formData, batchFiles, batchNum, totalBatches, previouslyLoadedBytes, grandTotalBytes) {
+    function uploadSingleBatch(formData, batchFiles, batchNum, totalBatches, previouslyLoadedBytes, grandTotalBytes, tracker) {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             const startTime = performance.now();
             xhr.open('POST', '/upload', true);
+
+            if (tracker && typeof tracker.setCancelHandler === 'function') {
+                tracker.setCancelHandler(() => {
+                    xhr.abort();
+                });
+            }
 
             xhr.upload.onprogress = (e) => {
                 if (e.lengthComputable) {
@@ -174,31 +311,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     const currentTotalLoaded = Math.min(grandTotalBytes, previouslyLoadedBytes + e.loaded);
                     const overallPct = grandTotalBytes > 0 ? (currentTotalLoaded / grandTotalBytes) * 100 : (e.loaded / e.total) * 100;
 
-                    setProgress(overallPct);
-                    if (speedBadge) {
-                        speedBadge.textContent = `${formatSpeed(speedBps)} • ${formatBytes(currentTotalLoaded)} / ${formatBytes(grandTotalBytes)}`;
-                    }
-                    cardStatus.textContent = `Pacchetto ${batchNum}/${totalBatches}: ${Math.round(overallPct)}% (${formatSpeed(speedBps)})`;
-
-                    batchFiles.forEach(file => {
-                        const fileItem = fileList.querySelector(`[data-filename="${CSS.escape(file.name)}"]`);
-                        if (fileItem) {
-                            fileItem.querySelector('.file-status').textContent = `In corso • ${formatBytes(file.size)} (${formatSpeed(speedBps)})`;
-                        }
-                    });
+                    tracker.update(
+                        currentTotalLoaded,
+                        grandTotalBytes,
+                        speedBps,
+                        totalBatches > 1
+                            ? `Pacchetto ${batchNum}/${totalBatches} • ${Math.round(overallPct)}% (${formatSpeed(speedBps)})`
+                            : `${Math.round(overallPct)}% • ${formatBytes(currentTotalLoaded)} / ${formatBytes(grandTotalBytes)} (${formatSpeed(speedBps)})`
+                    );
                 }
             };
 
             xhr.onload = () => {
                 if (xhr.status === 200) {
-                    batchFiles.forEach(file => {
-                        const fileItem = fileList.querySelector(`[data-filename="${CSS.escape(file.name)}"]`);
-                        if (fileItem) {
-                            const statusEl = fileItem.querySelector('.file-status');
-                            statusEl.textContent = `Completato • ${formatBytes(file.size)}`;
-                            statusEl.classList.add('completed');
-                        }
-                    });
                     resolve();
                 } else {
                     let errorMsg = `Errore server: ${xhr.status}`;
@@ -207,6 +332,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     } catch (_e) {}
                     reject(new Error(errorMsg));
                 }
+            };
+
+            xhr.onabort = () => {
+                const abortErr = new Error('Trasferimento annullato dall\'utente.');
+                abortErr.isCancelled = true;
+                reject(abortErr);
             };
 
             xhr.onerror = () => {
@@ -222,7 +353,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const allFiles = Array.from(files);
         const grandTotalBytes = allFiles.reduce((acc, f) => acc + (f.size || 0), 0);
-        showInitialUI(allFiles, grandTotalBytes);
+        const opTitle = allFiles.length === 1 ? allFiles[0].name : `Caricamento (${allFiles.length} file)`;
+
+        const tracker = window.registerTransferOperation({
+            id: `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            name: opTitle,
+            type: 'upload',
+            totalBytes: grandTotalBytes
+        });
 
         const batchSize = 25;
         let uploadedBytesSoFar = 0;
@@ -247,48 +385,39 @@ document.addEventListener('DOMContentLoaded', () => {
                 const batchNum = Math.floor(i / batchSize) + 1;
                 const totalBatches = Math.ceil(allFiles.length / batchSize);
 
-                cardTitle.textContent = `Caricamento ${batchNum}/${totalBatches}...`;
-
-                await uploadSingleBatch(formData, batch, batchNum, totalBatches, uploadedBytesSoFar, grandTotalBytes);
+                await uploadSingleBatch(formData, batch, batchNum, totalBatches, uploadedBytesSoFar, grandTotalBytes, tracker);
                 uploadedBytesSoFar += batchBytes;
-                setProgress(grandTotalBytes > 0 ? (uploadedBytesSoFar / grandTotalBytes) * 100 : 100);
             }
 
             const totalElapsedSec = Math.max(0.1, (performance.now() - startOverall) / 1000);
-            const avgSpeed = grandTotalBytes / totalElapsedSec;
+            tracker.complete(grandTotalBytes, totalElapsedSec);
 
-            gem.classList.remove('is-uploading');
-            icon.textContent = 'check_circle';
-            cardTitle.textContent = 'Caricamento Completato';
-            if (speedBadge) {
-                speedBadge.textContent = `${formatSpeed(avgSpeed)} • ${formatBytes(grandTotalBytes)} / ${formatBytes(grandTotalBytes)}`;
-            }
-            cardStatus.textContent = `Caricati ${allFiles.length} file (${formatBytes(grandTotalBytes)})!`;
-
+            // Reload only when no other transfers are running
             setTimeout(() => {
-                window.location.reload();
-            }, 1200);
-        } catch (error) {
-            gem.classList.remove('is-uploading');
-            icon.textContent = 'error';
-            progressArc.style.stroke = 'var(--error)';
-            cardTitle.textContent = 'Caricamento Fallito';
-            cardStatus.textContent = error.message;
-
-            fileList.querySelectorAll('.file-status').forEach(statusEl => {
-                if (!statusEl.classList.contains('completed')) {
-                    statusEl.textContent = 'Fallito';
-                    statusEl.classList.add('error');
+                const state = window.getTransferCenterState ? window.getTransferCenterState() : { runningCount: 0 };
+                if (state.runningCount === 0) {
+                    window.location.reload();
                 }
-            });
+            }, 750);
+        } catch (error) {
+            if (error && error.isCancelled) {
+                tracker.cancel('Annullato dall\'utente');
+            } else {
+                tracker.fail(error.message || 'Errore caricamento');
+            }
         } finally {
-            uploadForm.reset();
+            if (uploadForm) uploadForm.reset();
         }
     }
 
-    fileInput.addEventListener('change', (event) => {
-        uploadInBatches(event.target.files);
+    if (fileInput) {
+        fileInput.addEventListener('change', (event) => {
+            uploadInBatches(event.target.files);
+        });
+    }
+    if (gem) gem.addEventListener('click', toggleExpand);
+    if (closeButton) closeButton.addEventListener('click', (e) => {
+        if (e) e.stopPropagation();
+        container.classList.remove('expanded');
     });
-    gem.addEventListener('click', toggleExpand);
-    closeButton.addEventListener('click', toggleExpand);
 });

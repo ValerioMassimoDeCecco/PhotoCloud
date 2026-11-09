@@ -19,6 +19,10 @@ import {
   renderGalleryTemplate,
   renderTrashTemplate,
 } from './src/lib/templateRenderer';
+import {
+  resolveFileViewerSpec,
+  parseDocumentBuffer,
+} from './src/lib/documentEngine';
 import { FileCategory, MediaItem } from './src/types';
 
 const UPLOAD_FOLDER = path.resolve(process.cwd(), 'user_media');
@@ -96,11 +100,11 @@ function saveUser(username: string, keyHash: string): void {
   fs.appendFileSync(USERS_FILE, `${username}:${keyHash}\n`, 'utf-8');
 }
 
-const MEDIA_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic', '.mp4', '.mov', '.webm', '.mkv']);
-const DOC_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.rtf', '.txt', '.md', '.csv']);
+const MEDIA_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.heic', '.avif', '.mp4', '.mov', '.webm', '.mkv']);
+const DOC_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.rtf', '.txt', '.md', '.csv', '.tsv']);
 const ARCHIVE_EXTENSIONS = new Set(['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.apk', '.iso', '.dmg', '.exe']);
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus']);
-const CODE_EXTENSIONS = new Set(['.json', '.xml', '.yaml', '.yml', '.js', '.ts', '.py', '.kt', '.java', '.html', '.css', '.sql', '.sh']);
+const CODE_EXTENSIONS = new Set(['.json', '.xml', '.yaml', '.yml', '.js', '.ts', '.tsx', '.jsx', '.py', '.kt', '.java', '.c', '.cpp', '.h', '.html', '.htm', '.css', '.sql', '.sh', '.ini', '.conf', '.log']);
 
 export function classifyFileExtension(filename: string): { isMedia: boolean; category: FileCategory } {
   const ext = path.extname(filename).toLowerCase();
@@ -584,6 +588,43 @@ async function startServer() {
     }
   });
 
+  // --- DOCUMENT PREVIEW ENGINE API (PDF, Word, Excel, PowerPoint, Text/Code) ---
+  app.get('/api/document-preview/:filename', async (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+
+    const filename = String(req.params.filename);
+    const fromTrash = req.query.from_trash === 'true';
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const basePath = fromTrash ? path.join(userFolder, 'trash') : userFolder;
+
+    const safeBasePath = path.resolve(basePath);
+    const safeFilepath = path.resolve(safeBasePath, filename);
+
+    if (!safeFilepath.startsWith(safeBasePath + path.sep)) {
+      res.status(403).json({ error: 'Accesso non autorizzato.' });
+      return;
+    }
+
+    if (!fs.existsSync(safeFilepath)) {
+      res.status(404).json({ error: 'File non trovato.' });
+      return;
+    }
+
+    try {
+      const encrypted = fs.readFileSync(safeFilepath);
+      const decrypted = decryptFile(encrypted, sess.apiKey);
+      const preview = await parseDocumentBuffer(filename, decrypted, fromTrash);
+      res.json(preview);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      res.status(500).json({ error: `Errore durante l'apertura del documento: ${msg}` });
+    }
+  });
+
   // --- MEDIA & CLOUD FILE DECRYPTION ---
   app.get('/media/:filename', (req: Request, res: Response) => {
     const sess = getSession(req);
@@ -613,47 +654,38 @@ async function startServer() {
     try {
       const encrypted = fs.readFileSync(safeFilepath);
       const decrypted = decryptFile(encrypted, sess.apiKey);
-      const ext = path.extname(filename).replace('.', '').toLowerCase();
-      const mimeMap: Record<string, string> = {
-        jpg: 'image/jpeg',
-        jpeg: 'image/jpeg',
-        png: 'image/png',
-        gif: 'image/gif',
-        webp: 'image/webp',
-        bmp: 'image/bmp',
-        mp4: 'video/mp4',
-        mov: 'video/mp4',
-        webm: 'video/webm',
-        mkv: 'video/x-matroska',
-        pdf: 'application/pdf',
-        txt: 'text/plain; charset=utf-8',
-        md: 'text/markdown; charset=utf-8',
-        csv: 'text/csv; charset=utf-8',
-        json: 'application/json; charset=utf-8',
-        xml: 'application/xml; charset=utf-8',
-        zip: 'application/zip',
-        rar: 'application/vnd.rar',
-        '7z': 'application/x-7z-compressed',
-        apk: 'application/vnd.android.package-archive',
-        mp3: 'audio/mpeg',
-        wav: 'audio/wav',
-        ogg: 'audio/ogg',
-        flac: 'audio/flac',
-        doc: 'application/msword',
-        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        xls: 'application/vnd.ms-excel',
-        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        ppt: 'application/vnd.ms-powerpoint',
-        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      };
-      res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
-      res.setHeader('Content-Length', String(decrypted.length));
+      const spec = resolveFileViewerSpec(filename);
+      res.setHeader('Content-Type', spec.mimeType);
+      res.setHeader('Accept-Ranges', 'bytes');
+
       if (req.query.download === '1' || req.query.download === 'true') {
         res.setHeader(
           'Content-Disposition',
           `attachment; filename="${encodeURIComponent(filename)}"`
         );
+      } else {
+        res.setHeader(
+          'Content-Disposition',
+          `inline; filename="${encodeURIComponent(filename)}"`
+        );
       }
+
+      const rangeHeader = req.headers.range;
+      if (rangeHeader && rangeHeader.startsWith('bytes=')) {
+        const parts = rangeHeader.replace(/bytes=/, '').split('-');
+        const start = Math.max(0, parseInt(parts[0], 10) || 0);
+        const end = parts[1] ? Math.min(decrypted.length - 1, parseInt(parts[1], 10)) : decrypted.length - 1;
+        if (start <= end && start < decrypted.length) {
+          const chunk = decrypted.subarray(start, end + 1);
+          res.status(206);
+          res.setHeader('Content-Range', `bytes ${start}-${end}/${decrypted.length}`);
+          res.setHeader('Content-Length', String(chunk.length));
+          res.send(chunk);
+          return;
+        }
+      }
+
+      res.setHeader('Content-Length', String(decrypted.length));
       res.send(decrypted);
     } catch {
       res.status(500).send('Errore durante la decrittografia.');

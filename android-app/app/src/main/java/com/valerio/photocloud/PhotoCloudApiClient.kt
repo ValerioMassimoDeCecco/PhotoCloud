@@ -2,6 +2,7 @@ package com.valerio.photocloud
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -11,6 +12,7 @@ import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.LruCache
 import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -28,19 +30,66 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.zip.ZipInputStream
 import kotlin.math.max
 
 enum class TransferStatus {
     RUNNING,
     COMPLETED,
-    ERROR
+    ERROR,
+    CANCELLED
 }
+
+data class FileViewerSpecModel(
+    val extension: String,
+    val mimeType: String,
+    val viewerType: String,
+    val canOpenInApp: Boolean,
+    val label: String
+)
+
+data class DocBlockModel(
+    val type: String,
+    val text: String,
+    val level: Int = 1
+)
+
+data class DocSheetModel(
+    val name: String,
+    val headers: List<String>,
+    val rows: List<List<String>>,
+    val totalRows: Int
+)
+
+data class DocSlideModel(
+    val index: Int,
+    val title: String,
+    val bullets: List<String>,
+    val notes: String = ""
+)
+
+data class DocumentPreviewModel(
+    val filename: String,
+    val extension: String,
+    val mimeType: String,
+    val viewerType: String,
+    val canOpenInApp: Boolean,
+    val sizeBytes: Long,
+    val title: String,
+    val pageCount: Int = 1,
+    val blocks: List<DocBlockModel> = emptyList(),
+    val sheets: List<DocSheetModel> = emptyList(),
+    val slides: List<DocSlideModel> = emptyList(),
+    val rawText: String = "",
+    val warnings: List<String> = emptyList()
+)
 
 data class TransferOperation(
     val id: String,
@@ -1707,7 +1756,429 @@ class PhotoCloudApiClient(
         }
     }
 
+    /**
+     * Downloads a file into the app's private cache directory (preserving its extension)
+     * so it can be rendered by PdfRenderer, MediaPlayer, or shared via FileProvider content:// URI
+     * without polluting the user's public Downloads folder.
+     */
+    suspend fun downloadFileToCache(
+        filename: String,
+        fromTrash: Boolean = false,
+        onTransferUpdate: (TransferOperation) -> Unit = {}
+    ): File? = withContext(Dispatchers.IO) {
+        val targetFile = diskCacheFile(filename, fromTrash)
+        if (targetFile.exists() && targetFile.length() > 0L) {
+            return@withContext targetFile
+        }
+
+        val opId = "open_${System.currentTimeMillis()}_${filename.hashCode()}"
+        val startMs = System.currentTimeMillis()
+
+        onTransferUpdate(
+            TransferOperation(
+                id = opId,
+                title = filename,
+                isUpload = false,
+                transferredBytes = 0L,
+                totalBytes = 0L,
+                speedBytesPerSec = 0L,
+                status = TransferStatus.RUNNING,
+                detail = "Apertura file..."
+            )
+        )
+
+        try {
+            val request = Request.Builder()
+                .url(getMediaUrl(filename, fromTrash, download = false))
+                .get()
+                .build()
+
+            httpClient.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    onTransferUpdate(
+                        TransferOperation(
+                            id = opId,
+                            title = filename,
+                            isUpload = false,
+                            transferredBytes = 0L,
+                            totalBytes = 0L,
+                            speedBytesPerSec = 0L,
+                            status = TransferStatus.ERROR,
+                            detail = "Errore HTTP ${resp.code}"
+                        )
+                    )
+                    return@withContext null
+                }
+
+                val body = resp.body ?: return@withContext null
+                val totalLen = body.contentLength().coerceAtLeast(0L)
+                val buf = ByteArray(16 * 1024)
+                var downloaded = 0L
+                var lastEmit = 0L
+
+                FileOutputStream(targetFile).use { out ->
+                    body.byteStream().use { input ->
+                        var r: Int
+                        while (input.read(buf).also { r = it } != -1) {
+                            out.write(buf, 0, r)
+                            downloaded += r
+                            val now = System.currentTimeMillis()
+                            if (now - lastEmit >= 120L) {
+                                lastEmit = now
+                                val elapsed = max(0.15, (now - startMs) / 1000.0)
+                                val speed = (downloaded / elapsed).toLong()
+                                onTransferUpdate(
+                                    TransferOperation(
+                                        id = opId,
+                                        title = filename,
+                                        isUpload = false,
+                                        transferredBytes = downloaded,
+                                        totalBytes = if (totalLen > 0L) totalLen else downloaded,
+                                        speedBytesPerSec = speed,
+                                        status = TransferStatus.RUNNING,
+                                        detail = "Recupero documento..."
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    out.flush()
+                }
+
+                val elapsed = max(0.15, (System.currentTimeMillis() - startMs) / 1000.0)
+                val speed = (downloaded / elapsed).toLong()
+                onTransferUpdate(
+                    TransferOperation(
+                        id = opId,
+                        title = filename,
+                        isUpload = false,
+                        transferredBytes = downloaded,
+                        totalBytes = downloaded,
+                        speedBytesPerSec = speed,
+                        status = TransferStatus.COMPLETED,
+                        detail = "Pronto per la visualizzazione"
+                    )
+                )
+                targetFile
+            }
+        } catch (e: Exception) {
+            onTransferUpdate(
+                TransferOperation(
+                    id = opId,
+                    title = filename,
+                    isUpload = false,
+                    transferredBytes = 0L,
+                    totalBytes = 0L,
+                    speedBytesPerSec = 0L,
+                    status = TransferStatus.ERROR,
+                    detail = e.localizedMessage ?: "Errore"
+                )
+            )
+            null
+        }
+    }
+
+    /**
+     * Fetches the parsed document structure from /api/document-preview/:filename,
+     * falling back to local cache extraction if the server endpoint is unavailable.
+     */
+    suspend fun fetchDocumentPreview(
+        filename: String,
+        fromTrash: Boolean = false,
+        onTransferUpdate: (TransferOperation) -> Unit = {}
+    ): DocumentPreviewModel? = withContext(Dispatchers.IO) {
+        val spec = resolveViewerSpec(filename)
+        try {
+            val encoded = URLEncoder.encode(filename, "UTF-8").replace("+", "%20")
+            val trashParam = if (fromTrash) "?from_trash=true" else ""
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/document-preview/$encoded$trashParam")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val bodyStr = resp.body?.string() ?: ""
+                    if (bodyStr.trim().startsWith("{")) {
+                        val json = JSONObject(bodyStr)
+                        val blocks = mutableListOf<DocBlockModel>()
+                        val blocksArr = json.optJSONArray("blocks")
+                        if (blocksArr != null) {
+                            for (i in 0 until blocksArr.length()) {
+                                val b = blocksArr.optJSONObject(i) ?: continue
+                                blocks.add(
+                                    DocBlockModel(
+                                        type = b.optString("type", "paragraph"),
+                                        text = b.optString("text", ""),
+                                        level = b.optInt("level", 1)
+                                    )
+                                )
+                            }
+                        }
+
+                        val sheets = mutableListOf<DocSheetModel>()
+                        val sheetsArr = json.optJSONArray("sheets")
+                        if (sheetsArr != null) {
+                            for (i in 0 until sheetsArr.length()) {
+                                val s = sheetsArr.optJSONObject(i) ?: continue
+                                val headers = mutableListOf<String>()
+                                val hArr = s.optJSONArray("headers")
+                                if (hArr != null) {
+                                    for (j in 0 until hArr.length()) headers.add(hArr.optString(j, ""))
+                                }
+                                val rows = mutableListOf<List<String>>()
+                                val rArr = s.optJSONArray("rows")
+                                if (rArr != null) {
+                                    for (rIdx in 0 until rArr.length()) {
+                                        val rowJson = rArr.optJSONArray(rIdx) ?: continue
+                                        val rowCells = mutableListOf<String>()
+                                        for (cIdx in 0 until rowJson.length()) {
+                                            rowCells.add(rowJson.optString(cIdx, ""))
+                                        }
+                                        rows.add(rowCells)
+                                    }
+                                }
+                                sheets.add(
+                                    DocSheetModel(
+                                        name = s.optString("name", "Foglio ${i + 1}"),
+                                        headers = headers,
+                                        rows = rows,
+                                        totalRows = s.optInt("totalRows", rows.size)
+                                    )
+                                )
+                            }
+                        }
+
+                        val slides = mutableListOf<DocSlideModel>()
+                        val slidesArr = json.optJSONArray("slides")
+                        if (slidesArr != null) {
+                            for (i in 0 until slidesArr.length()) {
+                                val sl = slidesArr.optJSONObject(i) ?: continue
+                                val bullets = mutableListOf<String>()
+                                val bArr = sl.optJSONArray("bullets")
+                                if (bArr != null) {
+                                    for (j in 0 until bArr.length()) bullets.add(bArr.optString(j, ""))
+                                }
+                                slides.add(
+                                    DocSlideModel(
+                                        index = sl.optInt("index", i + 1),
+                                        title = sl.optString("title", "Slide ${i + 1}"),
+                                        bullets = bullets,
+                                        notes = sl.optString("notes", "")
+                                    )
+                                )
+                            }
+                        }
+
+                        val warnings = mutableListOf<String>()
+                        val warnArr = json.optJSONArray("warnings")
+                        if (warnArr != null) {
+                            for (i in 0 until warnArr.length()) warnings.add(warnArr.optString(i, ""))
+                        }
+
+                        return@withContext DocumentPreviewModel(
+                            filename = json.optString("filename", filename),
+                            extension = json.optString("extension", spec.extension),
+                            mimeType = json.optString("mimeType", spec.mimeType),
+                            viewerType = json.optString("viewerType", spec.viewerType),
+                            canOpenInApp = json.optBoolean("canOpenInApp", spec.canOpenInApp),
+                            sizeBytes = json.optLong("sizeBytes", 0L),
+                            title = json.optString("title", filename),
+                            pageCount = json.optInt("pageCount", 1).coerceAtLeast(1),
+                            blocks = blocks,
+                            sheets = sheets,
+                            slides = slides,
+                            rawText = json.optString("rawText", ""),
+                            warnings = warnings
+                        )
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        // Fallback: download file to cache and parse locally on Android
+        val cachedFile = downloadFileToCache(filename, fromTrash, onTransferUpdate) ?: return@withContext null
+        parseLocalFilePreview(cachedFile, filename, spec)
+    }
+
+    private fun parseLocalFilePreview(
+        file: File,
+        filename: String,
+        spec: FileViewerSpecModel
+    ): DocumentPreviewModel {
+        val bytes = try {
+            file.readBytes()
+        } catch (_: Exception) {
+            ByteArray(0)
+        }
+
+        val zipEntries = mutableMapOf<String, String>()
+        if (bytes.size >= 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4B.toByte()) {
+            try {
+                ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
+                    var entry = zis.nextEntry
+                    while (entry != null) {
+                        if (!entry.isDirectory && (entry.name.endsWith(".xml") || entry.name.endsWith(".rels"))) {
+                            val text = zis.readBytes().toString(Charsets.UTF_8)
+                            zipEntries[entry.name] = text
+                        }
+                        entry = zis.nextEntry
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        val blocks = mutableListOf<DocBlockModel>()
+        val sheets = mutableListOf<DocSheetModel>()
+        val slides = mutableListOf<DocSlideModel>()
+        var rawText = ""
+
+        when (spec.viewerType) {
+            "word" -> {
+                val docXml = zipEntries["word/document.xml"] ?: zipEntries["content.xml"] ?: ""
+                if (docXml.isNotBlank()) {
+                    val pMatches = Regex("<w:p[\\s>][\\s\\S]*?</w:p>|<text:p[^>]*>[\\s\\S]*?</text:p>").findAll(docXml)
+                    for (m in pMatches) {
+                        val stripped = m.value.replace(Regex("<[^>]+>"), "").trim()
+                        if (stripped.isNotBlank()) {
+                            blocks.add(DocBlockModel(type = "paragraph", text = stripped))
+                        }
+                    }
+                } else {
+                    val text = bytes.toString(Charsets.UTF_8)
+                    text.lines().map { it.trim() }.filter { it.isNotBlank() }.take(500).forEach {
+                        blocks.add(DocBlockModel(type = "paragraph", text = it))
+                    }
+                }
+            }
+            "spreadsheet" -> {
+                val text = bytes.toString(Charsets.UTF_8)
+                val lines = text.lines().filter { it.isNotBlank() }
+                val rows = lines.map { it.split(if (spec.extension == "tsv") "\t" else ",") }
+                val headers = rows.firstOrNull() ?: listOf("A")
+                val dataRows = if (rows.size > 1) rows.drop(1) else emptyList()
+                sheets.add(DocSheetModel("Foglio 1", headers, dataRows, dataRows.size))
+            }
+            "presentation" -> {
+                val slideKeys = zipEntries.keys.filter { it.startsWith("ppt/slides/slide") && it.endsWith(".xml") }.sorted()
+                slideKeys.forEachIndexed { idx, key ->
+                    val xml = zipEntries[key] ?: ""
+                    val texts = Regex("<a:t>([\\s\\S]*?)</a:t>").findAll(xml)
+                        .map { it.groupValues[1].trim() }
+                        .filter { it.isNotBlank() }
+                        .toList()
+                    slides.add(
+                        DocSlideModel(
+                            index = idx + 1,
+                            title = texts.firstOrNull() ?: "Slide ${idx + 1}",
+                            bullets = if (texts.size > 1) texts.drop(1) else emptyList()
+                        )
+                    )
+                }
+            }
+            "text" -> {
+                rawText = bytes.toString(Charsets.UTF_8)
+            }
+        }
+
+        return DocumentPreviewModel(
+            filename = filename,
+            extension = spec.extension,
+            mimeType = spec.mimeType,
+            viewerType = spec.viewerType,
+            canOpenInApp = spec.canOpenInApp,
+            sizeBytes = file.length(),
+            title = filename,
+            pageCount = 1,
+            blocks = blocks,
+            sheets = sheets,
+            slides = slides,
+            rawText = rawText
+        )
+    }
+
     companion object {
+        fun resolveViewerSpec(filename: String): FileViewerSpecModel {
+            val ext = filename.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            return when (ext) {
+                "pdf" -> FileViewerSpecModel(ext, "application/pdf", "pdf", true, "Documento PDF")
+                "doc" -> FileViewerSpecModel(ext, "application/msword", "word", true, "Documento Word")
+                "docx" -> FileViewerSpecModel(ext, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "word", true, "Documento Word")
+                "odt" -> FileViewerSpecModel(ext, "application/vnd.oasis.opendocument.text", "word", true, "Documento OpenDocument")
+                "rtf" -> FileViewerSpecModel(ext, "application/rtf", "word", true, "Documento RTF")
+                "xls" -> FileViewerSpecModel(ext, "application/vnd.ms-excel", "spreadsheet", true, "Foglio Excel")
+                "xlsx" -> FileViewerSpecModel(ext, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "spreadsheet", true, "Foglio Excel")
+                "ods" -> FileViewerSpecModel(ext, "application/vnd.oasis.opendocument.spreadsheet", "spreadsheet", true, "Foglio OpenDocument")
+                "csv" -> FileViewerSpecModel(ext, "text/csv", "spreadsheet", true, "Tabella CSV")
+                "tsv" -> FileViewerSpecModel(ext, "text/tab-separated-values", "spreadsheet", true, "Tabella TSV")
+                "ppt" -> FileViewerSpecModel(ext, "application/vnd.ms-powerpoint", "presentation", true, "Presentazione PowerPoint")
+                "pptx" -> FileViewerSpecModel(ext, "application/vnd.openxmlformats-officedocument.presentationml.presentation", "presentation", true, "Presentazione PowerPoint")
+                "odp" -> FileViewerSpecModel(ext, "application/vnd.oasis.opendocument.presentation", "presentation", true, "Presentazione OpenDocument")
+                "txt", "md", "markdown", "log", "ini", "conf", "json", "xml", "yaml", "yml", "html", "css", "js", "ts", "tsx", "jsx", "py", "kt", "java", "c", "cpp", "h", "sh", "sql" ->
+                    FileViewerSpecModel(ext, "text/plain", "text", true, "Documento di Testo / Codice")
+                "jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "heic", "heif", "avif" ->
+                    FileViewerSpecModel(ext, "image/*", "image", true, "Immagine")
+                "mp4", "mov", "webm", "mkv", "avi" ->
+                    FileViewerSpecModel(ext, "video/*", "video", true, "Video")
+                "mp3", "wav", "ogg", "m4a", "flac", "aac", "opus" ->
+                    FileViewerSpecModel(ext, "audio/*", "audio", true, "Audio")
+                "apk" -> FileViewerSpecModel(ext, "application/vnd.android.package-archive", "external", false, "Pacchetto Android APK")
+                "zip" -> FileViewerSpecModel(ext, "application/zip", "external", false, "Archivio ZIP")
+                "rar" -> FileViewerSpecModel(ext, "application/vnd.rar", "external", false, "Archivio RAR")
+                "7z" -> FileViewerSpecModel(ext, "application/x-7z-compressed", "external", false, "Archivio 7-Zip")
+                else -> {
+                    val sysMime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+                    FileViewerSpecModel(ext, sysMime, "external", false, if (ext.isNotBlank()) "File .${ext.uppercase(Locale.ROOT)}" else "File Binario")
+                }
+            }
+        }
+
+        /**
+         * Opens a cached file using Android's native application chooser via a secure FileProvider
+         * content:// URI (never file://). Returns true if the chooser/intent was launched, or false
+         * if no compatible activity is available on the device.
+         */
+        fun openFileWithExternalAppChooser(
+            context: Context,
+            file: File,
+            filename: String,
+            mimeType: String
+        ): Boolean {
+            return try {
+                val authority = "${context.packageName}.fileprovider"
+                val contentUri: Uri = FileProvider.getUriForFile(context, authority, file)
+                val resolvedMime = if (mimeType.isBlank() || mimeType == "*/*") {
+                    resolveViewerSpec(filename).mimeType
+                } else {
+                    mimeType
+                }
+
+                val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(contentUri, resolvedMime)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+
+                val pm = context.packageManager
+                val handlers = pm.queryIntentActivities(viewIntent, 0)
+                if (handlers.isEmpty()) {
+                    return false
+                }
+
+                val chooser = Intent.createChooser(viewIntent, "Apri $filename con...").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(chooser)
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
         fun formatBytesHuman(bytes: Long): String {
             if (bytes <= 0L) return "0 B"
             if (bytes < 1024L) return "$bytes B"

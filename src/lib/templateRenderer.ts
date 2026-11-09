@@ -76,7 +76,7 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
     .map((item, index) => {
       const file = escapeHtml(item.filename);
       const ext = file.split('.').pop()?.toLowerCase() || '';
-      const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic'].includes(ext);
+      const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic', 'avif'].includes(ext);
       const isVid = ['mp4', 'mov', 'webm', 'mkv'].includes(ext);
       const isMedia = item.isMedia !== undefined ? item.isMedia : isImg || isVid;
       const category = item.category || (isMedia ? 'media' : 'other');
@@ -132,9 +132,9 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                     }
                     ${
                       !isMedia
-                        ? `<a href="/media/${encodeURIComponent(item.filename)}?download=1" download="${file}" class="btn icon" title="Scarica file" onclick="window.trackDirectDownload && window.trackDirectDownload(event, this.closest('[data-filename]').dataset.filename, ${sizeBytes})">
-                            <span class="material-icons">download</span>
-                        </a>`
+                        ? `<button type="button" class="btn icon open-doc-btn" title="Apri documento o file" aria-label="Apri ${file}" onclick="window.openCloudFile && window.openCloudFile(this.closest('[data-filename]').dataset.filename, ${sizeBytes}, false, event)">
+                            <span class="material-icons">open_in_new</span>
+                        </button>`
                         : ''
                     }
                     <form action="/trash/${encodeURIComponent(item.filename)}" method="POST" class="delete-form" data-filename="${file}">
@@ -182,15 +182,16 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                     <span class="btn-text">Seleziona Tutto</span>
                 </button>
 
-                <!-- TOP-RIGHT FLOATING TRANSFER CENTER (UPLOADS & DOWNLOADS WITH LIVE SPEED & SIZE) -->
-                <div id="upload-indicator-container" class="upload-indicator-container top-right-transfer">
-                    <button type="button" id="upload-gem" class="upload-gem" title="Operazioni di Caricamento e Scaricamento">
-                        <svg class="upload-progress-ring" width="44" height="44">
-                            <circle class="progress-ring-track" cx="22" cy="22" r="18"></circle>
-                            <circle id="upload-progress-arc" class="progress-ring-arc" cx="22" cy="22" r="18"></circle>
+                <!-- TOP-RIGHT DISCREET TRANSFER INDICATOR & FLOATING TRANSFER CENTER -->
+                <div id="upload-indicator-container" class="upload-indicator-container top-right-transfer" aria-live="polite">
+                    <button type="button" id="upload-gem" class="upload-gem" title="Trasferimenti in corso (clicca per aprire i dettagli)" aria-label="Trasferimenti in corso">
+                        <svg class="upload-progress-ring" width="40" height="40">
+                            <circle class="progress-ring-track" cx="20" cy="20" r="16"></circle>
+                            <circle id="upload-progress-arc" class="progress-ring-arc" cx="20" cy="20" r="16"></circle>
                         </svg>
                         <span id="upload-indicator-icon" class="material-icons">swap_vert</span>
                         <span id="upload-indicator-percentage">0%</span>
+                        <span id="upload-active-count-badge" class="upload-active-count-badge" style="display: none;">0</span>
                     </button>
 
                     <div id="upload-details-card" class="upload-details-card">
@@ -366,13 +367,10 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                 const clickedCloudFile = event.target.closest('.clickable-cloud-file');
                 if (clickedCloudFile && !event.target.closest('.media-actions') && !event.target.matches('.media-checkbox')) {
                     const df = clickedCloudFile.getAttribute('data-filename');
-                    if (df) {
-                        const a = document.createElement('a');
-                        a.href = \`/media/\${encodeURIComponent(df)}?download=1\`;
-                        a.download = df;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
+                    const wrapper = clickedCloudFile.closest('.media-card-wrapper');
+                    const sz = Number(wrapper?.getAttribute('data-size') || 0);
+                    if (df && window.openCloudFile) {
+                        window.openCloudFile(df, sz, false, event);
                     }
                     return;
                 }

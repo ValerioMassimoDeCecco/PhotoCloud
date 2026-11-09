@@ -59,6 +59,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
@@ -88,8 +89,10 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoAlbum
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestoreFromTrash
@@ -100,6 +103,8 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -123,6 +128,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -134,7 +140,15 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import android.graphics.Bitmap
+import android.graphics.pdf.PdfRenderer
+import android.media.MediaPlayer
+import android.os.ParcelFileDescriptor
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1387,11 +1401,14 @@ fun NativeVaultScreen(
     var selectedFilenames by remember { mutableStateOf<Set<String>>(emptySet()) }
     var lightboxInitialIndex by remember { mutableStateOf<Int?>(null) }
     var editingPhotoFilename by remember { mutableStateOf<String?>(null) }
+    var viewingDocumentItem by remember { mutableStateOf<MediaItemModel?>(null) }
+    var externalFallbackItem by remember { mutableStateOf<MediaItemModel?>(null) }
     var pendingTrashConfirmFilenames by remember { mutableStateOf<List<String>?>(null) }
 
-    // Top-Right Transfer Operations State (Uploads & Downloads with live speed & size)
+    // Top-Right Discreet Transfer Operations State (Uploads & Downloads with live speed & size)
     var transferOperations by remember { mutableStateOf<List<TransferOperation>>(emptyList()) }
     var showTransferPopup by remember { mutableStateOf(false) }
+    var hadRunningTransfers by remember { mutableStateOf(false) }
 
     fun upsertTransferOperation(op: TransferOperation) {
         val current = transferOperations.toMutableList()
@@ -1414,6 +1431,19 @@ fun NativeVaultScreen(
         val totalB = activeRunningOps.sumOf { it.totalBytes }
         val doneB = activeRunningOps.sumOf { it.transferredBytes }
         if (totalB > 0L) (doneB.toFloat() / totalB.toFloat()).coerceIn(0f, 1f) else 0f
+    }
+
+    // Auto-close the transfer details screen when all active transfers complete
+    LaunchedEffect(activeRunningOps.size) {
+        if (activeRunningOps.isNotEmpty()) {
+            hadRunningTransfers = true
+        } else if (hadRunningTransfers) {
+            delay(600)
+            if (transferOperations.none { it.status == TransferStatus.RUNNING }) {
+                showTransferPopup = false
+                hadRunningTransfers = false
+            }
+        }
     }
 
     var isScanningDuplicates by remember { mutableStateOf(false) }
@@ -1452,12 +1482,53 @@ fun NativeVaultScreen(
         }
     }
     val isFromTrash = currentTab == VaultTab.TRASH
+    val localContext = LocalContext.current
+
+    fun openCloudItemWithExternalChooser(item: MediaItemModel) {
+        scope.launch {
+            val spec = PhotoCloudApiClient.resolveViewerSpec(item.filename)
+            val cachedFile = apiClient.downloadFileToCache(
+                filename = item.filename,
+                fromTrash = isFromTrash,
+                onTransferUpdate = { op -> upsertTransferOperation(op) }
+            )
+            if (cachedFile == null) {
+                onShowInfo("Impossibile recuperare il file dal server")
+                return@launch
+            }
+            val launched = PhotoCloudApiClient.openFileWithExternalAppChooser(
+                context = localContext,
+                file = cachedFile,
+                filename = item.filename,
+                mimeType = spec.mimeType
+            )
+            if (!launched) {
+                externalFallbackItem = item
+            }
+        }
+    }
+
+    fun handleOpenCloudItem(item: MediaItemModel) {
+        val spec = PhotoCloudApiClient.resolveViewerSpec(item.filename)
+        if (item.isMedia || spec.viewerType == "image" || spec.viewerType == "video") {
+            val globalIndex = activeItems.indexOfFirst { it.filename == item.filename }
+            if (globalIndex >= 0) {
+                lightboxInitialIndex = globalIndex
+                return
+            }
+        }
+        if (spec.canOpenInApp) {
+            viewingDocumentItem = item
+        } else {
+            openCloudItemWithExternalChooser(item)
+        }
+    }
 
     val uploadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
-            showTransferPopup = true
+            // Do NOT auto-open showTransferPopup; discreet icon appears automatically
             val targetAlb = selectedAlbumFilter ?: ""
             scope.launch {
                 val (ok, msg) = apiClient.uploadMediaUris(
@@ -1498,9 +1569,10 @@ fun NativeVaultScreen(
     }
 
     BackHandler(
-        enabled = editingPhotoFilename != null || showTransferPopup || lightboxInitialIndex != null || selectedFilenames.isNotEmpty() || currentTab != VaultTab.GALLERY
+        enabled = viewingDocumentItem != null || editingPhotoFilename != null || showTransferPopup || lightboxInitialIndex != null || selectedFilenames.isNotEmpty() || currentTab != VaultTab.GALLERY
     ) {
         when {
+            viewingDocumentItem != null -> viewingDocumentItem = null
             editingPhotoFilename != null -> editingPhotoFilename = null
             showTransferPopup -> showTransferPopup = false
             lightboxInitialIndex != null -> lightboxInitialIndex = null
@@ -1672,64 +1744,73 @@ fun NativeVaultScreen(
                             }
                         }
 
-                        // TOP-RIGHT UPLOAD/DOWNLOAD TRANSFER CENTER BUTTON
-                        Surface(
-                            onClick = {
-                                triggerHaptic()
-                                showTransferPopup = !showTransferPopup
-                            },
-                            shape = CircleShape,
-                            color = if (activeRunningOps.isNotEmpty() || showTransferPopup) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerHigh
-                            },
-                            modifier = Modifier.height(38.dp)
+                        // DISCREET ACTIVE-TRANSFER INDICATOR (Visible only while transfers are active or popup is open)
+                        AnimatedVisibility(
+                            visible = activeRunningOps.isNotEmpty() || showTransferPopup,
+                            enter = fadeIn(),
+                            exit = fadeOut()
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.padding(horizontal = 10.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center, modifier = Modifier.size(24.dp)) {
-                                    if (activeRunningOps.isNotEmpty()) {
-                                        CircularProgressIndicator(
-                                            progress = { overallProgressFraction.coerceIn(0.08f, 1f) },
-                                            modifier = Modifier.size(24.dp),
-                                            strokeWidth = 2.5.dp,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
+                            Box(contentAlignment = Alignment.TopEnd) {
+                                Surface(
+                                    onClick = {
+                                        triggerHaptic()
+                                        showTransferPopup = !showTransferPopup
+                                    },
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    modifier = Modifier.height(38.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier.padding(horizontal = 10.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(24.dp)) {
+                                            if (activeRunningOps.isNotEmpty()) {
+                                                CircularProgressIndicator(
+                                                    progress = { overallProgressFraction.coerceIn(0.08f, 1f) },
+                                                    modifier = Modifier.size(24.dp),
+                                                    strokeWidth = 2.5.dp,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                            Icon(
+                                                imageVector = when {
+                                                    activeRunningOps.any { it.isUpload } -> Icons.Default.CloudUpload
+                                                    activeRunningOps.isNotEmpty() -> Icons.Default.CloudDownload
+                                                    else -> Icons.Default.SwapVert
+                                                },
+                                                contentDescription = "Trasferimenti in corso",
+                                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+
+                                        if (activeRunningOps.isNotEmpty()) {
+                                            Text(
+                                                text = PhotoCloudApiClient.formatSpeedHuman(totalLiveSpeed),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                        }
                                     }
-                                    Icon(
-                                        imageVector = when {
-                                            activeRunningOps.any { it.isUpload } -> Icons.Default.CloudUpload
-                                            activeRunningOps.isNotEmpty() -> Icons.Default.CloudDownload
-                                            else -> Icons.Default.SwapVert
-                                        },
-                                        contentDescription = "Centro Trasferimenti",
-                                        tint = if (activeRunningOps.isNotEmpty() || showTransferPopup) {
-                                            MaterialTheme.colorScheme.onPrimaryContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                        },
-                                        modifier = Modifier.size(16.dp)
-                                    )
                                 }
 
-                                if (activeRunningOps.isNotEmpty()) {
-                                    Text(
-                                        text = PhotoCloudApiClient.formatSpeedHuman(totalLiveSpeed),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                                    )
-                                } else if (transferOperations.isNotEmpty()) {
-                                    Text(
-                                        text = "${transferOperations.size}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                if (activeRunningOps.size > 1) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.offset(x = 4.dp, y = (-4).dp)
+                                    ) {
+                                        Text(
+                                            text = "${activeRunningOps.size}",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = MaterialTheme.colorScheme.onPrimary,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1854,8 +1935,13 @@ fun NativeVaultScreen(
                                 selectedFilenames + fn
                             }
                         },
+                        onOpenFile = { item ->
+                            handleOpenCloudItem(item)
+                        },
+                        onOpenWithExternalApp = { item ->
+                            openCloudItemWithExternalChooser(item)
+                        },
                         onDownloadFile = { item ->
-                            showTransferPopup = true
                             scope.launch {
                                 val (_, msg) = apiClient.saveSingleMediaToDownloads(
                                     filename = item.filename,
@@ -2027,15 +2113,7 @@ fun NativeVaultScreen(
                                                     lightboxInitialIndex = globalIndex
                                                 }
                                             } else {
-                                                showTransferPopup = true
-                                                scope.launch {
-                                                    val (_, msg) = apiClient.saveSingleMediaToDownloads(
-                                                        filename = mediaItem.filename,
-                                                        fromTrash = isFromTrash,
-                                                        onTransferUpdate = { op -> upsertTransferOperation(op) }
-                                                    )
-                                                    onShowInfo(msg)
-                                                }
+                                                handleOpenCloudItem(mediaItem)
                                             }
                                         },
                                         onLongClick = {
@@ -2139,7 +2217,6 @@ fun NativeVaultScreen(
                         FilledTonalButton(
                             onClick = {
                                 val toDownload = selectedFilenames.toList()
-                                showTransferPopup = true
                                 scope.launch {
                                     if (toDownload.size == 1) {
                                         val (_, msg) = apiClient.saveSingleMediaToDownloads(
@@ -2426,7 +2503,6 @@ fun NativeVaultScreen(
                     }
                 },
                 onDownload = { filename ->
-                    showTransferPopup = true
                     scope.launch {
                         val (_, msg) = apiClient.saveSingleMediaToDownloads(
                             filename = filename,
@@ -2451,8 +2527,70 @@ fun NativeVaultScreen(
                     onRefresh()
                 },
                 onTransferUpdate = { op ->
-                    showTransferPopup = true
                     upsertTransferOperation(op)
+                }
+            )
+        }
+
+        val docTargetItem = viewingDocumentItem
+        if (docTargetItem != null) {
+            NativeDocumentViewerModal(
+                apiClient = apiClient,
+                item = docTargetItem,
+                fromTrash = isFromTrash,
+                onClose = { viewingDocumentItem = null },
+                onOpenWithExternalApp = {
+                    openCloudItemWithExternalChooser(docTargetItem)
+                },
+                onDownloadToDevice = {
+                    scope.launch {
+                        val (_, msg) = apiClient.saveSingleMediaToDownloads(
+                            filename = docTargetItem.filename,
+                            fromTrash = isFromTrash,
+                            onTransferUpdate = { op -> upsertTransferOperation(op) }
+                        )
+                        onShowInfo(msg)
+                    }
+                },
+                onTransferUpdate = { op -> upsertTransferOperation(op) }
+            )
+        }
+
+        val fallbackItem = externalFallbackItem
+        if (fallbackItem != null) {
+            AlertDialog(
+                onDismissRequest = { externalFallbackItem = null },
+                shape = RoundedCornerShape(28.dp),
+                title = { Text("Nessuna app compatibile trovata", fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(
+                        "Sul dispositivo non risultano installate applicazioni compatibili per aprire direttamente \"${fallbackItem.filename}\". Vuoi scaricare manualmente il file nella cartella Download?"
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val target = fallbackItem
+                            externalFallbackItem = null
+                            scope.launch {
+                                val (_, msg) = apiClient.saveSingleMediaToDownloads(
+                                    filename = target.filename,
+                                    fromTrash = isFromTrash,
+                                    onTransferUpdate = { op -> upsertTransferOperation(op) }
+                                )
+                                onShowInfo(msg)
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Scarica in Download")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { externalFallbackItem = null }) {
+                        Text("Annulla")
+                    }
                 }
             )
         }
@@ -2717,12 +2855,14 @@ fun TransferOperationsFloatingCard(
                                             imageVector = when (op.status) {
                                                 TransferStatus.COMPLETED -> Icons.Default.CheckCircle
                                                 TransferStatus.ERROR -> Icons.Default.ErrorOutline
+                                                TransferStatus.CANCELLED -> Icons.Default.Close
                                                 TransferStatus.RUNNING -> if (op.isUpload) Icons.Default.CloudUpload else Icons.Default.CloudDownload
                                             },
                                             contentDescription = null,
                                             tint = when (op.status) {
                                                 TransferStatus.COMPLETED -> MaterialTheme.colorScheme.primary
                                                 TransferStatus.ERROR -> MaterialTheme.colorScheme.error
+                                                TransferStatus.CANCELLED -> MaterialTheme.colorScheme.onSurfaceVariant
                                                 TransferStatus.RUNNING -> MaterialTheme.colorScheme.tertiary
                                             },
                                             modifier = Modifier.size(18.dp)
@@ -2819,6 +2959,8 @@ fun NativeCloudFileManagerScreen(
     selectedFilenames: Set<String>,
     albumsList: List<String>,
     onToggleSelect: (String) -> Unit,
+    onOpenFile: (MediaItemModel) -> Unit,
+    onOpenWithExternalApp: (MediaItemModel) -> Unit,
     onDownloadFile: (MediaItemModel) -> Unit,
     onUploadFilesClick: () -> Unit,
     onOpenAlbumManager: () -> Unit
@@ -2982,7 +3124,7 @@ fun NativeCloudFileManagerScreen(
                                         if (selectedFilenames.isNotEmpty()) {
                                             onToggleSelect(fileItem.filename)
                                         } else {
-                                            onDownloadFile(fileItem)
+                                            onOpenFile(fileItem)
                                         }
                                     },
                                     onLongClick = {
@@ -3075,6 +3217,13 @@ fun NativeCloudFileManagerScreen(
                                 }
 
                                 Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(onClick = { onOpenWithExternalApp(fileItem) }) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                            contentDescription = "Apri con un'altra app",
+                                            tint = MaterialTheme.colorScheme.secondary
+                                        )
+                                    }
                                     IconButton(onClick = { onDownloadFile(fileItem) }) {
                                         Icon(
                                             imageVector = Icons.Default.Download,
@@ -5097,5 +5246,825 @@ private fun EditorSliderControl(
         )
     }
 }
+
+/**
+ * Integrated Document & Media Viewer Engine for Android (PDF with PdfRenderer zoom/scroll/page nav,
+ * Word/ODT/RTF formatted paper reader, Excel/CSV multi-sheet table viewer, PowerPoint slide deck,
+ * Text/Code viewer, and Audio player, plus FileProvider "Apri con..." external chooser).
+ */
+@Composable
+fun NativeDocumentViewerModal(
+    apiClient: PhotoCloudApiClient,
+    item: MediaItemModel,
+    fromTrash: Boolean,
+    onClose: () -> Unit,
+    onOpenWithExternalApp: () -> Unit,
+    onDownloadToDevice: () -> Unit,
+    onTransferUpdate: (TransferOperation) -> Unit
+) {
+    val spec = remember(item.filename) { PhotoCloudApiClient.resolveViewerSpec(item.filename) }
+    var isLoading by remember(item.filename) { mutableStateOf(true) }
+    var errorMessage by remember(item.filename) { mutableStateOf<String?>(null) }
+    var previewModel by remember(item.filename) { mutableStateOf<DocumentPreviewModel?>(null) }
+    var cachedFile by remember(item.filename) { mutableStateOf<File?>(null) }
+
+    LaunchedEffect(item.filename, fromTrash) {
+        isLoading = true
+        errorMessage = null
+        try {
+            if (spec.viewerType == "pdf" || spec.viewerType == "audio") {
+                val file = apiClient.downloadFileToCache(
+                    filename = item.filename,
+                    fromTrash = fromTrash,
+                    onTransferUpdate = onTransferUpdate
+                )
+                if (file == null || !file.exists()) {
+                    errorMessage = "Impossibile caricare il file per la visualizzazione."
+                } else {
+                    cachedFile = file
+                }
+            } else {
+                val model = apiClient.fetchDocumentPreview(
+                    filename = item.filename,
+                    fromTrash = fromTrash,
+                    onTransferUpdate = onTransferUpdate
+                )
+                if (model == null) {
+                    errorMessage = "Impossibile analizzare il documento selezionato."
+                } else {
+                    previewModel = model
+                }
+            }
+        } catch (e: Exception) {
+            errorMessage = e.localizedMessage ?: "Errore apertura documento"
+        } finally {
+            isLoading = false
+        }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
+            // Top Header
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                tonalElevation = 4.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        IconButton(onClick = onClose) {
+                            Icon(Icons.Default.Close, contentDescription = "Chiudi")
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.filename,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "${spec.label} • ${if (item.size > 0L) PhotoCloudApiClient.formatBytesHuman(item.size) else spec.extension.uppercase(Locale.ROOT)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = onOpenWithExternalApp,
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text("Apri con...", style = MaterialTheme.typography.labelMedium)
+                        }
+                        IconButton(onClick = onDownloadToDevice) {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = "Salva in Download",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Main Stage
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                when {
+                    isLoading -> {
+                        Column(
+                            modifier = Modifier.align(Alignment.Center),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            CircularProgressIndicator()
+                            Text(
+                                text = "Decrittazione e apertura documento...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    errorMessage != null -> {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(28.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ErrorOutline,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Text(
+                                text = errorMessage ?: "Impossibile visualizzare il file",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                OutlinedButton(onClick = onOpenWithExternalApp) {
+                                    Text("Apri con app esterna")
+                                }
+                                Button(onClick = onDownloadToDevice) {
+                                    Text("Scarica file")
+                                }
+                            }
+                        }
+                    }
+                    spec.viewerType == "pdf" && cachedFile != null -> {
+                        NativePdfRendererView(
+                            pdfFile = cachedFile!!,
+                            onOpenExternal = onOpenWithExternalApp
+                        )
+                    }
+                    spec.viewerType == "audio" && cachedFile != null -> {
+                        NativeAudioPlayerView(
+                            audioFile = cachedFile!!,
+                            filename = item.filename
+                        )
+                    }
+                    spec.viewerType == "word" && previewModel != null -> {
+                        NativeWordDocumentView(model = previewModel!!)
+                    }
+                    spec.viewerType == "spreadsheet" && previewModel != null -> {
+                        NativeSpreadsheetDocumentView(model = previewModel!!)
+                    }
+                    spec.viewerType == "presentation" && previewModel != null -> {
+                        NativePresentationDocumentView(model = previewModel!!)
+                    }
+                    previewModel != null -> {
+                        NativeTextCodeDocumentView(model = previewModel!!)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NativePdfRendererView(
+    pdfFile: File,
+    onOpenExternal: () -> Unit
+) {
+    var pageCount by remember(pdfFile) { mutableStateOf(0) }
+    var currentPage by remember(pdfFile) { mutableStateOf(0) }
+    var zoomScale by remember { mutableStateOf(1f) }
+    var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var renderError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(pdfFile, currentPage, zoomScale) {
+        withContext(Dispatchers.IO) {
+            try {
+                ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY)?.use { pfd ->
+                    PdfRenderer(pfd).use { renderer ->
+                        val count = renderer.pageCount.coerceAtLeast(1)
+                        pageCount = count
+                        val safePageIdx = currentPage.coerceIn(0, count - 1)
+                        renderer.openPage(safePageIdx).use { page ->
+                            val densityFactor = (2.0f * zoomScale).coerceIn(1.5f, 4.0f)
+                            val bmpW = (page.width * densityFactor).toInt().coerceIn(400, 2800)
+                            val bmpH = (page.height * densityFactor).toInt().coerceIn(400, 3800)
+                            val bmp = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888)
+                            bmp.eraseColor(android.graphics.Color.WHITE)
+                            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            pageBitmap = bmp
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                renderError = e.localizedMessage ?: "Impossibile decodificare il PDF"
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // PDF Toolbar (Page Navigation + Zoom Controls)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilledTonalButton(
+                        onClick = { if (currentPage > 0) currentPage-- },
+                        enabled = currentPage > 0,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text("◀ Prec")
+                    }
+                    Text(
+                        text = "Pag. ${currentPage + 1} / ${pageCount.coerceAtLeast(1)}",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    FilledTonalButton(
+                        onClick = { if (currentPage < pageCount - 1) currentPage++ },
+                        enabled = currentPage < pageCount - 1,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text("Succ ▶")
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    IconButton(
+                        onClick = { zoomScale = (zoomScale - 0.25f).coerceAtLeast(0.75f) },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Default.ZoomOut, contentDescription = "Zoom -")
+                    }
+                    Text(
+                        text = "${(zoomScale * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(
+                        onClick = { zoomScale = (zoomScale + 0.25f).coerceAtMost(3.0f) },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Default.ZoomIn, contentDescription = "Zoom +")
+                    }
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF14161D))
+                .verticalScroll(rememberScrollState())
+                .horizontalScroll(rememberScrollState())
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (renderError != null) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = renderError ?: "Errore PDF",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(onClick = onOpenExternal) {
+                        Text("Apri con lettore PDF esterno")
+                    }
+                }
+            } else {
+                val bmp = pageBitmap
+                if (bmp != null) {
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = "Pagina PDF ${currentPage + 1}",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .width((360 * zoomScale).dp)
+                            .clip(RoundedCornerShape(8.dp))
+                    )
+                } else {
+                    CircularProgressIndicator(color = Color.White)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NativeWordDocumentView(model: DocumentPreviewModel) {
+    var searchQuery by remember { mutableStateOf("") }
+    var fontScale by remember { mutableStateOf(1f) }
+
+    val filteredBlocks = remember(model.blocks, searchQuery) {
+        if (searchQuery.isBlank()) model.blocks
+        else model.blocks.filter { it.text.contains(searchQuery.trim(), ignoreCase = true) }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Cerca nel documento...") },
+                    singleLine = true,
+                    shape = CircleShape,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = { fontScale = (fontScale - 0.1f).coerceAtLeast(0.8f) }) {
+                    Icon(Icons.Default.ZoomOut, contentDescription = "Riduci testo")
+                }
+                IconButton(onClick = { fontScale = (fontScale + 0.1f).coerceAtMost(1.6f) }) {
+                    Icon(Icons.Default.ZoomIn, contentDescription = "Ingrandisci testo")
+                }
+            }
+        }
+
+        LazyColumn(
+            contentPadding = PaddingValues(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(filteredBlocks) { block ->
+                when (block.type) {
+                    "heading" -> {
+                        Text(
+                            text = block.text,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontSize = (18 * fontScale).sp,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    "list-item" -> {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("•", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                            Text(
+                                text = block.text,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = (15 * fontScale).sp)
+                            )
+                        }
+                    }
+                    else -> {
+                        Text(
+                            text = block.text,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontSize = (15 * fontScale).sp,
+                                lineHeight = (22 * fontScale).sp
+                            ),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NativeSpreadsheetDocumentView(model: DocumentPreviewModel) {
+    var activeSheetIndex by remember { mutableStateOf(0) }
+    var filterQuery by remember { mutableStateOf("") }
+
+    val sheets = model.sheets
+    val currentSheet = sheets.getOrNull(activeSheetIndex.coerceIn(0, (sheets.size - 1).coerceAtLeast(0)))
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                if (sheets.size > 1) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        sheets.forEachIndexed { idx, s ->
+                            FilterChip(
+                                selected = idx == activeSheetIndex,
+                                onClick = { activeSheetIndex = idx },
+                                label = { Text("${s.name} (${s.totalRows})") }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+                OutlinedTextField(
+                    value = filterQuery,
+                    onValueChange = { filterQuery = it },
+                    placeholder = { Text("Filtra righe del foglio...") },
+                    singleLine = true,
+                    shape = CircleShape,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+        if (currentSheet == null) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Nessun dato tabellare trovato")
+            }
+        } else {
+            val filteredRows = remember(currentSheet, filterQuery) {
+                if (filterQuery.isBlank()) currentSheet.rows
+                else currentSheet.rows.filter { row ->
+                    row.any { it.contains(filterQuery.trim(), ignoreCase = true) }
+                }
+            }
+
+            LazyColumn(
+                contentPadding = PaddingValues(12.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .horizontalScroll(rememberScrollState())
+            ) {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .padding(vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "#",
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.width(48.dp).padding(horizontal = 6.dp)
+                        )
+                        currentSheet.headers.forEach { h ->
+                            Text(
+                                text = h,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.width(140.dp).padding(horizontal = 8.dp)
+                            )
+                        }
+                    }
+                    HorizontalDivider()
+                }
+
+                items(filteredRows.size) { rIdx ->
+                    val row = filteredRows[rIdx]
+                    Row(
+                        modifier = Modifier
+                            .padding(vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "${rIdx + 1}",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(48.dp).padding(horizontal = 6.dp)
+                        )
+                        currentSheet.headers.indices.forEach { cIdx ->
+                            Text(
+                                text = row.getOrNull(cIdx) ?: "",
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.width(140.dp).padding(horizontal = 8.dp)
+                            )
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NativePresentationDocumentView(model: DocumentPreviewModel) {
+    val slides = model.slides
+    var currentSlideIdx by remember { mutableStateOf(0) }
+    val slide = slides.getOrNull(currentSlideIdx.coerceIn(0, (slides.size - 1).coerceAtLeast(0)))
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                FilledTonalButton(
+                    onClick = { if (currentSlideIdx > 0) currentSlideIdx-- },
+                    enabled = currentSlideIdx > 0
+                ) {
+                    Text("◀ Slide Prec.")
+                }
+                Text(
+                    text = "Slide ${currentSlideIdx + 1} / ${slides.size.coerceAtLeast(1)}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                FilledTonalButton(
+                    onClick = { if (currentSlideIdx < slides.size - 1) currentSlideIdx++ },
+                    enabled = currentSlideIdx < slides.size - 1
+                ) {
+                    Text("Slide Succ. ▶")
+                }
+            }
+        }
+
+        if (slide != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    tonalElevation = 6.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 280.dp)
+                ) {
+                    Column(modifier = Modifier.padding(24.dp)) {
+                        Text(
+                            text = "SLIDE ${slide.index}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = slide.title,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        slide.bullets.forEach { b ->
+                            Row(
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text("•", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                Text(text = b, style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
+
+                if (slide.notes.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = "Note del relatore",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = slide.notes,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NativeTextCodeDocumentView(model: DocumentPreviewModel) {
+    val lines = remember(model.rawText, model.blocks) {
+        val raw = model.rawText.ifBlank { model.blocks.joinToString("\n") { it.text } }
+        raw.lines()
+    }
+    var searchQuery by remember { mutableStateOf("") }
+    val filteredLines = remember(lines, searchQuery) {
+        if (searchQuery.isBlank()) lines.mapIndexed { idx, s -> (idx + 1) to s }
+        else lines.mapIndexedNotNull { idx, s ->
+            if (s.contains(searchQuery.trim(), ignoreCase = true)) (idx + 1) to s else null
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Filtra righe (${lines.size} totali)...") },
+                singleLine = true,
+                shape = CircleShape,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
+
+        LazyColumn(
+            contentPadding = PaddingValues(12.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(filteredLines.size) { i ->
+                val (lineNum, text) = filteredLines[i]
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "$lineNum",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(42.dp),
+                        textAlign = TextAlign.End
+                    )
+                    Text(
+                        text = text,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NativeAudioPlayerView(
+    audioFile: File,
+    filename: String
+) {
+    var isPlaying by remember { mutableStateOf(false) }
+    var playerError by remember { mutableStateOf<String?>(null) }
+
+    val mediaPlayer = remember(audioFile) {
+        try {
+            MediaPlayer().apply {
+                setDataSource(audioFile.absolutePath)
+                prepare()
+                setOnCompletionListener { isPlaying = false }
+            }
+        } catch (e: Exception) {
+            playerError = e.localizedMessage
+            null
+        }
+    }
+
+    DisposableEffect(mediaPlayer) {
+        onDispose {
+            try {
+                mediaPlayer?.stop()
+            } catch (_: Exception) {
+            }
+            try {
+                mediaPlayer?.release()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+            modifier = Modifier.fillMaxWidth().widthIn(max = 400.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier.size(72.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.AudioFile,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = filename,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                if (playerError != null) {
+                    Text(
+                        text = playerError ?: "Formato audio non supportato",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    Button(
+                        onClick = {
+                            val mp = mediaPlayer ?: return@Button
+                            if (mp.isPlaying) {
+                                mp.pause()
+                                isPlaying = false
+                            } else {
+                                mp.start()
+                                isPlaying = true
+                            }
+                        },
+                        shape = CircleShape,
+                        modifier = Modifier.height(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = null
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (isPlaying) "Pausa" else "Riproduci Audio", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 

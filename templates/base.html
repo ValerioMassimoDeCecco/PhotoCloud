@@ -195,9 +195,38 @@
             </div>
         </section>
     </div>
+
+    <!-- MATERIAL YOU INTEGRATED DOCUMENT & OFFICE VIEWER MODAL -->
+    <div id="document-viewer-modal" class="document-viewer-modal" style="display: none;" role="dialog" aria-modal="true" aria-label="Visualizzatore Documenti PhotoCloud">
+        <header class="document-viewer-header">
+            <div class="photo-editor-title-wrap">
+                <button type="button" class="btn icon" id="doc-viewer-close-btn" title="Chiudi documento" aria-label="Chiudi Visualizzatore">
+                    <span class="material-icons">close</span>
+                </button>
+                <div>
+                    <h2 id="doc-viewer-title">Documento</h2>
+                    <span id="doc-viewer-subtitle" class="editor-sub-badge">Lettore Integrato PhotoCloud</span>
+                </div>
+            </div>
+            <div class="photo-editor-header-actions">
+                <button type="button" class="btn outlined" id="doc-viewer-open-external-btn" title="Apri con un'altra applicazione sul dispositivo">
+                    <span class="material-icons">open_in_new</span>
+                    <span class="btn-text">Apri con...</span>
+                </button>
+                <button type="button" class="btn primary" id="doc-viewer-download-btn" title="Scarica copia sul dispositivo">
+                    <span class="material-icons">download</span>
+                    <span class="btn-text">Scarica</span>
+                </button>
+            </div>
+        </header>
+
+        <div id="document-viewer-toolbar" class="document-viewer-toolbar"></div>
+        <main id="document-viewer-stage" class="document-viewer-stage"></main>
+    </div>
     
     <script src="{{ url_for('static', filename='scripts/lightbox.js') }}"></script>
     <script src="{{ url_for('static', filename='scripts/photo-editor.js') }}"></script>
+    <script src="{{ url_for('static', filename='scripts/document-viewer.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

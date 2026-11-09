@@ -38,8 +38,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.0.8';
-const APK_FILENAME = 'photocloud-release-v1.0.8-signed.apk';
+const DEFAULT_TAG = 'v1.0.9';
+const APK_FILENAME = 'photocloud-release-v1.0.9-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
@@ -119,13 +119,17 @@ export async function triggerGitHubActionsBuild(options?: {
     'android-app/app/photocloud-release-key.jks',
     'android-app/app/proguard-rules.pro',
     'android-app/app/src/main/AndroidManifest.xml',
+    'android-app/app/src/main/res/xml/file_paths.xml',
     'android-app/app/src/main/res/drawable/ic_launcher_color.xml',
     'android-app/app/src/main/res/drawable/ic_launcher_bw.xml',
     'android-app/app/src/main/res/values/strings.xml',
     'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt',
     'static/scripts/photo-editor.js',
+    'static/scripts/document-viewer.js',
+    'static/scripts/upload.js',
     'src/lib/photoEditorMath.ts',
+    'src/lib/documentEngine.ts',
   ];
 
   for (const relPath of filesToSync) {

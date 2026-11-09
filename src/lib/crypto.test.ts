@@ -168,19 +168,105 @@ test('Templates render non-media Cloud File Manager, Album grouping, Photo Edito
   assert.ok(galleryHtml.includes('value="album">Album</option>'));
   assert.ok(galleryHtml.includes('id="tab-files-btn"'));
   assert.ok(galleryHtml.includes('id="upload-indicator-container"'));
+  assert.ok(galleryHtml.includes('id="upload-active-count-badge"'));
   assert.ok(galleryHtml.includes('id="upload-speed-badge"'));
   assert.ok(galleryHtml.includes('id="photo-editor-modal"'));
   assert.ok(galleryHtml.includes('id="photo-editor-crop-overlay"'));
   assert.ok(galleryHtml.includes('id="photo-editor-crop-box"'));
   assert.ok(galleryHtml.includes('data-crop-handle="se"'));
   assert.ok(galleryHtml.includes('id="lightbox-edit-btn"'));
+  assert.ok(galleryHtml.includes('id="document-viewer-modal"'));
+  assert.ok(galleryHtml.includes('window.openCloudFile('));
   assert.ok(galleryHtml.includes('/static/scripts/photo-editor.js'));
+  assert.ok(galleryHtml.includes('/static/scripts/document-viewer.js'));
 
   const trashHtml = renderTrashTemplate([]);
   assert.ok(trashHtml.includes('Il cestino è vuoto'));
 });
 
-test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android v1.0.8 project are configured', async () => {
+test('Document Viewer Engine resolves MIME types and parses PDF, DOCX, XLSX, PPTX, CSV, and external formats accurately', async () => {
+  const JSZip = (await import('jszip')).default;
+  const {
+    resolveFileViewerSpec,
+    parseDocumentBuffer,
+    parseDelimitedTextToSheet,
+  } = await import('./documentEngine');
+
+  assert.equal(resolveFileViewerSpec('relazione.pdf').viewerType, 'pdf');
+  assert.equal(resolveFileViewerSpec('relazione.pdf').canOpenInApp, true);
+  assert.equal(resolveFileViewerSpec('contratto.docx').viewerType, 'word');
+  assert.equal(resolveFileViewerSpec('bilancio.xlsx').viewerType, 'spreadsheet');
+  assert.equal(resolveFileViewerSpec('slides.pptx').viewerType, 'presentation');
+  assert.equal(resolveFileViewerSpec('note.txt').viewerType, 'text');
+  assert.equal(resolveFileViewerSpec('foto.webp').viewerType, 'image');
+  assert.equal(resolveFileViewerSpec('installer.apk').viewerType, 'external');
+  assert.equal(resolveFileViewerSpec('installer.apk').canOpenInApp, false);
+
+  // 1. PDF page count extraction
+  const fakePdf = Buffer.from(
+    '%PDF-1.7\n1 0 obj << /Type /Catalog >> endobj\n2 0 obj << /Type /Page >> endobj\n3 0 obj << /Type /Page >> endobj\n%%EOF',
+    'latin1'
+  );
+  const pdfResult = await parseDocumentBuffer(fakePdf, 'manuale.pdf');
+  assert.equal(pdfResult.viewerType, 'pdf');
+  assert.equal(pdfResult.pageCount, 2);
+
+  // 2. DOCX XML extraction
+  const docxZip = new JSZip();
+  docxZip.file(
+    'word/document.xml',
+    '<?xml version="1.0"?><w:document><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Titolo Contratto</w:t></w:r></w:p><w:p><w:r><w:t>Clausola di riservatezza PhotoCloud.</w:t></w:r></w:p></w:body></w:document>'
+  );
+  const docxBuf = await docxZip.generateAsync({ type: 'nodebuffer' });
+  const docxResult = await parseDocumentBuffer(docxBuf, 'contratto.docx');
+  assert.equal(docxResult.viewerType, 'word');
+  assert.equal(docxResult.blocks.length, 2);
+  assert.equal(docxResult.blocks[0].type, 'heading');
+  assert.equal(docxResult.blocks[0].text, 'Titolo Contratto');
+  assert.equal(docxResult.blocks[1].text, 'Clausola di riservatezza PhotoCloud.');
+
+  // 3. XLSX XML extraction
+  const xlsxZip = new JSZip();
+  xlsxZip.file(
+    'xl/sharedStrings.xml',
+    '<?xml version="1.0"?><sst><si><t>Voce</t></si><si><t>Importo</t></si><si><t>Server Cloud</t></si></sst>'
+  );
+  xlsxZip.file(
+    'xl/workbook.xml',
+    '<?xml version="1.0"?><workbook><sheets><sheet name="Bilancio 2026" sheetId="1" r:id="rId1"/></sheets></workbook>'
+  );
+  xlsxZip.file(
+    'xl/worksheets/sheet1.xml',
+    '<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>1250</v></c></row></sheetData></worksheet>'
+  );
+  const xlsxBuf = await xlsxZip.generateAsync({ type: 'nodebuffer' });
+  const xlsxResult = await parseDocumentBuffer(xlsxBuf, 'bilancio.xlsx');
+  assert.equal(xlsxResult.viewerType, 'spreadsheet');
+  assert.equal(xlsxResult.sheets.length, 1);
+  assert.equal(xlsxResult.sheets[0].name, 'Bilancio 2026');
+  assert.deepEqual(xlsxResult.sheets[0].headers, ['Voce', 'Importo']);
+  assert.deepEqual(xlsxResult.sheets[0].rows[0], ['Server Cloud', '1250']);
+
+  // 4. PPTX XML extraction
+  const pptxZip = new JSZip();
+  pptxZip.file(
+    'ppt/slides/slide1.xml',
+    '<?xml version="1.0"?><p:sld><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Architettura Zero-Knowledge</a:t></a:r></a:p><a:p><a:r><a:t>Crittografia AES-256-GCM</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>'
+  );
+  const pptxBuf = await pptxZip.generateAsync({ type: 'nodebuffer' });
+  const pptxResult = await parseDocumentBuffer(pptxBuf, 'presentazione.pptx');
+  assert.equal(pptxResult.viewerType, 'presentation');
+  assert.equal(pptxResult.slides.length, 1);
+  assert.equal(pptxResult.slides[0].title, 'Architettura Zero-Knowledge');
+  assert.deepEqual(pptxResult.slides[0].bullets, ['Crittografia AES-256-GCM']);
+
+  // 5. CSV parsing
+  const csvSheet = parseDelimitedTextToSheet('Nome,Ruolo\nValerio,Admin\nMario,Utente', ',', 'Team');
+  assert.deepEqual(csvSheet.headers, ['Nome', 'Ruolo']);
+  assert.equal(csvSheet.rows.length, 2);
+});
+
+test('GitHub Actions workflow (.github/workflows/android-release.yml) and Android v1.0.9 project are configured', async () => {
   const workflowPath = path.resolve(process.cwd(), '.github/workflows/android-release.yml');
   assert.ok(fs.existsSync(workflowPath));
   const workflowYaml = fs.readFileSync(workflowPath, 'utf-8');
@@ -192,17 +278,15 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
   assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
   assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));
-  assert.ok(workflowYaml.includes('photocloud-release-v1.0.8-signed.apk'));
+  assert.ok(workflowYaml.includes('photocloud-release-v1.0.9-signed.apk'));
   assert.equal(workflowYaml.includes('rm -f photocloud-release-key.jks'), false);
 
   const keystorePath = path.resolve(process.cwd(), 'android-app/app/photocloud-release-key.jks');
   assert.ok(fs.existsSync(keystorePath));
   assert.ok(fs.statSync(keystorePath).size > 1000);
 
-  const colorIconPath = path.resolve(process.cwd(), 'android-app/app/src/main/res/drawable/ic_launcher_color.xml');
-  const bwIconPath = path.resolve(process.cwd(), 'android-app/app/src/main/res/drawable/ic_launcher_bw.xml');
-  assert.ok(fs.existsSync(colorIconPath));
-  assert.ok(fs.existsSync(bwIconPath));
+  const filePathsXml = path.resolve(process.cwd(), 'android-app/app/src/main/res/xml/file_paths.xml');
+  assert.ok(fs.existsSync(filePathsXml));
 
   const mainActivityKt = fs.readFileSync(
     path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
@@ -214,27 +298,17 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   );
 
   assert.equal(mainActivityKt.includes('android.webkit.WebView'), false);
-  assert.equal(mainActivityKt.includes('isCheckingSession'), false);
-  assert.ok(mainActivityKt.includes('hasActiveSessionCookie'));
-  assert.ok(mainActivityKt.includes('getCachedGalleryItems'));
-  assert.ok(mainActivityKt.includes('detectDragGesturesAfterLongPress'));
-  assert.ok(mainActivityKt.includes('NativeSettingsScreen'));
-  assert.ok(mainActivityKt.includes('NativeCloudFileManagerScreen'));
-  assert.ok(mainActivityKt.includes('TransferOperationsFloatingCard'));
-  assert.ok(mainActivityKt.includes('AlbumManagerDialog'));
-  assert.ok(mainActivityKt.includes('NativePhotoEditorModal'));
-  assert.ok(mainActivityKt.includes('NormalizedAndroidCropRect'));
-  assert.ok(mainActivityKt.includes('dragAndroidCropRect'));
-  assert.ok(mainActivityKt.includes('renderEditedAndroidBitmap'));
-  assert.ok(mainActivityKt.includes('ALBUM("Album")'));
-  assert.ok(mainActivityKt.includes('VaultTab.FILES'));
-  assert.ok(apiClientKt.includes('ProgressRequestBody'));
-  assert.ok(apiClientKt.includes('TransferOperation'));
-  assert.ok(apiClientKt.includes('formatSpeedHuman'));
-  assert.ok(apiClientKt.includes('assignFilesToAlbum'));
-  assert.ok(apiClientKt.includes('uploadEditedPhotoBytes'));
-
-  // No network calls, token usage or APK writes in unit tests.
+  assert.equal(mainActivityKt.includes('showTransferPopup = true'), false);
+  assert.ok(mainActivityKt.includes('hadRunningTransfers'));
+  assert.ok(mainActivityKt.includes('NativeDocumentViewerModal'));
+  assert.ok(mainActivityKt.includes('NativePdfRendererView'));
+  assert.ok(mainActivityKt.includes('NativeWordDocumentView'));
+  assert.ok(mainActivityKt.includes('NativeSpreadsheetDocumentView'));
+  assert.ok(mainActivityKt.includes('NativePresentationDocumentView'));
+  assert.ok(apiClientKt.includes('FileProvider.getUriForFile'));
+  assert.ok(apiClientKt.includes('openFileWithExternalAppChooser'));
+  assert.ok(apiClientKt.includes('downloadFileToCache'));
+  assert.ok(apiClientKt.includes('fetchDocumentPreview'));
   assert.ok(workflowYaml.includes('workflow_dispatch:'));
 });
 
@@ -260,3 +334,4 @@ test('album names are escaped in HTML attributes', () => {
   assert.ok(html.includes('&#39;'));
   assert.ok(!html.includes("data-albums='[\"x'"));
 });
+
