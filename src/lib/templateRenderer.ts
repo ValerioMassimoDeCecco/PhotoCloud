@@ -423,12 +423,11 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
         const nextSibling = cardWrapper ? cardWrapper.nextSibling : null;
 
         if (cardWrapper) {
+            cardWrapper.dataset.removed = 'true';
             cardWrapper.remove();
         }
-        const countElement = document.getElementById('media-count');
-        if (countElement) {
-            let currentCount = parseInt(countElement.textContent) || 0;
-            countElement.textContent = \`\${Math.max(0, currentCount - 1)} elementi\`;
+        if (window.refreshGalleryGrouping) {
+            window.refreshGalleryGrouping();
         }
         
         try {
@@ -443,21 +442,34 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
             const result = await response.json();
 
             if (!result.success) {
+                if (cardWrapper) {
+                    delete cardWrapper.dataset.removed;
+                }
                 if (parentNode && cardWrapper) {
                     parentNode.insertBefore(cardWrapper, nextSibling);
+                }
+                if (window.refreshGalleryGrouping) {
+                    window.refreshGalleryGrouping();
                 }
                 alert(\`Errore: \${result.error || 'Impossibile spostare il file nel cestino'}\`);
             } else if (window.refreshTrashPane) {
                 window.refreshTrashPane();
             }
         } catch (error) {
+            if (cardWrapper) {
+                delete cardWrapper.dataset.removed;
+            }
             if (parentNode && cardWrapper) {
                 parentNode.insertBefore(cardWrapper, nextSibling);
+            }
+            if (window.refreshGalleryGrouping) {
+                window.refreshGalleryGrouping();
             }
             alert('Errore di comunicazione con il server.');
             console.error('Errore durante lo spostamento nel cestino:', error);
         }
     }
+    window.handleDelete = handleDelete;
 </script>
 `;
 

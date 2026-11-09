@@ -304,6 +304,10 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
     path.resolve(process.cwd(), 'static/scripts/grouping.js'),
     'utf-8'
   );
+  const webUploadJs = fs.readFileSync(
+    path.resolve(process.cwd(), 'static/scripts/upload.js'),
+    'utf-8'
+  );
 
   assert.equal(mainActivityKt.includes('android.webkit.WebView'), false);
   assert.equal(mainActivityKt.includes('showTransferPopup = true'), false);
@@ -324,10 +328,16 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.ok(mainActivityKt.includes('NativePresentationDocumentView'));
   assert.ok(webPhotoEditorJs.includes('previewSourceCanvas'));
   assert.ok(webPhotoEditorJs.includes('buildPreviewSourceCanvas'));
+  assert.equal(webPhotoEditorJs.includes('window.location.reload()'), false);
   assert.ok(webGroupingJs.includes('pane-media'));
   assert.ok(webGroupingJs.includes('pane-files'));
   assert.ok(webGroupingJs.includes('pane-trash'));
   assert.ok(webGroupingJs.includes('switchToTab'));
+  assert.ok(webGroupingJs.includes('syncVaultItemsFromServer'));
+  assert.ok(webGroupingJs.includes('createCardWrapperElement'));
+  assert.equal(webGroupingJs.includes('window.location.reload()'), false);
+  assert.ok(webUploadJs.includes('syncVaultItemsFromServer'));
+  assert.equal(webUploadJs.includes('window.location.reload()'), false);
   assert.ok(apiClientKt.includes('thumbnailCache'));
   assert.ok(apiClientKt.includes('getRamThumbnailBitmap'));
   assert.ok(apiClientKt.includes('loadThumbnailBitmap'));

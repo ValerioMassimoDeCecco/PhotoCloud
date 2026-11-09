@@ -4,8 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const assignAlbumSelectedBtn = document.getElementById('assign-album-selected-btn');
     const deleteSelectedBtn = document.getElementById('delete-selected-btn');
     const selectedCountSpan = document.getElementById('selected-count');
-    const mediaCheckboxes = document.querySelectorAll('.media-checkbox');
-    const hasMedia = mediaCheckboxes.length > 0;
+    const galleryGrid = document.querySelector('.gallery-grid');
 
     // Album Modal elements
     const newAlbumBtn = document.getElementById('new-album-btn');
@@ -25,15 +24,38 @@ document.addEventListener('DOMContentLoaded', () => {
         availableAlbums = [];
     }
 
-    if (hasMedia && selectAllBtn) {
-        selectAllBtn.style.display = 'inline-flex';
+    function getAllCheckboxes() {
+        return Array.from(document.querySelectorAll('#pane-media .media-checkbox, #pane-files .media-checkbox, .gallery-grid .media-checkbox'));
+    }
+
+    function getVisibleCheckboxes() {
+        const paneMedia = document.getElementById('pane-media');
+        const paneFiles = document.getElementById('pane-files');
+        if (paneFiles && paneFiles.style.display !== 'none') {
+            return Array.from(paneFiles.querySelectorAll('.media-checkbox'));
+        }
+        if (paneMedia && paneMedia.style.display !== 'none') {
+            return Array.from(paneMedia.querySelectorAll('.media-checkbox'));
+        }
+        return getAllCheckboxes();
     }
 
     function updateUI() {
+        const allCheckboxes = getAllCheckboxes();
+        const visibleCheckboxes = getVisibleCheckboxes();
+
+        // Remove any selected filenames that no longer exist in DOM
+        const validFilenames = new Set(allCheckboxes.map(cb => cb.dataset.filename));
+        Array.from(selectedFiles).forEach(fn => {
+            if (!validFilenames.has(fn)) {
+                selectedFiles.delete(fn);
+            }
+        });
+
         const count = selectedFiles.size;
         if (selectedCountSpan) selectedCountSpan.textContent = count;
 
-        mediaCheckboxes.forEach(checkbox => {
+        allCheckboxes.forEach(checkbox => {
             const wrapper = checkbox.closest('.media-card-wrapper');
             if (wrapper) {
                 const isSelected = selectedFiles.has(checkbox.dataset.filename);
@@ -49,7 +71,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (selectAllBtn) {
             const btnText = selectAllBtn.querySelector('.btn-text');
-            if (count > 0 && count === mediaCheckboxes.length) {
+            if (visibleCheckboxes.length > 0 && visibleCheckboxes.every(cb => selectedFiles.has(cb.dataset.filename))) {
                 if (btnText) btnText.textContent = 'Deseleziona Tutto';
                 isSelectAll = true;
             } else {
@@ -58,6 +80,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     }
+
+    window.syncSelectionUI = updateUI;
 
     function renderAlbumChips() {
         if (!albumChipsList) return;
@@ -213,12 +237,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (selectAllBtn) {
         selectAllBtn.addEventListener('click', () => {
+            const visibleCheckboxes = getVisibleCheckboxes();
             if (isSelectAll) {
-                selectedFiles.clear();
+                visibleCheckboxes.forEach(cb => selectedFiles.delete(cb.dataset.filename));
             } else {
-                mediaCheckboxes.forEach(checkbox => {
-                    if (checkbox.closest('.media-card-wrapper')?.isConnected) {
-                        selectedFiles.add(checkbox.dataset.filename);
+                visibleCheckboxes.forEach(cb => {
+                    if (cb.dataset.filename) {
+                        selectedFiles.add(cb.dataset.filename);
                     }
                 });
             }
@@ -226,9 +251,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    mediaCheckboxes.forEach(checkbox => {
-        checkbox.addEventListener('change', () => {
+    // Event delegation on galleryGrid so dynamically uploaded cards work without page reload
+    if (galleryGrid) {
+        galleryGrid.addEventListener('change', (event) => {
+            const checkbox = event.target.closest('.media-checkbox');
+            if (!checkbox) return;
             const filename = checkbox.dataset.filename;
+            if (!filename) return;
             if (checkbox.checked) {
                 selectedFiles.add(filename);
             } else {
@@ -236,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             updateUI();
         });
-    });
+    }
 
     if (downloadSelectedBtn) {
         downloadSelectedBtn.addEventListener('click', async () => {
@@ -277,12 +306,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         const checkbox = document.querySelector(`.media-checkbox[data-filename="${CSS.escape(filename)}"]`);
                         if (checkbox) {
                             const wrapper = checkbox.closest('.media-card-wrapper');
-                            if (wrapper) wrapper.remove();
+                            if (wrapper) {
+                                wrapper.dataset.removed = 'true';
+                                wrapper.remove();
+                            }
                         }
                     });
                     selectedFiles.clear();
                     updateUI();
                     if (window.refreshGalleryGrouping) window.refreshGalleryGrouping();
+                    if (window.refreshTrashPane) window.refreshTrashPane();
                 }
             } catch (error) {
                 console.error('Errore cestino batch:', error);

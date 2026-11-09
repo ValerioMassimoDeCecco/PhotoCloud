@@ -453,7 +453,11 @@
                 window.closePhotoEditor();
             } else {
                 window.closePhotoEditor();
-                window.location.reload();
+                if (Array.isArray(data.mediaFiles) && typeof window.syncVaultItemsFromServer === 'function') {
+                    window.syncVaultItemsFromServer(data.mediaFiles, { fromUpload: false });
+                } else if (typeof window.refreshVaultFromSession === 'function') {
+                    await window.refreshVaultFromSession();
+                }
             }
         } catch (err) {
             if (resBadge) {

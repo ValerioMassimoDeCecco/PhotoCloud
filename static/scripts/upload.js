@@ -324,7 +324,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             xhr.onload = () => {
                 if (xhr.status === 200) {
-                    resolve();
+                    let parsed = null;
+                    try {
+                        parsed = JSON.parse(xhr.responseText);
+                    } catch (_e) {}
+                    resolve(parsed);
                 } else {
                     let errorMsg = `Errore server: ${xhr.status}`;
                     try {
@@ -365,6 +369,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const batchSize = 25;
         let uploadedBytesSoFar = 0;
         const startOverall = performance.now();
+        let latestMediaFiles = null;
 
         try {
             for (let i = 0; i < allFiles.length; i += batchSize) {
@@ -385,20 +390,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 const batchNum = Math.floor(i / batchSize) + 1;
                 const totalBatches = Math.ceil(allFiles.length / batchSize);
 
-                await uploadSingleBatch(formData, batch, batchNum, totalBatches, uploadedBytesSoFar, grandTotalBytes, tracker);
+                const batchResp = await uploadSingleBatch(formData, batch, batchNum, totalBatches, uploadedBytesSoFar, grandTotalBytes, tracker);
                 uploadedBytesSoFar += batchBytes;
+                if (batchResp && Array.isArray(batchResp.mediaFiles)) {
+                    latestMediaFiles = batchResp.mediaFiles;
+                    if (typeof window.syncVaultItemsFromServer === 'function') {
+                        window.syncVaultItemsFromServer(latestMediaFiles, { fromUpload: true });
+                    }
+                }
             }
 
             const totalElapsedSec = Math.max(0.1, (performance.now() - startOverall) / 1000);
             tracker.complete(grandTotalBytes, totalElapsedSec);
 
-            // Reload only when no other transfers are running
-            setTimeout(() => {
-                const state = window.getTransferCenterState ? window.getTransferCenterState() : { runningCount: 0 };
-                if (state.runningCount === 0) {
-                    window.location.reload();
-                }
-            }, 750);
+            // Sync DOM in-place without reloading the page
+            if (latestMediaFiles && typeof window.syncVaultItemsFromServer === 'function') {
+                window.syncVaultItemsFromServer(latestMediaFiles, { fromUpload: true });
+            } else if (typeof window.refreshVaultFromSession === 'function') {
+                await window.refreshVaultFromSession({ fromUpload: true });
+            }
         } catch (error) {
             if (error && error.isCancelled) {
                 tracker.cancel('Annullato dall\'utente');
