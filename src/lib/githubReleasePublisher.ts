@@ -38,8 +38,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.10';
-const APK_FILENAME = 'photocloud-release-v1.10-signed.apk';
+const DEFAULT_TAG = 'v1.1.1';
+const APK_FILENAME = 'photocloud-release-v1.1.1-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
@@ -125,9 +125,11 @@ export async function triggerGitHubActionsBuild(options?: {
     'android-app/app/src/main/res/values/strings.xml',
     'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt',
+    'static/scripts/grouping.js',
     'static/scripts/photo-editor.js',
     'static/scripts/document-viewer.js',
     'static/scripts/upload.js',
+    'src/lib/templateRenderer.ts',
     'src/lib/photoEditorMath.ts',
     'src/lib/documentEngine.ts',
   ];

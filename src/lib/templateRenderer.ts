@@ -182,6 +182,11 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                     <span class="btn-text">Seleziona Tutto</span>
                 </button>
 
+                <button class="btn danger" id="empty-trash-btn" title="Svuota Cestino" style="display: none;">
+                    <span class="material-icons">delete_sweep</span>
+                    <span class="btn-text">Svuota Cestino</span>
+                </button>
+
                 <!-- TOP-RIGHT DISCREET TRANSFER INDICATOR & FLOATING TRANSFER CENTER -->
                 <div id="upload-indicator-container" class="upload-indicator-container top-right-transfer" aria-live="polite">
                     <button type="button" id="upload-gem" class="upload-gem" title="Trasferimenti in corso (clicca per aprire i dettagli)" aria-label="Trasferimenti in corso">
@@ -291,7 +296,7 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                 <span class="pill-label">Duplicati</span>
             </button>
 
-            <a href="/trash" class="nav-pill" title="Cestino">
+            <a href="/trash" class="nav-pill" id="tab-trash-btn" data-view-tab="trash" title="Cestino">
                 <span class="material-icons">delete_outline</span>
                 <span class="pill-label">Cestino</span>
             </a>
@@ -369,18 +374,21 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                     const df = clickedCloudFile.getAttribute('data-filename');
                     const wrapper = clickedCloudFile.closest('.media-card-wrapper');
                     const sz = Number(wrapper?.getAttribute('data-size') || 0);
+                    const fromTrash = Boolean(clickedCloudFile.closest('#pane-trash'));
                     if (df && window.openCloudFile) {
-                        window.openCloudFile(df, sz, false, event);
+                        window.openCloudFile(df, sz, fromTrash, event);
                     }
                     return;
                 }
 
                 const clickedCard = event.target.closest('.clickable-media');
                 if (clickedCard && !event.target.closest('.media-actions') && !event.target.closest('.delete-form') && !event.target.matches('.media-checkbox')) {
-                    const allCards = Array.from(galleryGrid.querySelectorAll('.clickable-media'));
+                    const activePane = clickedCard.closest('.keep-alive-pane') || galleryGrid;
+                    const allCards = Array.from(activePane.querySelectorAll('.clickable-media'));
+                    const fromTrash = activePane.id === 'pane-trash';
                     const allUrls = allCards.map(card => {
                         const df = card.getAttribute('data-filename');
-                        if (df) return \`/media/\${encodeURIComponent(df)}\`;
+                        if (df) return \`/media/\${encodeURIComponent(df)}\${fromTrash ? '?from_trash=true' : ''}\`;
                         const img = card.querySelector('img');
                         if (img && img.getAttribute('src')) return img.getAttribute('src');
                         const src = card.querySelector('video source');
@@ -391,9 +399,9 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                     const filename = clickedCard.getAttribute('data-filename') || '';
                     const imgEl = clickedCard.querySelector('img');
                     const url = filename
-                        ? \`/media/\${encodeURIComponent(filename)}\`
+                        ? \`/media/\${encodeURIComponent(filename)}\${fromTrash ? '?from_trash=true' : ''}\`
                         : (imgEl ? imgEl.getAttribute('src') : allUrls[clickedIndex]);
-                    const isVideo = /\\.(mp4|mov|avi|mkv|webm)$/i.test(url || '');
+                    const isVideo = /\\.(mp4|mov|avi|mkv|webm)(\\?.*)?$/i.test(url || '');
 
                     if (window.openLightbox && url) {
                         window.openLightbox(url, isVideo, clickedIndex, allUrls);
@@ -439,6 +447,8 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                     parentNode.insertBefore(cardWrapper, nextSibling);
                 }
                 alert(\`Errore: \${result.error || 'Impossibile spostare il file nel cestino'}\`);
+            } else if (window.refreshTrashPane) {
+                window.refreshTrashPane();
             }
         } catch (error) {
             if (parentNode && cardWrapper) {

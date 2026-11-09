@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag della Release GitHub (es. v1.10)'
+        description: 'Tag della Release GitHub (es. v1.1.1)'
         required: false
-        default: 'v1.10'
+        default: 'v1.1.1'
 
 permissions:
   contents: write
@@ -72,16 +72,16 @@ jobs:
             echo "Errore: nessun file APK trovato in app/build/outputs/apk/release"
             exit 1
           fi
-          cp "$APK_OUT" ../photocloud-release-v1.10-signed.apk
-          sha256sum ../photocloud-release-v1.10-signed.apk > ../photocloud-release-v1.10-signed.apk.sha256
+          cp "$APK_OUT" ../photocloud-release-v1.1.1-signed.apk
+          sha256sum ../photocloud-release-v1.1.1-signed.apk > ../photocloud-release-v1.1.1-signed.apk.sha256
 
       - name: Upload Signed APK as GitHub Actions Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: photocloud-release-v1.10-signed-apk
+          name: photocloud-release-v1.1.1-signed-apk
           path: |
-            photocloud-release-v1.10-signed.apk
-            photocloud-release-v1.10-signed.apk.sha256
+            photocloud-release-v1.1.1-signed.apk
+            photocloud-release-v1.1.1-signed.apk.sha256
           if-no-files-found: error
 
       - name: Determine Release Tag
@@ -92,7 +92,7 @@ jobs:
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "TAG=v1.10" >> $GITHUB_OUTPUT
+            echo "TAG=v1.1.1" >> $GITHUB_OUTPUT
           fi
 
       - name: Publish Signed APK to GitHub Releases
@@ -102,19 +102,20 @@ jobs:
           name: PhotoCloud Android Release ${{ steps.release_meta.outputs.TAG }}
           body: |
             ### PhotoCloud Android Release (${{ steps.release_meta.outputs.TAG }})
-            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.0.9** per aggiornamento diretto.
+            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.10** per aggiornamento diretto.
 
             - **Application ID**: `com.valerio.photocloud`
-            - **Versione**: `1.10` (`versionCode 11`)
-            - **Novità v1.10**:
-              - **Rotazione, Specchiatura, Filtri e Ritaglio Istantanei 0ms / 120Hz nel Photo Editor (Web & APK)**: Eliminato completamente il ritardo (~1 secondo) durante la rotazione (`-90°` / `+90°`), la specchiatura e l'applicazione dei filtri su foto ad alta risoluzione grazie al pipeline di anteprima geometrica a bassa latenza (`1080px`) combinato con `ColorFilter.colorMatrix` su GPU (Android Jetpack Compose) e rendering Canvas 2D diretto (Web), mantenendo l'esportazione finale al 100% della risoluzione originale in background (`Dispatchers.Default`).
-              - **Interazioni Click, Cambio Scheda, Lightbox e Cestino Istantanee (0ms)**: Rimossi tutti i ritardi artificiali (`setTimeout`) nel cambio scheda (`Foto` / `File Cloud` / `Cestino`), nel cambio raggruppamento, nell'apertura/chiusura della Lightbox (con precaricamento delle foto adiacenti) e introdotti aggiornamenti UI ottimistici a `0ms` per cestinamento, ripristino ed eliminazione su Web e Android.
-              - **Indicatore Discreto dei Trasferimenti, Chiusura Automatica & Motore Documenti Integrato**: Tutte le funzionalità di apertura intelligente dei file (`PDF`, `DOC/DOCX`, `XLS/XLSX`, `PPT/PPTX`, `ODF`, `CSV`, `RTF`, `TXT/Codice`, `Audio/Video` e `FileProvider` nativo) lavorano a latenza zero.
-            - **APK Firmato**: `photocloud-release-v1.10-signed.apk`
-            - **Checksum SHA-256**: `photocloud-release-v1.10-signed.apk.sha256`
+            - **Versione**: `1.1.1` (`versionCode 12`)
+            - **Novità v1.1.1**:
+              - **Passaggio Istantaneo (0.0ms) da Qualsiasi Scheda (`File Cloud`, `Cestino`, `Opzioni`) alla Galleria (`Foto`) su Android APK e Web App**:
+                - **Android (`Keep-Alive LazyVerticalGrid` + `thumbnailCache` RAM dedicada)**: la griglia della Galleria rimane montata in modo permanente (`Keep-Alive`) nel grafo Compose durante la navigazione verso `File Cloud`, `Cestino` e `Impostazioni`, preservando lo stato di scorrimento (`galleryGridState`), il layout delle sezioni pre-calcolato (`galleryGroupedSections`) e tutte le miniature già decodificate in RAM (`getRamThumbnailBitmap` a `380px`). Eliminata qualsiasi decodifica sincrona da disco sul Main Thread UI.
+                - **Web App (`Keep-Alive DOM Panes` `#pane-media`, `#pane-files`, `#pane-trash`)**: il cambio scheda tra `Foto`, `File Cloud` e `Cestino` commuta istantaneamente (`0.0ms`) la visibilità dei contenitori DOM persistenti senza mai svuotare `galleryGrid.innerHTML`, senza ricreare i nodi `<img>` e senza ricaricare la pagina.
+              - **Photo Editor Studio 0ms / 120Hz, Indicatore Discreto dei Trasferimenti & Motore Documenti Integrato**: rotazione, specchiatura, filtri GPU e ritaglio manuale trascinabile a latenza zero.
+            - **APK Firmato**: `photocloud-release-v1.1.1-signed.apk`
+            - **Checksum SHA-256**: `photocloud-release-v1.1.1-signed.apk.sha256`
           files: |
-            photocloud-release-v1.10-signed.apk
-            photocloud-release-v1.10-signed.apk.sha256
+            photocloud-release-v1.1.1-signed.apk
+            photocloud-release-v1.1.1-signed.apk.sha256
           draft: false
           prerelease: false
         env:

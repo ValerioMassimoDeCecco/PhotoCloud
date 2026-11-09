@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.10)
+# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.1.1)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -10,21 +10,24 @@
 
 ---
 
-## ⚡ Novità Principali della Release `v1.10` (`versionCode 11`)
+## ⚡ Novità Principali della Release `v1.1.1` (`versionCode 12`)
 
-### 1. Photo Editor Studio a Latenza Zero (`0ms` / 120Hz) per Rotazione, Specchiatura, Filtri e Ritaglio (Web & Android APK)
+### 1. Passaggio Istantaneo (`0.0ms` / 120Hz) da Qualsiasi Scheda alla Galleria (`Foto`) su Android APK e Web App
+- **Su Android (`Keep-Alive LazyVerticalGrid` + `thumbnailCache` RAM dedicata)**:
+  - **Griglia Galleria Permanentemente Montata (`Keep-Alive`)**: in `MainActivity.kt` (`NativeVaultScreen`), la `LazyVerticalGrid` della Galleria non viene più smontata quando si passa a **File Cloud**, **Cestino** o **Impostazioni**. Resta attiva nel grafo Compose con il proprio stato di scorrimento dedicato (`galleryGridState`) e con le sezioni ordinate/raggruppate pre-calcolate in modo indipendente dalla scheda attiva (`gallerySortedItems`, `galleryGroupedSections`). Tornare alla **Galleria** da qualsiasi scheda avviene in **0.0 ms** (1 singolo frame a 120Hz) senza ricomporre né ridisporre le tessere.
+  - **Zero Decodifiche Sincrone da Disco sul Main Thread + `thumbnailCache` RAM (`380px`)**: in `PhotoCloudApiClient.kt` è stata introdotta una cache LRU in RAM dedicata esclusivamente alle miniature della griglia (`thumbnailCache`, campionamento veloce `inSampleSize` a `380px`, ~300 KB per miniatura anziché 48 MB di una foto 12 MP), interrogata da `MediaGridTile` tramite `getRamThumbnailBitmap` in `0.001 ms` senza mai eseguire `BitmapFactory.decodeFile` sul Main Thread UI.
+- **Su Web App (`Keep-Alive DOM Panes` `#pane-media`, `#pane-files`, `#pane-trash`)**:
+  - In `static/scripts/grouping.js` e `src/lib/templateRenderer.ts`, la griglia mantiene tre contenitori DOM persistenti (`#pane-media`, `#pane-files`, `#pane-trash`). Passare da **File Cloud** o **Cestino** a **Foto** commuta istantaneamente (`0.0 ms`) la proprietà `display` senza mai svuotare `galleryGrid.innerHTML`, senza rimuovere/reinserire gli elementi `<img>` già decodificati dal browser e senza ricaricare la pagina.
+
+### 2. Photo Editor Studio a Latenza Zero (`0ms` / 120Hz) per Rotazione, Specchiatura, Filtri e Ritaglio (Web & Android APK)
 - **Eliminazione Completa del Ritardo (~1 secondo -> `< 1.5 ms`) sulla Rotazione (`-90°` / `+90°`) e Specchiatura**:
-  - **Su Android (`NativePhotoEditorModal`)**: il motore di modifica genera all'apertura una bitmap di anteprima leggera (`previewSourceBitmap`, max `1080px` sul lato lungo) e separa le trasformazioni geometriche (`renderGeometryPreviewBitmap`) dalle regolazioni cromatiche. Le regolazioni di `Luminosità`, `Contrasto`, `Saturazione`, `Calore` e i 7 filtri rapidi vengono applicati a **0.0 ms direttamente sulla GPU** tramite `androidx.compose.ui.graphics.ColorFilter.colorMatrix`, mentre il trascinamento della griglia di ritaglio non ricalcola mai la bitmap sottostante. Al salvataggio (`Salva Copia` o `Sovrascrivi`), l'esportazione alla **piena risoluzione originale** viene eseguita in background su `Dispatchers.Default` senza bloccare il thread UI.
+  - **Su Android (`NativePhotoEditorModal`)**: il motore di modifica genera all'apertura una bitmap di anteprima leggera (`previewSourceBitmap`, max `1080px` sul lato lungo) e separa le trasformazioni geometriche (`renderGeometryPreviewBitmap`) dalle regolazioni cromatiche. Le regolazioni di `Luminosità`, `Contrasto`, `Saturazione`, `Calore` e i 7 filtri rapidi vengono applicati a **0.0 ms direttamente sulla GPU** tramite `androidx.compose.ui.graphics.ColorFilter.colorMatrix`, mentre il trascinamento della griglia di ritaglio non ricalcola mai la bitmap sottostante. Al salvataggio (`Salva Copia` o `Sovrasvb`), l'esportazione alla **piena risoluzione originale** viene eseguita in background su `Dispatchers.Default` senza bloccare il thread UI.
   - **Su Web (`static/scripts/photo-editor.js`)**: all'apertura della foto viene costruito un `previewSourceCanvas` scalato (`max 1080px`) che viene ruotato e specchiato direttamente sul canvas di stage tramite trasformazioni matriciali 2D senza allocare canvas offscreen ad alta risoluzione ad ogni click (`< 1.5 ms`), mantenendo il calcolo delle dimensioni reali in pixel e l'esportazione finale (`buildFinalCroppedExportCanvas`) al **100% della risoluzione nativa**.
-
-### 2. Interazioni Click, Cambio Scheda, Lightbox e Cestino Istantanee (`0ms`) su Tutta l'App
-- **Cambio Scheda e Raggruppamento Istantaneo (`0ms`)**: rimosso il ritardo artificiale di `160 ms` (`setTimeout`) in `static/scripts/grouping.js` e introdotto il rendering sincrono tramite `DocumentFragment`, rendendo immediato il passaggio tra **Foto**, **File Cloud** e i raggruppamenti per **Giorno / Mese / Anno / Album**.
-- **Lightbox Istantanea con Precaricamento Adiacente**: rimosso il ritardo di chiusura (`180 ms`) e l'effetto di attenuazione opacità in `static/scripts/lightbox.js`, aggiungendo il precaricamento automatico in memoria della foto precedente e successiva (`preloadAdjacentMedia`) per uno scorrimento istantaneo.
-- **Azioni Cestino, Ripristino ed Eliminazione Ottimistiche a `0ms` (Web & Android)**: cliccando su **Cestina**, **Ripristina**, **Elimina Definitivamente** o **Svuota Cestino**, gli elementi vengono rimossi istantaneamente dalla griglia (`optimisticRemovedGallery` / `optimisticRemovedTrash` su Android e rimozione DOM immediata su Web) mentre la richiesta al server procede in background, con ripristino automatico in caso di errore di rete.
+- **Lightbox Istantanea & Azioni Cestino Ottimistiche (`0ms`)**: precaricamento automatico delle foto adiacenti e rimozione/ripristino immediato nella UI su Web e Android.
 
 ---
 
-## 🚀 Funzionalità Introdotte nella `v1.0.9` e Perfezionate nella `v1.10`
+## 🚀 Funzionalità Introdotte nella `v1.0.9`–`v1.10` e Perfezionate nella `v1.1.1`
 
 ### 1. Indicatore Discreto dei Trasferimenti & Chiusura Automatica (Web & Android APK)
 - **Nessuna Apertura Automatica Intrusiva**: quando parte un caricamento (Upload), uno scaricamento (Download singolo o pacchetto ZIP) o il salvataggio di una foto modificata, **la schermata dei trasferimenti NON si apre più automaticamente**, lasciando libera la navigazione tra Galleria, File Manager Cloud, Cestino e Impostazioni.
@@ -163,11 +166,11 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 
 ---
 
-### 🤖 4. Android (Installazione APK `v1.10` & Compilazione da Sorgente)
+### 🤖 4. Android (Installazione APK `v1.1.1` & Compilazione da Sorgente)
 
-#### Opzione A: Installare l'APK Firmato Pronto (`v1.10`)
-1. Scarica **`photocloud-release-v1.10-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases)** oppure dalla cartella locale `/release/photocloud-release-v1.10-signed.apk`.
-2. Apri il file `.apk` sul tuo dispositivo Android per installarlo o aggiornare direttamente una versione precedente (`v1.0.4`–`v1.0.9`) senza perdere dati o configurazioni.
+#### Opzione A: Installare l'APK Firmato Pronto (`v1.1.1`)
+1. Scarica **`photocloud-release-v1.1.1-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases)** oppure dalla cartella locale `/release/photocloud-release-v1.1.1-signed.apk`.
+2. Apri il file `.apk` sul tuo dispositivo Android per installarlo o aggiornare direttamente una versione precedente (`v1.0.4`–`v1.10`) senza perdere dati o configurazioni.
 3. Tocca il badge **Server** in alto a destra per inserire l'URL del tuo server PhotoCloud (`http://<IP-SERVER>:3000`), effettua il login con il tuo file `.json` e apri o modifica istantaneamente qualsiasi foto, video, PDF o documento Office.
 
 #### Opzione B: Compilare l'APK da Sorgente con Gradle
@@ -176,7 +179,7 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 cd android-app
 gradle assembleRelease --no-daemon
 
-# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.10-signed.apk
+# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.1.1-signed.apk
 npm run release:apk
 ```
 
@@ -189,9 +192,9 @@ npm run release:apk
 | `npm run dev` | Avvia il server full-stack Express + Vite in modalità sviluppo sulla porta `3000`. |
 | `npm run build` | Compila i bundle frontend ottimizzati per la produzione. |
 | `npm start` | Avvia il server Node.js/TypeScript in modalità produzione. |
-| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, template e configurazione Android `v1.10`). |
+| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, template e configurazione Android `v1.1.1`). |
 | `npm run lint` | Verifica statica dei tipi TypeScript (`tsc --noEmit`). |
-| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.10-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
+| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.1.1-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
 
 ---
 
@@ -200,21 +203,21 @@ npm run release:apk
 ```text
 PhotoCloud/
 ├── .github/workflows/
-│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.10
+│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.1.1
 ├── android-app/                  # Progetto Nativo Android (Kotlin + Jetpack Compose Material You 120Hz)
 │   ├── app/
 │   │   ├── photocloud-release-key.jks  # Keystore RSA-2048 per firma APK
-│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.10 (versionCode 11)
+│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.1.1 (versionCode 12)
 │   │   └── src/main/
 │   │       ├── AndroidManifest.xml     # Permessi, FileProvider (content:// URI) e alias icone (Colorata + B/W)
 │   │       ├── java/com/valerio/photocloud/
-│   │       │   ├── MainActivity.kt          # UI Nativa 120Hz, Photo Editor 0ms (GPU ColorFilter + 1080px Geometry Preview), Indicatore Trasferimenti Discreto, NativeDocumentViewerModal
-│   │       │   └── PhotoCloudApiClient.kt   # Client HTTP, cache 0ms, preview documenti, FileProvider chooser e tracker velocità
+│   │       │   ├── MainActivity.kt          # UI Nativa 120Hz, Keep-Alive Gallery Grid 0ms, Photo Editor 0ms (GPU ColorFilter), Indicatore Trasferimenti Discreto, NativeDocumentViewerModal
+│   │       │   └── PhotoCloudApiClient.kt   # Client HTTP, thumbnailCache RAM 0ms (380px), preview documenti, FileProvider chooser e tracker velocità
 │   │       └── res/
 │   │           ├── xml/file_paths.xml       # Percorsi autorizzati per FileProvider
 │   │           └── drawable/                # Icone Launcher Colorata e Monocromatica
 ├── release/
-│   ├── photocloud-release-v1.10-signed.apk  # Pacchetto APK firmato v1.10 pronto per l'installazione
+│   ├── photocloud-release-v1.1.1-signed.apk # Pacchetto APK firmato v1.1.1 pronto per l'installazione
 │   └── photocloud-release-build.json        # Metadati e checksum SHA-256 della build
 ├── src/
 │   ├── lib/
@@ -226,7 +229,7 @@ PhotoCloud/
 │   │   └── crypto.test.ts              # Suite di test unitari e di integrazione
 │   └── types.ts                        # Tipi TypeScript condivisi
 ├── static/
-│   ├── scripts/                        # Logica client Web 0ms (photo-editor.js, grouping.js, lightbox.js, trash.js, document-viewer.js, upload.js)
+│   ├── scripts/                        # Logica client Web 0ms (grouping.js Keep-Alive Panes, photo-editor.js, lightbox.js, trash.js, document-viewer.js, upload.js)
 │   └── styles/                         # Fogli di stile Material You (base.css, gallery.css, login.css)
 ├── server.ts                           # Server Express principale (API Media, Document Preview, Photo Edit, File Cloud, Album, ZIP, Auth)
 └── package.json

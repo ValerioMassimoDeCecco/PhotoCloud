@@ -1474,25 +1474,43 @@ fun NativeVaultScreen(
         (albumsList + fromItems).distinct().sorted()
     }
 
-    val rawItemsForCurrentTab = when (currentTab) {
-        VaultTab.GALLERY -> {
-            if (selectedAlbumFilter != null) {
-                mediaOnlyItems.filter { it.album == selectedAlbumFilter }
-            } else {
-                mediaOnlyItems
-            }
+    val filteredGalleryMedia = remember(mediaOnlyItems, selectedAlbumFilter) {
+        if (selectedAlbumFilter != null) {
+            mediaOnlyItems.filter { it.album == selectedAlbumFilter }
+        } else {
+            mediaOnlyItems
         }
-        VaultTab.FILES -> nonMediaCloudFiles
-        VaultTab.TRASH -> visibleTrashItems
-        VaultTab.SETTINGS -> emptyList()
     }
 
-    val activeItems = remember(rawItemsForCurrentTab, custom.sortOrder) {
+    val gallerySortedItems = remember(filteredGalleryMedia, custom.sortOrder) {
         when (custom.sortOrder) {
-            SortOrder.NEWEST -> rawItemsForCurrentTab.sortedByDescending { it.timestamp }
-            SortOrder.OLDEST -> rawItemsForCurrentTab.sortedBy { it.timestamp }
-            SortOrder.NAME_ASC -> rawItemsForCurrentTab.sortedBy { it.filename.lowercase() }
+            SortOrder.NEWEST -> filteredGalleryMedia.sortedByDescending { it.timestamp }
+            SortOrder.OLDEST -> filteredGalleryMedia.sortedBy { it.timestamp }
+            SortOrder.NAME_ASC -> filteredGalleryMedia.sortedBy { it.filename.lowercase() }
         }
+    }
+
+    val filesSortedItems = remember(nonMediaCloudFiles, custom.sortOrder) {
+        when (custom.sortOrder) {
+            SortOrder.NEWEST -> nonMediaCloudFiles.sortedByDescending { it.timestamp }
+            SortOrder.OLDEST -> nonMediaCloudFiles.sortedBy { it.timestamp }
+            SortOrder.NAME_ASC -> nonMediaCloudFiles.sortedBy { it.filename.lowercase() }
+        }
+    }
+
+    val trashSortedItems = remember(visibleTrashItems, custom.sortOrder) {
+        when (custom.sortOrder) {
+            SortOrder.NEWEST -> visibleTrashItems.sortedByDescending { it.timestamp }
+            SortOrder.OLDEST -> visibleTrashItems.sortedBy { it.timestamp }
+            SortOrder.NAME_ASC -> visibleTrashItems.sortedBy { it.filename.lowercase() }
+        }
+    }
+
+    val activeItems = when (currentTab) {
+        VaultTab.GALLERY -> gallerySortedItems
+        VaultTab.FILES -> filesSortedItems
+        VaultTab.TRASH -> trashSortedItems
+        VaultTab.SETTINGS -> emptyList()
     }
     val isFromTrash = currentTab == VaultTab.TRASH
     val localContext = LocalContext.current
@@ -1557,11 +1575,12 @@ fun NativeVaultScreen(
         }
     }
 
-    val groupedSections = remember(activeItems, groupingMode, currentTab) {
-        if (currentTab == VaultTab.TRASH || groupingMode == GroupingMode.NONE) {
-            listOf("" to activeItems)
+    // Pre-computed independently of currentTab so returning to Gallery requires 0ms CPU work
+    val galleryGroupedSections = remember(gallerySortedItems, groupingMode) {
+        if (groupingMode == GroupingMode.NONE) {
+            listOf("" to gallerySortedItems)
         } else if (groupingMode == GroupingMode.ALBUM) {
-            val byAlbum = activeItems.groupBy { item ->
+            val byAlbum = gallerySortedItems.groupBy { item ->
                 item.album.ifBlank { "Senza Album" }
             }
             byAlbum.entries
@@ -1574,7 +1593,7 @@ fun NativeVaultScreen(
                 GroupingMode.YEAR -> SimpleDateFormat("yyyy", Locale.ITALIAN)
                 else -> SimpleDateFormat("MMMM yyyy", Locale.ITALIAN)
             }
-            activeItems.groupBy { item ->
+            gallerySortedItems.groupBy { item ->
                 val label = fmt.format(Date((item.timestamp * 1000).toLong()))
                 label.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ITALIAN) else it.toString() }
             }.toList()
@@ -1594,7 +1613,8 @@ fun NativeVaultScreen(
         }
     }
 
-    val gridState = rememberLazyGridState()
+    val galleryGridState = rememberLazyGridState()
+    val trashGridState = rememberLazyGridState()
 
     var dragStartIndex by remember { mutableStateOf<Int?>(null) }
     var dragLastIndex by remember { mutableStateOf<Int?>(null) }
@@ -1908,76 +1928,23 @@ fun NativeVaultScreen(
                 }
             }
 
-            when (currentTab) {
-                VaultTab.SETTINGS -> {
-                    NativeSettingsScreen(
-                        activity = activity,
-                        apiClient = apiClient,
-                        serverUrl = serverUrl,
-                        galleryCount = mediaOnlyItems.size,
-                        cloudFilesCount = nonMediaCloudFiles.size,
-                        trashCount = trashItems.size,
-                        custom = custom,
-                        onUpdateCustom = onUpdateCustom,
-                        onOpenServerConfig = onOpenServerConfig,
-                        onScanDuplicates = {
-                            isScanningDuplicates = true
-                            scope.launch {
-                                val groups = apiClient.findDuplicates()
-                                isScanningDuplicates = false
-                                if (groups.isEmpty()) {
-                                    onShowInfo("Nessun duplicato trovato")
-                                } else {
-                                    duplicateGroups = groups
-                                }
-                            }
-                        },
-                        onLockNow = onLockNow,
-                        onLogout = onLogout,
-                        onShowInfo = onShowInfo
-                    )
-                }
-
-                VaultTab.FILES -> {
-                    NativeCloudFileManagerScreen(
-                        files = activeItems,
-                        selectedFilenames = selectedFilenames,
-                        albumsList = allAlbumNames,
-                        onToggleSelect = { fn ->
-                            triggerHaptic()
-                            selectedFilenames = if (selectedFilenames.contains(fn)) {
-                                selectedFilenames - fn
-                            } else {
-                                selectedFilenames + fn
-                            }
-                        },
-                        onOpenFile = { item ->
-                            handleOpenCloudItem(item)
-                        },
-                        onOpenWithExternalApp = { item ->
-                            openCloudItemWithExternalChooser(item)
-                        },
-                        onDownloadFile = { item ->
-                            scope.launch {
-                                val (_, msg) = apiClient.saveSingleMediaToDownloads(
-                                    filename = item.filename,
-                                    fromTrash = false,
-                                    onTransferUpdate = { op -> upsertTransferOperation(op) }
-                                )
-                                onShowInfo(msg)
-                            }
-                        },
-                        onUploadFilesClick = {
-                            uploadLauncher.launch("*/*")
-                        },
-                        onOpenAlbumManager = {
-                            showAlbumDialog = true
+            // =========================================================================
+            // === KEEP-ALIVE TAB CONTENT CONTAINER (0.0ms instant return to Gallery)
+            // =========================================================================
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                // 1. PERMANENTLY MOUNTED GALLERY PANE (Never disposed on tab switch!)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            alpha = if (currentTab == VaultTab.GALLERY) 1f else 0f
                         }
-                    )
-                }
-
-                else -> {
-                    if (activeItems.isEmpty()) {
+                ) {
+                    if (gallerySortedItems.isEmpty()) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -1986,29 +1953,29 @@ fun NativeVaultScreen(
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(
-                                    imageVector = if (currentTab == VaultTab.GALLERY) Icons.Default.PhotoLibrary else Icons.Default.DeleteOutline,
+                                    imageVector = Icons.Default.PhotoLibrary,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
                                     modifier = Modifier.size(52.dp)
                                 )
                                 Spacer(Modifier.height(12.dp))
                                 Text(
-                                    text = if (currentTab == VaultTab.GALLERY) "Nessuna foto o video qui" else "Il cestino è vuoto",
+                                    text = "Nessuna foto o video qui",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    text = if (currentTab == VaultTab.GALLERY) "Tocca + Carica nella barra in basso" else "Gli elementi eliminati appariranno qui",
+                                    text = "Tocca + Carica nella barra in basso",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                     } else {
-                        // 120Hz Photo Grid with Drag-to-Select Multi-Selection
+                        // 120Hz Photo Grid with Drag-to-Select Multi-Selection (Kept alive across tabs)
                         LazyVerticalGrid(
-                            state = gridState,
+                            state = galleryGridState,
                             columns = GridCells.Fixed(custom.gridColumns.coerceIn(2, 5)),
                             contentPadding = PaddingValues(
                                 start = 6.dp,
@@ -2018,14 +1985,15 @@ fun NativeVaultScreen(
                             ),
                             horizontalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
                             verticalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
+                            userScrollEnabled = currentTab == VaultTab.GALLERY,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .pointerInput(activeItems, currentTab) {
+                                .pointerInput(gallerySortedItems, currentTab) {
                                     if (currentTab != VaultTab.GALLERY) return@pointerInput
                                     detectDragGesturesAfterLongPress(
                                         onDragStart = { startOffset ->
-                                            val hitFn = findMediaFilenameAtOffset(gridState, startOffset)
-                                            val idx = activeItems.indexOfFirst { it.filename == hitFn }
+                                            val hitFn = findMediaFilenameAtOffset(galleryGridState, startOffset)
+                                            val idx = gallerySortedItems.indexOfFirst { it.filename == hitFn }
                                             if (idx >= 0 && hitFn != null) {
                                                 triggerHaptic(longPress = true)
                                                 dragStartIndex = idx
@@ -2047,22 +2015,22 @@ fun NativeVaultScreen(
                                             val startIdx = dragStartIndex ?: return@detectDragGesturesAfterLongPress
                                             change.consume()
 
-                                            val viewportH = gridState.layoutInfo.viewportSize.height.toFloat()
+                                            val viewportH = galleryGridState.layoutInfo.viewportSize.height.toFloat()
                                             val y = change.position.y
                                             if (y < 140f) {
-                                                scope.launch { gridState.scrollBy(-28f) }
+                                                scope.launch { galleryGridState.scrollBy(-28f) }
                                             } else if (y > viewportH - 220f) {
-                                                scope.launch { gridState.scrollBy(28f) }
+                                                scope.launch { galleryGridState.scrollBy(28f) }
                                             }
 
-                                            val hitFn = findMediaFilenameAtOffset(gridState, change.position)
-                                            val currentIdx = activeItems.indexOfFirst { it.filename == hitFn }
+                                            val hitFn = findMediaFilenameAtOffset(galleryGridState, change.position)
+                                            val currentIdx = gallerySortedItems.indexOfFirst { it.filename == hitFn }
                                             if (currentIdx >= 0 && currentIdx != dragLastIndex) {
                                                 dragLastIndex = currentIdx
                                                 triggerHaptic(longPress = false)
                                                 val rangeStart = minOf(startIdx, currentIdx)
                                                 val rangeEnd = maxOf(startIdx, currentIdx)
-                                                val rangeFilenames = activeItems
+                                                val rangeFilenames = gallerySortedItems
                                                     .subList(rangeStart, rangeEnd + 1)
                                                     .map { it.filename }
                                                     .toSet()
@@ -2085,7 +2053,7 @@ fun NativeVaultScreen(
                                     )
                                 }
                         ) {
-                            groupedSections.forEach { (sectionTitle, sectionItems) ->
+                            galleryGroupedSections.forEach { (sectionTitle, sectionItems) ->
                                 if (sectionTitle.isNotBlank()) {
                                     item(
                                         key = "header_$sectionTitle",
@@ -2109,14 +2077,15 @@ fun NativeVaultScreen(
                                     MediaGridTile(
                                         apiClient = apiClient,
                                         item = mediaItem,
-                                        fromTrash = isFromTrash,
+                                        fromTrash = false,
                                         isSelected = isSelected,
                                         inSelectionMode = selectedFilenames.isNotEmpty(),
                                         cornerRadiusDp = custom.tileCornerRadiusDp,
                                         aspectRatio = if (custom.portraitAspectRatio) 0.8f else 1f,
                                         showVideoBadge = custom.showVideoBadges,
                                         onClick = {
-                                            if (selectedFilenames.isNotEmpty() && currentTab == VaultTab.GALLERY) {
+                                            if (currentTab != VaultTab.GALLERY) return@MediaGridTile
+                                            if (selectedFilenames.isNotEmpty()) {
                                                 triggerHaptic()
                                                 selectedFilenames = if (isSelected) {
                                                     selectedFilenames - mediaItem.filename
@@ -2124,7 +2093,7 @@ fun NativeVaultScreen(
                                                     selectedFilenames + mediaItem.filename
                                                 }
                                             } else if (mediaItem.isMedia) {
-                                                val globalIndex = activeItems.indexOfFirst { it.filename == mediaItem.filename }
+                                                val globalIndex = gallerySortedItems.indexOfFirst { it.filename == mediaItem.filename }
                                                 if (globalIndex >= 0) {
                                                     lightboxInitialIndex = globalIndex
                                                 }
@@ -2142,8 +2111,171 @@ fun NativeVaultScreen(
                                                 }
                                             }
                                         },
-                                        onRestore = if (isFromTrash) {
-                                            {
+                                        onRestore = null,
+                                        onDeletePermanent = null
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2. OVERLAY PANES FOR FILES, TRASH, AND SETTINGS
+                when (currentTab) {
+                    VaultTab.GALLERY -> Unit
+
+                    VaultTab.SETTINGS -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.background)
+                        ) {
+                            NativeSettingsScreen(
+                                activity = activity,
+                                apiClient = apiClient,
+                                serverUrl = serverUrl,
+                                galleryCount = mediaOnlyItems.size,
+                                cloudFilesCount = nonMediaCloudFiles.size,
+                                trashCount = trashItems.size,
+                                custom = custom,
+                                onUpdateCustom = onUpdateCustom,
+                                onOpenServerConfig = onOpenServerConfig,
+                                onScanDuplicates = {
+                                    isScanningDuplicates = true
+                                    scope.launch {
+                                        val groups = apiClient.findDuplicates()
+                                        isScanningDuplicates = false
+                                        if (groups.isEmpty()) {
+                                            onShowInfo("Nessun duplicato trovato")
+                                        } else {
+                                            duplicateGroups = groups
+                                        }
+                                    }
+                                },
+                                onLockNow = onLockNow,
+                                onLogout = onLogout,
+                                onShowInfo = onShowInfo
+                            )
+                        }
+                    }
+
+                    VaultTab.FILES -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.background)
+                        ) {
+                            NativeCloudFileManagerScreen(
+                                files = filesSortedItems,
+                                selectedFilenames = selectedFilenames,
+                                albumsList = allAlbumNames,
+                                onToggleSelect = { fn ->
+                                    triggerHaptic()
+                                    selectedFilenames = if (selectedFilenames.contains(fn)) {
+                                        selectedFilenames - fn
+                                    } else {
+                                        selectedFilenames + fn
+                                    }
+                                },
+                                onOpenFile = { item ->
+                                    handleOpenCloudItem(item)
+                                },
+                                onOpenWithExternalApp = { item ->
+                                    openCloudItemWithExternalChooser(item)
+                                },
+                                onDownloadFile = { item ->
+                                    scope.launch {
+                                        val (_, msg) = apiClient.saveSingleMediaToDownloads(
+                                            filename = item.filename,
+                                            fromTrash = false,
+                                            onTransferUpdate = { op -> upsertTransferOperation(op) }
+                                        )
+                                        onShowInfo(msg)
+                                    }
+                                },
+                                onUploadFilesClick = {
+                                    uploadLauncher.launch("*/*")
+                                },
+                                onOpenAlbumManager = {
+                                    showAlbumDialog = true
+                                }
+                            )
+                        }
+                    }
+
+                    VaultTab.TRASH -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.background)
+                        ) {
+                            if (trashSortedItems.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(bottom = 110.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Icon(
+                                            imageVector = Icons.Default.DeleteOutline,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                                            modifier = Modifier.size(52.dp)
+                                        )
+                                        Spacer(Modifier.height(12.dp))
+                                        Text(
+                                            text = "Il cestino è vuoto",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = "Gli elementi eliminati appariranno qui",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            } else {
+                                LazyVerticalGrid(
+                                    state = trashGridState,
+                                    columns = GridCells.Fixed(custom.gridColumns.coerceIn(2, 5)),
+                                    contentPadding = PaddingValues(
+                                        start = 6.dp,
+                                        end = 6.dp,
+                                        top = 6.dp,
+                                        bottom = 140.dp
+                                    ),
+                                    horizontalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
+                                    verticalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    items(
+                                        items = trashSortedItems,
+                                        key = { "trash_${it.filename}" }
+                                    ) { mediaItem ->
+                                        MediaGridTile(
+                                            apiClient = apiClient,
+                                            item = mediaItem,
+                                            fromTrash = true,
+                                            isSelected = false,
+                                            inSelectionMode = false,
+                                            cornerRadiusDp = custom.tileCornerRadiusDp,
+                                            aspectRatio = if (custom.portraitAspectRatio) 0.8f else 1f,
+                                            showVideoBadge = custom.showVideoBadges,
+                                            onClick = {
+                                                if (mediaItem.isMedia) {
+                                                    val globalIndex = trashSortedItems.indexOfFirst { it.filename == mediaItem.filename }
+                                                    if (globalIndex >= 0) {
+                                                        lightboxInitialIndex = globalIndex
+                                                    }
+                                                } else {
+                                                    handleOpenCloudItem(mediaItem)
+                                                }
+                                            },
+                                            onLongClick = {},
+                                            onRestore = {
                                                 optimisticRemovedTrash = optimisticRemovedTrash + mediaItem.filename
                                                 scope.launch {
                                                     if (apiClient.restoreFromTrash(mediaItem.filename)) {
@@ -2153,10 +2285,8 @@ fun NativeVaultScreen(
                                                         optimisticRemovedTrash = optimisticRemovedTrash - mediaItem.filename
                                                     }
                                                 }
-                                            }
-                                        } else null,
-                                        onDeletePermanent = if (isFromTrash) {
-                                            {
+                                            },
+                                            onDeletePermanent = {
                                                 optimisticRemovedTrash = optimisticRemovedTrash + mediaItem.filename
                                                 scope.launch {
                                                     if (apiClient.deletePermanent(mediaItem.filename)) {
@@ -2167,8 +2297,8 @@ fun NativeVaultScreen(
                                                     }
                                                 }
                                             }
-                                        } else null
-                                    )
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -3991,14 +4121,14 @@ fun MediaGridTile(
 ) {
     var bitmap by remember(item.filename, fromTrash) {
         mutableStateOf(
-            if (item.isMedia) apiClient.getCachedBitmap(item.filename, fromTrash) else null
+            if (item.isMedia && !item.isVideo) apiClient.getRamThumbnailBitmap(item.filename, fromTrash) else null
         )
     }
     var loadFailed by remember(item.filename) { mutableStateOf(false) }
 
     LaunchedEffect(item.filename, fromTrash) {
         if (item.isMedia && bitmap == null && !item.isVideo) {
-            val loaded = apiClient.loadMediaBitmap(item.filename, fromTrash)
+            val loaded = apiClient.loadThumbnailBitmap(item.filename, fromTrash)
             if (loaded != null) {
                 bitmap = loaded
             } else {
@@ -4017,6 +4147,7 @@ fun MediaGridTile(
     )
 
     val shape = RoundedCornerShape(if (isSelected) (cornerRadiusDp + 8).dp else cornerRadiusDp.dp)
+    val rememberedImageBitmap = remember(bitmap) { bitmap?.asImageBitmap() }
 
     Box(
         modifier = Modifier
@@ -4034,10 +4165,9 @@ fun MediaGridTile(
                 .scale(scale)
                 .clip(shape)
         ) {
-            val currentBmp = bitmap
-            if (currentBmp != null) {
+            if (rememberedImageBitmap != null) {
                 Image(
-                    bitmap = currentBmp.asImageBitmap(),
+                    bitmap = rememberedImageBitmap,
                     contentDescription = item.filename,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
@@ -4227,14 +4357,20 @@ fun NativeLightboxModal(
         ) { pageIndex ->
             val media = items[pageIndex]
             var bmp by remember(media.filename, fromTrash) {
-                mutableStateOf(apiClient.getCachedBitmap(media.filename, fromTrash))
+                mutableStateOf(
+                    apiClient.getCachedBitmap(media.filename, fromTrash)
+                        ?: apiClient.getRamThumbnailBitmap(media.filename, fromTrash)
+                )
             }
             var isLoading by remember(media.filename) { mutableStateOf(bmp == null && !media.isVideo) }
 
             LaunchedEffect(media.filename, fromTrash) {
-                if (bmp == null && !media.isVideo) {
-                    isLoading = true
-                    bmp = apiClient.loadMediaBitmap(media.filename, fromTrash)
+                if (!media.isVideo && apiClient.getCachedBitmap(media.filename, fromTrash) == null) {
+                    if (bmp == null) isLoading = true
+                    val fullBmp = apiClient.loadMediaBitmap(media.filename, fromTrash)
+                    if (fullBmp != null) {
+                        bmp = fullBmp
+                    }
                     isLoading = false
                 }
             }
@@ -4734,7 +4870,10 @@ fun NativePhotoEditorModal(
 ) {
     val scope = rememberCoroutineScope()
     var sourceBitmap by remember(filename) {
-        mutableStateOf(apiClient.getCachedBitmap(filename, false))
+        mutableStateOf(
+            apiClient.getCachedBitmap(filename, false)
+                ?: apiClient.getRamThumbnailBitmap(filename, false)
+        )
     }
     var isLoading by remember(filename) { mutableStateOf(sourceBitmap == null) }
     var isSaving by remember { mutableStateOf(false) }
@@ -4754,9 +4893,12 @@ fun NativePhotoEditorModal(
     var cropRect by remember { mutableStateOf(NormalizedAndroidCropRect(0f, 0f, 1f, 1f)) }
 
     LaunchedEffect(filename) {
-        if (sourceBitmap == null) {
-            isLoading = true
-            sourceBitmap = apiClient.loadMediaBitmap(filename, false)
+        if (apiClient.getCachedBitmap(filename, false) == null) {
+            if (sourceBitmap == null) isLoading = true
+            val fullBmp = apiClient.loadMediaBitmap(filename, false)
+            if (fullBmp != null) {
+                sourceBitmap = fullBmp
+            }
             isLoading = false
         }
     }

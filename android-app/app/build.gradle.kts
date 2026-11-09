@@ -12,8 +12,8 @@ android {
         applicationId = "com.valerio.photocloud"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.10"
+        versionCode = 12
+        versionName = "1.1.1"
 
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:5000\"")
     }
