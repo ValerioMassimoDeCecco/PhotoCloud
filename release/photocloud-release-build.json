@@ -1,13 +1,13 @@
 {
-  "apkFilename": "photocloud-release-v1.1.3-signed.apk",
-  "sha256": "cbf0af2cf850603805e31b5fabeaa3f721333bf0a3897df5cf33dac9ae54009c",
-  "sizeBytes": 12425544,
+  "apkFilename": "photocloud-release-v1.1.4-signed.apk",
+  "sha256": "c8f500f2ac5d939f69589d90095827bce5a70a8927d08555fee93e630f1b0529",
+  "sizeBytes": 12425559,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.1.3",
-  "versionCode": 14,
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.1.3",
-  "builtBy": "GitHub Actions (.github/workflows/android-release.yml) on tag v1.1.3, run 42682415389",
-  "publishedAt": "2026-11-09T19:23:19Z",
-  "assetDigestSource": "GitHub API release asset digest (repos/ValerioMassimoDeCecco/PhotoCloud/releases/assets/728679121)",
-  "note": "Il binario v1.1.3 non è committato in questo repository: l'APK firmato ufficiale è scaricabile dalla Release GitHub v1.1.3. Lo SHA-256 riportato è il digest calcolato da GitHub sull'asset pubblicato. Per generare un APK locale con hash diverso, usare: cd android-app && gradle assembleRelease (richiede JDK 17 + Android SDK 35)."
+  "versionName": "1.1.4",
+  "versionCode": 15,
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.1.4",
+  "builtBy": "GitHub Actions (.github/workflows/android-release.yml) on tag v1.1.4, run 42688351353",
+  "publishedAt": "2026-11-09T19:59:50Z",
+  "assetDigestSource": "GitHub API release asset digest (repos/ValerioMassimoDeCecco/PhotoCloud/releases/assets/728785887)",
+  "note": "Il binario v1.1.4 non è committato in questo repository: l'APK firmato ufficiale è scaricabile dalla Release GitHub v1.1.4. Lo SHA-256 riportato è il digest calcolato da GitHub sull'asset pubblicato. Per generare un APK locale con hash diverso, usare: cd android-app && gradle assembleRelease (richiede JDK 17 + Android SDK 35)."
 }
