@@ -1,12 +1,12 @@
 [
   {
-    "buildId": "v1.1.5-release",
-    "timestamp": 1794298500000,
+    "buildId": "v1.2.0-release",
+    "timestamp": 1794299880000,
     "config": {
       "appName": "PhotoCloud",
       "packageName": "com.valerio.photocloud",
-      "versionName": "1.1.5",
-      "versionCode": 16,
+      "versionName": "1.2.0",
+      "versionCode": 17,
       "serverUrl": "http://10.0.2.2:3000",
       "minSdk": 26,
       "targetSdk": 35,
@@ -16,11 +16,11 @@
       "signingMode": "release",
       "keystoreAlias": "photocloud-release-key"
     },
-    "apkFilename": "photocloud-release-v1.1.5-signed.apk",
-    "aabFilename": "photocloud-release-v1.1.5.aab",
-    "projectZipFilename": "photocloud-android-studio-project-v1.1.5.zip",
-    "sha256Fingerprint": "48d876f9788204af8bcb356e3240fdf527444f8f72dd49efe1af4a2aef7ef15e",
-    "apkSizeBytes": 12425532,
+    "apkFilename": "photocloud-release-v1.2.0-signed.apk",
+    "aabFilename": "photocloud-release-v1.2.0.aab",
+    "projectZipFilename": "photocloud-android-studio-project-v1.2.0.zip",
+    "sha256Fingerprint": "7824967ec4a13a536d59dca0f1702a123a4f73c7aaf1b6beb1c21775a612e779",
+    "apkSizeBytes": 83198897,
     "steps": [
       {
         "id": "step-validate",
@@ -31,10 +31,10 @@
       },
       {
         "id": "step-generate",
-        "label": "Generazione sorgenti nativi Kotlin Jetpack Compose & build.gradle.kts",
+        "label": "Generazione sorgenti nativi Kotlin Jetpack Compose, Room KSP & MediaPipe AI",
         "durationMs": 92,
         "status": "completed",
-        "command": "generateMainActivityKt + generateAppBuildGradleKts"
+        "command": "kspReleaseKotlin + compileReleaseKotlin"
       },
       {
         "id": "step-assemble",
@@ -48,7 +48,7 @@
         "label": "Verifica digest SHA-256 e pacchettizzazione progetto Android Studio (.ZIP)",
         "durationMs": 48,
         "status": "completed",
-        "command": "sha256sum photocloud-release-v1.1.5-signed.apk"
+        "command": "sha256sum photocloud-release-v1.2.0-signed.apk"
       }
     ]
   }

@@ -1,17 +1,17 @@
 {
-  "apkFilename": "photocloud-release-v1.1.5-signed.apk",
-  "sha256": "48d876f9788204af8bcb356e3240fdf527444f8f72dd49efe1af4a2aef7ef15e",
-  "sizeBytes": 12425532,
+  "apkFilename": "photocloud-release-v1.2.0-signed.apk",
+  "sha256": "7824967ec4a13a536d59dca0f1702a123a4f73c7aaf1b6beb1c21775a612e779",
+  "sizeBytes": 83198897,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.1.5",
-  "versionCode": 16,
+  "versionName": "1.2.0",
+  "versionCode": 17,
   "features": [
-    "Drag-to-select sui media della galleria con marquee box su Web e selezione continua post-long-press su Android APK",
-    "Navigazione gestuale tra le foto con swipe fluido a 1 dito, doppio tap zoom e animazioni coerenti di scala/opacità/parallasse nella lightbox",
-    "Swipe verticale per chiusura fluida (dismiss) con dissolvenza dello sfondo",
-    "Release APK nativa firmata v1.1.5 compilata con Gradle 8.10.2 e Android SDK 35"
+    "Categorizzazione automatica delle foto 100% offline con AI locale (MediaPipe Tasks Vision + EfficientNet-Lite4)",
+    "Accelerazione hardware GPU con fallback resiliente su CPU, pre-processing anti-OOM 380x380 ARGB_8888 e rotazione EXIF",
+    "Database reattivo Room (PhotoAiDatabase) e indicizzazione in background non bloccante (WorkManager PhotoAiIndexingWorker)",
+    "Filtri rapidi per categoria AI nella Galleria, barra di progresso in tempo reale e badge tag AI nel Lightbox"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.1.5",
-  "publishedAt": "2026-11-10T08:15:00Z"
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.0",
+  "publishedAt": "2026-11-10T08:38:00Z"
 }
 

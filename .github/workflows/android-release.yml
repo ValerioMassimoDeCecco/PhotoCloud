@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag della Release GitHub (es. v1.1.5)'
+        description: 'Tag della Release GitHub (es. v1.2.0)'
         required: false
-        default: 'v1.1.5'
+        default: 'v1.2.0'
 
 permissions:
   contents: write
@@ -42,6 +42,15 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Ensure On-Device AI TFLite Model in Assets
+        run: |
+          mkdir -p android-app/app/src/main/assets
+          if [ ! -s android-app/app/src/main/assets/efficientnet_lite4.tflite ]; then
+            curl -fL "https://storage.googleapis.com/mediapipe-models/image_classifier/efficientnet_lite2/float32/latest/efficientnet_lite2.tflite" \
+              -o android-app/app/src/main/assets/efficientnet_lite4.tflite
+          fi
+          ls -lh android-app/app/src/main/assets/efficientnet_lite4.tflite
+
       - name: Verify Persistent Release Keystore (RSA-2048 from v1.0.4)
         working-directory: ./android-app/app
         env:
@@ -72,9 +81,9 @@ jobs:
             echo "Errore: nessun file APK trovato in app/build/outputs/apk/release"
             exit 1
           fi
-          cp "$APK_OUT" ../photocloud-release-v1.1.5-signed.apk
+          cp "$APK_OUT" ../photocloud-release-v1.2.0-signed.apk
           cp "$APK_OUT" ../photocloud-release-v1.1.3-signed.apk
-          sha256sum ../photocloud-release-v1.1.5-signed.apk > ../photocloud-release-v1.1.5-signed.apk.sha256
+          sha256sum ../photocloud-release-v1.2.0-signed.apk > ../photocloud-release-v1.2.0-signed.apk.sha256
           sha256sum ../photocloud-release-v1.1.3-signed.apk > ../photocloud-release-v1.1.3-signed.apk.sha256
 
       - name: Upload Signed APK as GitHub Actions Artifact
@@ -82,8 +91,8 @@ jobs:
         with:
           name: photocloud-release-signed-apk
           path: |
-            photocloud-release-v1.1.5-signed.apk
-            photocloud-release-v1.1.5-signed.apk.sha256
+            photocloud-release-v1.2.0-signed.apk
+            photocloud-release-v1.2.0-signed.apk.sha256
             photocloud-release-v1.1.3-signed.apk
             photocloud-release-v1.1.3-signed.apk.sha256
           if-no-files-found: error
@@ -96,7 +105,7 @@ jobs:
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "TAG=v1.1.5" >> $GITHUB_OUTPUT
+            echo "TAG=v1.2.0" >> $GITHUB_OUTPUT
           fi
 
       - name: Publish Signed APK to GitHub Releases
@@ -106,19 +115,19 @@ jobs:
           name: PhotoCloud Android Release ${{ steps.release_meta.outputs.TAG }}
           body: |
             ### PhotoCloud Android Release (${{ steps.release_meta.outputs.TAG }})
-            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.10** per aggiornamento diretto.
+            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.1.5** per aggiornamento diretto.
 
             - **Application ID**: `com.valerio.photocloud`
-            - **Versione**: `1.1.5` (`versionCode 16`)
-            - **Novità v1.1.5**:
-              - **Selezione a trascinamento sui media (Drag-to-select)**: trascina il dito (dopo pressione prolungata su APK) o il puntatore sui media per selezionare un intervallo continuo con auto-scroll e aggancio continuo tra le tessere.
-              - **Navigazione gestuale fluida nel Lightbox con animazione coerente**: swipe orizzontale reattivo a 1 dito (senza blocco da pinch-to-zoom a 1x), animazione coerente di scala/opacità/parallasse, doppio tap per zoom 2.5x e pulsanti rapidi Prec./Succ.
-              - **Swipe verticale per chiudere (Dismiss)**: trascina la foto verso il basso o l'alto per chiudere il visualizzatore con sfumatura progressiva dello sfondo.
-            - **APK Firmato**: `photocloud-release-v1.1.5-signed.apk`
-            - **Checksum SHA-256**: `photocloud-release-v1.1.5-signed.apk.sha256`
+            - **Versione**: `1.2.0` (`versionCode 17`)
+            - **Novità v1.2.0 — Categorizzazione Foto con AI Locale (On-Device)**:
+              - **Motore AI On-Device (`LocalPhotoCategorizer` + `efficientnet_lite4.tflite`)**: classificazione 100% offline con accelerazione GPU (`Delegate.GPU`) e fallback resiliente automatico su CPU (`Delegate.CPU`), pre-processing anti-OOM a 380x380px `ARGB_8888` e rotazione EXIF.
+              - **Database Reattivo Room (`PhotoAiDatabase`) & Indicizzazione in Background (`PhotoAiIndexingWorker`)**: scansione incrementale in batch via `WorkManager` con barra di progresso non invasiva in tempo reale.
+              - **Filtri Rapidi per Categoria AI & Tag nel Dettaglio Foto**: chip scorrevoli nella Galleria con conteggio foto per categoria e badge AI nel visualizzatore a schermo intero.
+            - **APK Firmato**: `photocloud-release-v1.2.0-signed.apk`
+            - **Checksum SHA-256**: `photocloud-release-v1.2.0-signed.apk.sha256`
           files: |
-            photocloud-release-v1.1.5-signed.apk
-            photocloud-release-v1.1.5-signed.apk.sha256
+            photocloud-release-v1.2.0-signed.apk
+            photocloud-release-v1.2.0-signed.apk.sha256
             photocloud-release-v1.1.3-signed.apk
             photocloud-release-v1.1.3-signed.apk.sha256
           draft: false

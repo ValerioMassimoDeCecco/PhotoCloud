@@ -1,5 +1,6 @@
 package com.valerio.photocloud
 
+import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
@@ -67,6 +68,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -149,6 +151,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.media.MediaPlayer
@@ -1427,6 +1431,7 @@ fun NativeVaultScreen(
     var showGroupingMenu by remember { mutableStateOf(false) }
 
     var selectedAlbumFilter by remember { mutableStateOf<String?>(null) }
+    var selectedAiCategoryFilter by remember { mutableStateOf<String?>(null) }
     var showAlbumDialog by remember { mutableStateOf(false) }
 
     var selectedFilenames by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -1435,6 +1440,70 @@ fun NativeVaultScreen(
     var viewingDocumentItem by remember { mutableStateOf<MediaItemModel?>(null) }
     var externalFallbackItem by remember { mutableStateOf<MediaItemModel?>(null) }
     var pendingTrashConfirmFilenames by remember { mutableStateOf<List<String>?>(null) }
+
+    // On-Device AI Categorization (Room reactive Flows + WorkManager indexing state)
+    val appCtx = LocalContext.current.applicationContext
+    val photoAiDb = remember(appCtx) { PhotoAiDatabase.getInstance(appCtx) }
+    val photoAiDao = remember(photoAiDb) { photoAiDb.photoAiDao() }
+    val aiAnalyzedEntities by photoAiDao.observeAllAnalyzed().collectAsState(initial = emptyList())
+    val aiCategoryChips by photoAiDb.observeDistinctCategoriesWithCount().collectAsState(initial = emptyList())
+    val aiProgressTuple by photoAiDao.observeIndexingProgress().collectAsState(
+        initial = PhotoAiProgressTuple(totalCount = 0, analyzedCount = 0)
+    )
+    val aiWorkInfos by remember(appCtx) {
+        WorkManager.getInstance(appCtx).getWorkInfosForUniqueWorkFlow(PhotoAiIndexingWorker.UNIQUE_WORK_NAME)
+    }.collectAsState(initial = emptyList())
+
+    val activeAiWorkInfo = remember(aiWorkInfos) {
+        aiWorkInfos.firstOrNull { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+    }
+    val workerAnalyzed = activeAiWorkInfo?.progress?.getInt(PhotoAiIndexingWorker.KEY_ANALYZED, -1) ?: -1
+    val workerTotal = activeAiWorkInfo?.progress?.getInt(PhotoAiIndexingWorker.KEY_TOTAL, -1) ?: -1
+
+    val effectiveAiTotal = if (workerTotal > 0) workerTotal else aiProgressTuple.totalCount
+    val effectiveAiAnalyzed = if (workerAnalyzed >= 0 && workerTotal > 0) workerAnalyzed else aiProgressTuple.analyzedCount
+    val isAiIndexingRunning = activeAiWorkInfo?.state == WorkInfo.State.RUNNING ||
+        (effectiveAiTotal > 0 && effectiveAiAnalyzed < effectiveAiTotal)
+
+    val aiCategoriesByFilename = remember(aiAnalyzedEntities) {
+        val map = HashMap<String, List<String>>()
+        for (entity in aiAnalyzedEntities) {
+            val cats = entity.parsedCategoriesList()
+            if (cats.isNotEmpty()) {
+                if (entity.filename.isNotBlank()) {
+                    map[entity.filename] = cats
+                }
+                val fromCloudKey = entity.uriString.removePrefix("cloud://")
+                if (fromCloudKey.isNotBlank()) {
+                    map[fromCloudKey] = cats
+                }
+            }
+        }
+        map
+    }
+
+    val mediaPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        if (grants.values.any { it }) {
+            PhotoAiIndexingWorker.enqueueIndexing(appCtx, forceReindex = false)
+        }
+    }
+
+    LaunchedEffect(galleryItems.size) {
+        PhotoAiIndexingWorker.enqueueIndexing(appCtx, forceReindex = false)
+        if (!PhotoAiIndexingWorker.hasMediaReadPermission(appCtx)) {
+            val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+            } else {
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
+            try {
+                mediaPermissionLauncher.launch(perms)
+            } catch (_: Throwable) {
+            }
+        }
+    }
 
     // Top-Right Discreet Transfer Operations State (Uploads & Downloads with live speed & size)
     var transferOperations by remember { mutableStateOf<List<TransferOperation>>(emptyList()) }
@@ -1505,12 +1574,20 @@ fun NativeVaultScreen(
         (albumsList + fromItems).distinct().sorted()
     }
 
-    val filteredGalleryMedia = remember(mediaOnlyItems, selectedAlbumFilter) {
-        if (selectedAlbumFilter != null) {
+    val filteredGalleryMedia = remember(mediaOnlyItems, selectedAlbumFilter, selectedAiCategoryFilter, aiCategoriesByFilename) {
+        var result = if (selectedAlbumFilter != null) {
             mediaOnlyItems.filter { it.album == selectedAlbumFilter }
         } else {
             mediaOnlyItems
         }
+        val activeAiCat = selectedAiCategoryFilter
+        if (activeAiCat != null) {
+            result = result.filter { item ->
+                val itemCats = aiCategoriesByFilename[item.filename].orEmpty()
+                itemCats.any { it.equals(activeAiCat, ignoreCase = true) }
+            }
+        }
+        result
     }
 
     val gallerySortedItems = remember(filteredGalleryMedia, custom.sortOrder) {
@@ -1897,6 +1974,154 @@ fun NativeVaultScreen(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // On-Device AI Category Filter Chips Bar (Tutte + Categorie AI rilevate + Sincronizza AI)
+            if (currentTab == VaultTab.GALLERY) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 14.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = selectedAiCategoryFilter == null,
+                        onClick = { selectedAiCategoryFilter = null },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text("Tutte (${mediaOnlyItems.size})") }
+                    )
+                    aiCategoryChips.forEach { chip ->
+                        FilterChip(
+                            selected = selectedAiCategoryFilter == chip.category,
+                            onClick = {
+                                selectedAiCategoryFilter =
+                                    if (selectedAiCategoryFilter == chip.category) null else chip.category
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            },
+                            label = { Text("${chip.category} (${chip.count})") }
+                        )
+                    }
+                    AssistChip(
+                        onClick = {
+                            triggerHaptic()
+                            if (!PhotoAiIndexingWorker.hasMediaReadPermission(appCtx)) {
+                                val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+                                } else {
+                                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                                }
+                                try {
+                                    mediaPermissionLauncher.launch(perms)
+                                } catch (_: Throwable) {
+                                }
+                            }
+                            PhotoAiIndexingWorker.enqueueIndexing(appCtx, forceReindex = true)
+                            onShowInfo("Indicizzazione AI locale avviata (EfficientNet-Lite4)")
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Rianalizza foto con AI locale",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text("Rianalizza AI") }
+                    )
+                }
+            }
+
+            // Non-Invasive On-Device AI Indexing Progress Banner
+            AnimatedVisibility(
+                visible = currentTab == VaultTab.GALLERY && isAiIndexingRunning,
+                enter = fadeIn() + slideInVertically(),
+                exit = fadeOut() + slideOutVertically()
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.92f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 4.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = if (effectiveAiTotal > 0) {
+                                        "Indicizzazione AI in corso: $effectiveAiAnalyzed/$effectiveAiTotal foto..."
+                                    } else {
+                                        "Indicizzazione AI on-device in avvio..."
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                            if (effectiveAiTotal > 0) {
+                                val pct = ((effectiveAiAnalyzed.toFloat() / effectiveAiTotal.toFloat()) * 100f)
+                                    .toInt()
+                                    .coerceIn(0, 100)
+                                Text(
+                                    text = "$pct%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        if (effectiveAiTotal > 0) {
+                            LinearProgressIndicator(
+                                progress = {
+                                    (effectiveAiAnalyzed.toFloat() / effectiveAiTotal.toFloat()).coerceIn(0f, 1f)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(CircleShape),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.15f)
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(CircleShape),
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
                     }
                 }
@@ -2699,6 +2924,8 @@ fun NativeVaultScreen(
                 initialIndex = openIdx.coerceIn(0, activeItems.lastIndex),
                 fromTrash = isFromTrash,
                 autoplayVideos = custom.autoplayVideos,
+                aiCategoriesByFilename = aiCategoriesByFilename,
+                photoAiDao = photoAiDao,
                 onClose = { lightboxInitialIndex = null },
                 onEditPhoto = { filename ->
                     editingPhotoFilename = filename
@@ -4547,6 +4774,8 @@ fun NativeLightboxModal(
     initialIndex: Int,
     fromTrash: Boolean,
     autoplayVideos: Boolean,
+    aiCategoriesByFilename: Map<String, List<String>> = emptyMap(),
+    photoAiDao: PhotoAiDao? = null,
     onClose: () -> Unit,
     onEditPhoto: (String) -> Unit,
     onMoveToTrash: (String) -> Unit,
@@ -4554,12 +4783,48 @@ fun NativeLightboxModal(
     onDownload: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val localCtx = LocalContext.current.applicationContext
     val pagerState = rememberPagerState(
         initialPage = initialIndex,
         pageCount = { items.size }
     )
     val currentItem = items.getOrNull(pagerState.currentPage) ?: items.first()
     var dismissOffsetY by remember { mutableFloatStateOf(0f) }
+    var onDemandAiTags by remember(currentItem.filename) {
+        mutableStateOf(aiCategoriesByFilename[currentItem.filename].orEmpty())
+    }
+
+    LaunchedEffect(currentItem.filename, aiCategoriesByFilename) {
+        val existing = aiCategoriesByFilename[currentItem.filename].orEmpty()
+        if (existing.isNotEmpty()) {
+            onDemandAiTags = existing
+        } else if (!currentItem.isVideo && !fromTrash) {
+            val bmp = apiClient.getCachedBitmap(currentItem.filename, fromTrash)
+                ?: apiClient.getRamThumbnailBitmap(currentItem.filename, fromTrash)
+                ?: apiClient.loadThumbnailBitmap(currentItem.filename, fromTrash)
+            if (bmp != null) {
+                val classified = withContext(Dispatchers.Default) {
+                    LocalPhotoCategorizer(localCtx).use { categorizer ->
+                        categorizer.classifyBitmap(bmp)
+                    }
+                }
+                if (classified.categories.isNotEmpty()) {
+                    onDemandAiTags = classified.categories
+                    photoAiDao?.upsert(
+                        PhotoAiEntity(
+                            uriString = "cloud://${currentItem.filename}",
+                            mediaStoreId = 0L,
+                            filename = currentItem.filename,
+                            categories = classified.categories.joinToString(","),
+                            topConfidence = classified.topConfidence,
+                            isAnalyzed = true,
+                            timestamp = System.currentTimeMillis()
+                        )
+                    )
+                }
+            }
+        }
+    }
 
     // Preload adjacent photos for 0ms swipe transitions
     LaunchedEffect(pagerState.currentPage, items.size) {
@@ -4893,6 +5158,49 @@ fun NativeLightboxModal(
                         contentDescription = "Chiudi",
                         tint = Color.White
                     )
+                }
+            }
+        }
+
+        // AI Category Badges in Photo Detail / Lightbox View
+        if (onDemandAiTags.isNotEmpty() && !currentItem.isVideo) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = 86.dp, start = 16.dp, end = 16.dp)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                onDemandAiTags.forEach { tag ->
+                    Surface(
+                        shape = CircleShape,
+                        color = Color(0xFF2B2240).copy(alpha = 0.88f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            Color(0xFFD0BCFF).copy(alpha = 0.45f)
+                        )
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = Color(0xFFD0BCFF),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                text = tag,
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
                 }
             }
         }

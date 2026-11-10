@@ -386,7 +386,7 @@ test('album names are escaped in HTML attributes', () => {
   assert.ok(!html.includes("data-albums='[\"x'"));
 });
 
-test('Drag-to-select, Lightbox gesture transitions and signed APK release v1.1.5 are configured', () => {
+test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Lightbox gestures, and signed APK release v1.2.0 are configured', () => {
   // 1. Drag-to-select in GalleryView and static selection script
   const galleryViewTsx = fs.readFileSync(path.resolve(process.cwd(), 'src/components/GalleryView.tsx'), 'utf-8');
   assert.ok(galleryViewTsx.includes('isDragSelecting'));
@@ -424,29 +424,78 @@ test('Drag-to-select, Lightbox gesture transitions and signed APK release v1.1.5
   assert.ok(mainActivityKt.includes('dismissOffsetY'));
   assert.ok(mainActivityKt.includes('detectTapGestures'));
   assert.ok(mainActivityKt.includes('userScrollEnabled = currentTab == VaultTab.GALLERY && dragStartIndex == null'));
+  assert.ok(mainActivityKt.includes('selectedAiCategoryFilter'));
+  assert.ok(mainActivityKt.includes('Indicizzazione AI in corso:'));
+  assert.ok(mainActivityKt.includes('onDemandAiTags'));
 
-  // 3. Release v1.1.5 signed APK, metadata, and Android Studio Project
-  const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.1.5-signed.apk');
+  // 3. On-Device AI model asset, LocalPhotoCategorizer, Room Database, and WorkManager Worker
+  const tflitePath = path.resolve(process.cwd(), 'android-app/app/src/main/assets/efficientnet_lite4.tflite');
+  assert.ok(fs.existsSync(tflitePath));
+  assert.ok(fs.statSync(tflitePath).size > 10 * 1024 * 1024, 'efficientnet_lite4.tflite must be > 10MB');
+
+  const categorizerKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/LocalPhotoCategorizer.kt'),
+    'utf-8'
+  );
+  assert.ok(categorizerKt.includes('Delegate.GPU'));
+  assert.ok(categorizerKt.includes('Delegate.CPU'));
+  assert.ok(categorizerKt.includes('efficientnet_lite4.tflite'));
+  assert.ok(categorizerKt.includes('Bitmap.Config.ARGB_8888'));
+  assert.ok(categorizerKt.includes('ExifInterface'));
+  assert.ok(categorizerKt.includes('0.55f'));
+
+  const dbKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/PhotoAiDatabase.kt'),
+    'utf-8'
+  );
+  assert.ok(dbKt.includes('@Entity(tableName = "photo_ai_categories")'));
+  assert.ok(dbKt.includes('observeIndexingProgress'));
+  assert.ok(dbKt.includes('observeDistinctCategoriesWithCount'));
+
+  const workerKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/PhotoAiIndexingWorker.kt'),
+    'utf-8'
+  );
+  assert.ok(workerKt.includes('MediaStore.Images.Media.EXTERNAL_CONTENT_URI'));
+  assert.ok(workerKt.includes('ai_photo_indexing'));
+  assert.ok(workerKt.includes('ExistingWorkPolicy'));
+  assert.ok(workerKt.includes('categorizer?.close()'));
+
+  const proguardRules = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/proguard-rules.pro'),
+    'utf-8'
+  );
+  assert.ok(proguardRules.includes('-keep class com.google.mediapipe.** { *; }'));
+  assert.ok(proguardRules.includes('-keep interface com.google.mediapipe.** { *; }'));
+  assert.ok(proguardRules.includes('-dontwarn com.google.mediapipe.**'));
+
+  // 4. Release v1.2.0 signed APK, debug APK, metadata, and Gradle configuration
+  const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.2.0-signed.apk');
   assert.ok(fs.existsSync(apkPath));
-  assert.ok(fs.statSync(apkPath).size > 1000000, 'APK file should be a complete binary (> 1MB)');
+  assert.ok(fs.statSync(apkPath).size > 20 * 1024 * 1024, 'Signed release APK with bundled TFLite model should be > 20MB');
 
   const buildJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'release/photocloud-release-build.json'), 'utf-8'));
-  assert.equal(buildJson.versionName, '1.1.5');
-  assert.equal(buildJson.versionCode, 16);
-  assert.equal(buildJson.apkFilename, 'photocloud-release-v1.1.5-signed.apk');
+  assert.equal(buildJson.versionName, '1.2.0');
+  assert.equal(buildJson.versionCode, 17);
+  assert.equal(buildJson.apkFilename, 'photocloud-release-v1.2.0-signed.apk');
 
   const metaJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'release/output-metadata.json'), 'utf-8'));
-  assert.equal(metaJson.elements[0].versionName, '1.1.5');
-  assert.equal(metaJson.elements[0].versionCode, 16);
-  assert.equal(metaJson.elements[0].outputFile, 'photocloud-release-v1.1.5-signed.apk');
+  assert.equal(metaJson.elements[0].versionName, '1.2.0');
+  assert.equal(metaJson.elements[0].versionCode, 17);
+  assert.equal(metaJson.elements[0].outputFile, 'photocloud-release-v1.2.0-signed.apk');
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.1.5"'));
-  assert.ok(appBuildGradle.includes('versionCode = 16'));
+  assert.ok(appBuildGradle.includes('versionName = "1.2.0"'));
+  assert.ok(appBuildGradle.includes('versionCode = 17'));
+  assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
+  assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
+  assert.ok(appBuildGradle.includes('androidx.work:work-runtime-ktx:2.9.0'));
+  assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.1.5');
+  assert.equal(pkgJson.version, '1.2.0');
 });
+
 
 
 

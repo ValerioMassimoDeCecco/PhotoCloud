@@ -11,10 +11,10 @@
       "type": "SINGLE",
       "filters": [],
       "attributes": [],
-      "versionCode": 16,
-      "versionName": "1.1.5",
-      "outputFile": "photocloud-release-v1.1.5-signed.apk",
-      "sha256": "48d876f9788204af8bcb356e3240fdf527444f8f72dd49efe1af4a2aef7ef15e"
+      "versionCode": 17,
+      "versionName": "1.2.0",
+      "outputFile": "photocloud-release-v1.2.0-signed.apk",
+      "sha256": "7824967ec4a13a536d59dca0f1702a123a4f73c7aaf1b6beb1c21775a612e779"
     }
   ],
   "elementType": "File"

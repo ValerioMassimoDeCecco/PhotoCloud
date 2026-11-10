@@ -1,12 +1,31 @@
-# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.1.5)
+# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.0)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
-2. **App Android 100% Nativa (`com.valerio.photocloud`)** scritta in **Kotlin + Jetpack Compose (Material You 120Hz)** che comunica direttamente con il tuo server PhotoCloud.
+2. **App Android 100% Nativa (`com.valerio.photocloud`)** scritta in **Kotlin + Jetpack Compose (Material You 120Hz)** che comunica direttamente con il tuo server PhotoCloud e include **Categorizzazione Automatica delle Foto tramite AI Locale (On-Device)**.
 
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
+
+---
+
+## ⚡ Novità Principali della Release `v1.2.0` (`versionCode 17`) — Categorizzazione Foto con AI Locale On-Device (`EfficientNet-Lite4`)
+
+### 1. Motore AI On-Device Resiliente (`LocalPhotoCategorizer` + `efficientnet_lite4.tflite`)
+- **100% Offline in `assets/efficientnet_lite4.tflite`**: basato su Google MediaPipe Tasks Vision (`com.google.mediapipe:tasks-vision:0.10.14`) con metadati integrati e `noCompress += "tflite"`.
+- **Accelerazione Hardware GPU con Fallback Automatico su CPU (`Delegate.GPU` -> `Delegate.CPU`)**: inizializzazione protetta da `try-catch (Throwable)` contro errori JNI/OpenGL/Vulkan sui driver GPU del telefono e switch automatico a runtime su `Delegate.CPU` senza mai causare crash.
+- **Pre-processing Anti-OOM & Rotazione EXIF**: decodifica tramite `BitmapFactory.Options` con `inSampleSize` dinamico fino a max `380x380px`, conversione esplicita a `Bitmap.Config.ARGB_8888` per `MPImage` e orientamento automatico tramite `ExifInterface`.
+- **Inferenza Thread-Safe & Mappatura Semantica**: accesso sequenziale protetto da `Mutex` su `Dispatchers.Default` (`scoreThreshold = 0.55f`, `maxResults = 4`), pulizia delle etichette ImageNet e raggruppamento in macro-categorie (`Animali`, `Paesaggi`, `Persone`, `Cibo`, `Veicoli`, `Architettura`, `Documenti`, `Tecnologia`) oltre alle etichette specifiche capitalizzate.
+
+### 2. Persistenza Room (`PhotoAiDatabase`) & Indicizzazione in Background (`PhotoAiIndexingWorker`)
+- **Database SQLite/Room Reattivo (`PhotoAiEntity` & `PhotoAiDao`)**: espone `Flow` reattivi per tutte le categorie distinte ordinate per numero di foto, filtro istantaneo per categoria e stato di avanzamento (`analyzedCount / totalCount`).
+- **Scansione Incrementale in Background (`WorkManager`)**: `PhotoAiIndexingWorker` scansiona sia `MediaStore.Images.Media.EXTERNAL_CONTENT_URI` (quando il permesso `READ_MEDIA_IMAGES` è concesso) sia le foto del vault PhotoCloud, eseguendo il diffing rispetto agli elementi già analizzati (`isAnalyzed = true`), aggiornando il database a blocchi (`batch`) e rilasciando sempre il puntatore nativo nel blocco `finally`.
+
+### 3. UI Reattiva in Jetpack Compose (`MainActivity.kt`)
+- **Barra Orizzontale di `FilterChip` Categorie AI**: mostra `"Tutte"`, le categorie rilevate dall'AI con il conteggio foto (es. `"Animali (12)"`, `"Paesaggi (8)"`) e il chip `"Rianalizza AI"` per sincronizzare su richiesta.
+- **Banner di Progresso Non Invasivo**: mostra `"Indicizzazione AI in corso: X/Y foto..."` con `LinearProgressIndicator` e percentuale durante l'esecuzione del worker, scomparendo automaticamente al termine.
+- **Badge AI nel Dettaglio Foto (`NativeLightboxModal`)**: mostra i tag AI assegnati alla singola foto direttamente nella vista a schermo intero.
 
 ---
 
