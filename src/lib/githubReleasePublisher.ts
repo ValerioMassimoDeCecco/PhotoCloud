@@ -38,8 +38,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.1.4';
-const APK_FILENAME = 'photocloud-release-v1.1.4-signed.apk';
+const DEFAULT_TAG = 'v1.1.5';
+const APK_FILENAME = 'photocloud-release-v1.1.5-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
@@ -49,7 +49,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
   const project = path.resolve(process.cwd(), 'android-app');
   let source = path.join(project, 'app/build/outputs/apk/release/app-release.apk');
   try {
-    await promisify(execFile)('gradle', ['assembleRelease', '--no-daemon'], {
+    await promisify(execFile)('gradle', ['-p', project, 'assembleRelease', '--no-daemon'], {
       cwd: project, maxBuffer: 10 * 1024 * 1024,
     });
   } catch (err) {
@@ -58,7 +58,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     if (fs.existsSync(fallbackSource)) {
       source = fallbackSource;
     } else {
-      const prevSource = path.join(outputDir, 'photocloud-release-v1.1.1-signed.apk');
+      const prevSource = path.join(outputDir, 'photocloud-release-v1.1.4-signed.apk');
       if (fs.existsSync(prevSource)) source = prevSource;
     }
   }
@@ -71,8 +71,8 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
   fs.writeFileSync(metadataPath, JSON.stringify({
     apkFilename: APK_FILENAME,
     sha256,
-    versionName: '1.1.4',
-    versionCode: 15,
+    versionName: '1.1.5',
+    versionCode: 16,
   }, null, 2));
   return { apkPath, apkBuffer, sha256, metadataPath };
 }

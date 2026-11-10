@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.1.3)
+# PhotoCloud — Archivio Foto, Video, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.1.5)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -7,6 +7,26 @@
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
+
+---
+
+## ⚡ Novità Principali della Release `v1.1.5` (`versionCode 16`) — Selezione a Trascinamento sui Media & Gesti Lightbox con Animazioni Coerenti (Web & Android APK)
+
+### 1. Selezione a Trascinamento sui Media (`Drag-to-Select`)
+- **Su Android APK (`MainActivity.kt` — `LazyVerticalGrid`)**:
+  - Tenendo premuto su una foto/video e trascinando il dito sulla griglia viene selezionato o deselezionato l'intero intervallo di media attraversato, con feedback aptico ad ogni tessera e auto-scroll automatico vicino ai bordi superiore/inferiore.
+  - Il gestore intercetta il trascinamento nel passaggio `PointerEventPass.Initial` e disabilita temporaneamente lo scroll verticale concorrente (`userScrollEnabled = currentTab == VaultTab.GALLERY && dragStartIndex == null`), evitando che la griglia interrompa la selezione durante il movimento verticale.
+  - `findMediaFilenameAtOffset` aggancia automaticamente la tessera visibile più vicina quando il dito attraversa i margini tra le miniature.
+- **Su Web App (`GalleryView.tsx` & `static/scripts/selection.js`)**:
+  - Trascinamento con rettangolo di selezione traslucido (`.selection-marquee`) sui media della griglia, auto-scroll fluido vicino ai bordi del viewport e protezione anti-click accidentale al rilascio.
+
+### 2. Gesti nella Navigazione tra le Foto con Animazioni Coerenti nel Lightbox
+- **Su Android APK (`NativeLightboxModal`)**:
+  - **Swipe orizzontale a 1 dito non bloccato**: sostituito `detectTransformGestures` (che consumava tutti i pan a 1 dito anche a zoom `1x` impedendo a `HorizontalPager` di scorrere) con un gestore multi-touch `awaitEachGesture` su misura che delega lo swipe orizzontale a `HorizontalPager` quando `zoomScale <= 1.02f`.
+  - **Transizione coerente tra le pagine**: ogni pagina applica interpolazione `graphicsLayer` continua di scala (`0.88f..1f`), opacità (`0.55f..1f`) e traslazione parallasse in funzione di `pagerState.currentPageOffsetFraction`.
+  - **Doppio tap per zoom (`1x` ↔ `2.5x`)**, **pinch-to-zoom a 2 dita (`1x..4x`)**, **swipe verticale per chiudere (dismiss)** con dissolvenza progressiva dello sfondo e pulsanti rapidi **Precedente / Successiva** con precaricamento in RAM delle foto adiacenti.
+- **Su Web App (`LightboxModal.tsx` & `static/scripts/lightbox.js`)**:
+  - Navigazione swipe touch/pointer con trascinamento in tempo reale, animazioni direzionali coerenti (`lightbox-animate-next-in`, `lightbox-animate-prev-in`), ritorno elastico (`lightbox-spring-reset`) e swipe verso il basso per chiudere (`lightbox-animate-dismiss`).
 
 ---
 

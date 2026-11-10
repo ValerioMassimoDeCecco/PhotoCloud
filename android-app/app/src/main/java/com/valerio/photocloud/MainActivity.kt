@@ -35,8 +35,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
@@ -64,6 +69,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDone
@@ -123,7 +130,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -278,9 +287,9 @@ data class CustomizationState(
 )
 
 /**
- * PhotoCloud 100% Native Android Client v1.1.4
+ * PhotoCloud 100% Native Android Client v1.1.5
  * - Drag-to-Select Multiple Media in LazyVerticalGrid & SelectionActionsPanel
- * - Lightbox Gesture Navigation with HorizontalPager & Coherent Slide Transitions
+ * - Lightbox Gesture Navigation with HorizontalPager, Swipe-to-Dismiss, Double-Tap Zoom & Coherent Slide Transitions
  * - Cloud File Manager for non-media files (PDF, ZIP, APK, Docs, Audio, Code, etc.)
  * - Top-Right Upload/Download Transfer Center with floating operations menu (real-time speed, size, progress)
  * - Media & File Grouping by Album (create, assign, filter, delete albums)
@@ -1358,17 +1367,38 @@ fun NativeAuthScreen(
 }
 
 private fun findMediaFilenameAtOffset(gridState: LazyGridState, offset: Offset): String? {
-    val hitItem = gridState.layoutInfo.visibleItemsInfo.firstOrNull { info ->
-        val keyStr = info.key as? String ?: return@firstOrNull false
-        if (!keyStr.startsWith("media_")) return@firstOrNull false
+    val visibleMediaItems = gridState.layoutInfo.visibleItemsInfo.filter { info ->
+        val keyStr = info.key as? String ?: return@filter false
+        keyStr.startsWith("media_")
+    }
+    if (visibleMediaItems.isEmpty()) return null
+
+    val hitItem = visibleMediaItems.firstOrNull { info ->
         val left = info.offset.x.toFloat()
         val top = info.offset.y.toFloat()
         val right = left + info.size.width
         val bottom = top + info.size.height
         offset.x in left..right && offset.y in top..bottom
     }
-    val keyStr = hitItem?.key as? String ?: return null
-    return keyStr.removePrefix("media_")
+    if (hitItem != null) {
+        return (hitItem.key as String).removePrefix("media_")
+    }
+
+    val nearest = visibleMediaItems.minByOrNull { info ->
+        val cx = info.offset.x + info.size.width / 2f
+        val cy = info.offset.y + info.size.height / 2f
+        val dx = offset.x - cx
+        val dy = offset.y - cy
+        dx * dx + dy * dy
+    } ?: return null
+
+    val maxSnapDist = maxOf(nearest.size.width, nearest.size.height) * 0.85f
+    val cx = nearest.offset.x + nearest.size.width / 2f
+    val cy = nearest.offset.y + nearest.size.height / 2f
+    if (hypot(offset.x - cx, offset.y - cy) <= maxSnapDist) {
+        return (nearest.key as String).removePrefix("media_")
+    }
+    return null
 }
 
 @Composable
@@ -2003,9 +2033,60 @@ fun NativeVaultScreen(
                             ),
                             horizontalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
                             verticalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
-                            userScrollEnabled = currentTab == VaultTab.GALLERY,
+                            userScrollEnabled = currentTab == VaultTab.GALLERY && dragStartIndex == null,
                             modifier = Modifier
                                 .fillMaxSize()
+                                .pointerInput(gallerySortedItems, currentTab) {
+                                    if (currentTab != VaultTab.GALLERY) return@pointerInput
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                        var activePointerId = down.id
+                                        while (true) {
+                                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                                            val pointer = event.changes.firstOrNull { it.id == activePointerId }
+                                                ?: event.changes.firstOrNull()
+                                                ?: break
+                                            activePointerId = pointer.id
+                                            if (!pointer.pressed) {
+                                                if (dragStartIndex != null) {
+                                                    dragStartIndex = null
+                                                    dragLastIndex = null
+                                                }
+                                                break
+                                            }
+                                            val startIdx = dragStartIndex
+                                            if (startIdx != null && pointer.positionChanged()) {
+                                                pointer.consume()
+                                                val viewportH = galleryGridState.layoutInfo.viewportSize.height.toFloat()
+                                                val y = pointer.position.y
+                                                if (y < 140f) {
+                                                    scope.launch { galleryGridState.scrollBy(-28f) }
+                                                } else if (y > viewportH - 220f) {
+                                                    scope.launch { galleryGridState.scrollBy(28f) }
+                                                }
+
+                                                val hitFn = findMediaFilenameAtOffset(galleryGridState, pointer.position)
+                                                val currentIdx = gallerySortedItems.indexOfFirst { it.filename == hitFn }
+                                                if (currentIdx >= 0 && currentIdx != dragLastIndex) {
+                                                    dragLastIndex = currentIdx
+                                                    triggerHaptic(longPress = false)
+                                                    val rangeStart = minOf(startIdx, currentIdx)
+                                                    val rangeEnd = maxOf(startIdx, currentIdx)
+                                                    val rangeFilenames = gallerySortedItems
+                                                        .subList(rangeStart, rangeEnd + 1)
+                                                        .map { it.filename }
+                                                        .toSet()
+
+                                                    selectedFilenames = if (dragAddingSelection) {
+                                                        selectionSnapshotBeforeDrag + rangeFilenames
+                                                    } else {
+                                                        selectionSnapshotBeforeDrag - rangeFilenames
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 .pointerInput(gallerySortedItems, currentTab) {
                                     if (currentTab != VaultTab.GALLERY) return@pointerInput
                                     detectDragGesturesAfterLongPress(
@@ -2013,10 +2094,10 @@ fun NativeVaultScreen(
                                             val hitFn = findMediaFilenameAtOffset(galleryGridState, startOffset)
                                             val idx = gallerySortedItems.indexOfFirst { it.filename == hitFn }
                                             if (idx >= 0 && hitFn != null) {
+                                                selectionSnapshotBeforeDrag = selectedFilenames
                                                 toggleGallerySelectionFromLongPress(hitFn)
                                                 dragStartIndex = idx
                                                 dragLastIndex = idx
-                                                selectionSnapshotBeforeDrag = selectedFilenames
                                                 dragAddingSelection = selectedFilenames.contains(hitFn)
                                             } else {
                                                 dragStartIndex = null
@@ -2116,8 +2197,16 @@ fun NativeVaultScreen(
                                         onLongClick = {
                                             if (currentTab == VaultTab.GALLERY) {
                                                 // Debounced against the grid-level pointerInput so exactly
-                                                // one toggle happens per long-press gesture.
+                                                // one toggle happens per long-press gesture, and initialize
+                                                // drag-to-select state immediately so moving the finger selects ranges.
+                                                selectionSnapshotBeforeDrag = selectedFilenames
                                                 toggleGallerySelectionFromLongPress(mediaItem.filename)
+                                                val idx = gallerySortedItems.indexOfFirst { it.filename == mediaItem.filename }
+                                                if (idx >= 0) {
+                                                    dragStartIndex = idx
+                                                    dragLastIndex = idx
+                                                    dragAddingSelection = selectedFilenames.contains(mediaItem.filename)
+                                                }
                                             }
                                         },
                                         onRestore = null,
@@ -4464,19 +4553,39 @@ fun NativeLightboxModal(
     onRestore: (String) -> Unit,
     onDownload: (String) -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState(
         initialPage = initialIndex,
         pageCount = { items.size }
     )
     val currentItem = items.getOrNull(pagerState.currentPage) ?: items.first()
+    var dismissOffsetY by remember { mutableFloatStateOf(0f) }
+
+    // Preload adjacent photos for 0ms swipe transitions
+    LaunchedEffect(pagerState.currentPage, items.size) {
+        dismissOffsetY = 0f
+        val neighbors = listOf(pagerState.currentPage - 1, pagerState.currentPage + 1)
+        for (idx in neighbors) {
+            val neighbor = items.getOrNull(idx)
+            if (neighbor != null && !neighbor.isVideo && apiClient.getCachedBitmap(neighbor.filename, fromTrash) == null) {
+                launch {
+                    apiClient.loadMediaBitmap(neighbor.filename, fromTrash)
+                }
+            }
+        }
+    }
+
+    val dismissProgress = (abs(dismissOffsetY) / 420f).coerceIn(0f, 1f)
+    val backdropAlpha = (1f - dismissProgress * 0.55f).coerceIn(0.35f, 1f)
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF08080A))
+            .background(Color(0xFF08080A).copy(alpha = backdropAlpha))
     ) {
         HorizontalPager(
             state = pagerState,
+            beyondViewportPageCount = 1,
             modifier = Modifier.fillMaxSize()
         ) { pageIndex ->
             val media = items[pageIndex]
@@ -4503,22 +4612,133 @@ fun NativeLightboxModal(
             var offsetX by remember(pageIndex) { mutableFloatStateOf(0f) }
             var offsetY by remember(pageIndex) { mutableFloatStateOf(0f) }
 
+            LaunchedEffect(pagerState.currentPage) {
+                if (pagerState.currentPage != pageIndex) {
+                    zoomScale = 1f
+                    offsetX = 0f
+                    offsetY = 0f
+                }
+            }
+
+            val animatedZoom by animateFloatAsState(
+                targetValue = zoomScale,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                label = "lightboxZoom"
+            )
+            val animatedDismissY by animateFloatAsState(
+                targetValue = if (pagerState.currentPage == pageIndex) dismissOffsetY else 0f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMedium
+                ),
+                label = "lightboxDismissY"
+            )
+
+            // Coherent page transition calculation based on continuous HorizontalPager offset
+            val pageOffset = (pagerState.currentPage - pageIndex) + pagerState.currentPageOffsetFraction
+            val absPageOffset = abs(pageOffset).coerceIn(0f, 1f)
+            val transitionScale = 1f - (absPageOffset * 0.12f)
+            val transitionAlpha = 1f - (absPageOffset * 0.5f)
+            val dismissScale = 1f - (dismissProgress * 0.16f)
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = transitionScale * dismissScale
+                        scaleY = transitionScale * dismissScale
+                        alpha = transitionAlpha
+                        translationY = animatedDismissY
+                        translationX = pageOffset * size.width * 0.08f
+                    }
+                    .pointerInput(pageIndex, media.isVideo) {
+                        if (media.isVideo) return@pointerInput
+                        detectTapGestures(
+                            onDoubleTap = { tapOffset ->
+                                if (zoomScale > 1.05f) {
+                                    zoomScale = 1f
+                                    offsetX = 0f
+                                    offsetY = 0f
+                                } else {
+                                    val targetScale = 2.5f
+                                    val cx = size.width / 2f
+                                    val cy = size.height / 2f
+                                    offsetX = ((cx - tapOffset.x) * (targetScale - 1f)).coerceIn(-cx, cx)
+                                    offsetY = ((cy - tapOffset.y) * (targetScale - 1f)).coerceIn(-cy, cy)
+                                    zoomScale = targetScale
+                                }
+                            }
+                        )
+                    }
                     .pointerInput(pageIndex, media.isVideo) {
                         // Per i video il touch va lasciato al player: lo swipe sulla seek bar
                         // non deve essere rubato dal pinch/pan del lightbox.
                         if (media.isVideo) return@pointerInput
-                        detectTransformGestures { _, pan, zoom, _ ->
-                            val newScale = (zoomScale * zoom).coerceIn(1f, 4f)
-                            zoomScale = newScale
-                            if (newScale > 1f) {
-                                offsetX += pan.x
-                                offsetY += pan.y
-                            } else {
-                                offsetX = 0f
-                                offsetY = 0f
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            var verticalDismissActive = false
+                            var totalDx = 0f
+                            var totalDy = 0f
+                            do {
+                                val event = awaitPointerEvent()
+                                val pointerCount = event.changes.count { it.pressed }
+                                if (pointerCount >= 2) {
+                                    verticalDismissActive = false
+                                    dismissOffsetY = 0f
+                                    val zoomChange = event.calculateZoom()
+                                    val panChange = event.calculatePan()
+                                    val newScale = (zoomScale * zoomChange).coerceIn(1f, 4f)
+                                    zoomScale = newScale
+                                    if (newScale > 1.01f) {
+                                        val maxX = (size.width * (newScale - 1f)) / 2f
+                                        val maxY = (size.height * (newScale - 1f)) / 2f
+                                        offsetX = (offsetX + panChange.x).coerceIn(-maxX, maxX)
+                                        offsetY = (offsetY + panChange.y).coerceIn(-maxY, maxY)
+                                    } else {
+                                        offsetX = 0f
+                                        offsetY = 0f
+                                    }
+                                    event.changes.forEach { if (it.positionChanged()) it.consume() }
+                                } else if (pointerCount == 1) {
+                                    val panChange = event.calculatePan()
+                                    if (zoomScale > 1.02f) {
+                                        val maxX = (size.width * (zoomScale - 1f)) / 2f
+                                        val maxY = (size.height * (zoomScale - 1f)) / 2f
+                                        val nextX = offsetX + panChange.x
+                                        val nextY = offsetY + panChange.y
+                                        val atHorizontalEdge = (nextX > maxX && panChange.x > 0f) || (nextX < -maxX && panChange.x < 0f)
+                                        offsetX = nextX.coerceIn(-maxX, maxX)
+                                        offsetY = nextY.coerceIn(-maxY, maxY)
+                                        // Only consume if not pushing past the horizontal edge, allowing pager swipe at edge
+                                        if (!atHorizontalEdge || abs(panChange.y) > abs(panChange.x)) {
+                                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                                        }
+                                    } else {
+                                        totalDx += panChange.x
+                                        totalDy += panChange.y
+                                        if (!verticalDismissActive && abs(totalDy) > 18f && abs(totalDy) > abs(totalDx) * 1.35f) {
+                                            verticalDismissActive = true
+                                        }
+                                        if (verticalDismissActive) {
+                                            dismissOffsetY += panChange.y
+                                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                                        }
+                                        // Horizontal 1-finger drag is left unconsumed so HorizontalPager
+                                        // handles smooth swipe navigation between photos!
+                                    }
+                                }
+                            } while (event.changes.any { it.pressed })
+
+                            if (verticalDismissActive) {
+                                if (abs(dismissOffsetY) > 150f) {
+                                    dismissOffsetY = 0f
+                                    onClose()
+                                } else {
+                                    dismissOffsetY = 0f
+                                }
                             }
                         }
                     },
@@ -4560,8 +4780,8 @@ fun NativeLightboxModal(
                         modifier = Modifier
                             .fillMaxSize()
                             .graphicsLayer(
-                                scaleX = zoomScale,
-                                scaleY = zoomScale,
+                                scaleX = animatedZoom,
+                                scaleY = animatedZoom,
                                 translationX = offsetX,
                                 translationY = offsetY
                             )
@@ -4574,6 +4794,67 @@ fun NativeLightboxModal(
                         color = Color.White.copy(alpha = 0.7f),
                         textAlign = TextAlign.Center
                     )
+                }
+            }
+        }
+
+        if (items.size > 1) {
+            if (pagerState.currentPage > 0) {
+                Surface(
+                    onClick = {
+                        scope.launch {
+                            pagerState.animateScrollToPage(
+                                page = (pagerState.currentPage - 1).coerceAtLeast(0),
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMediumLow
+                                )
+                            )
+                        }
+                    },
+                    shape = CircleShape,
+                    color = Color.White.copy(alpha = 0.14f),
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 12.dp)
+                        .size(42.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.ChevronLeft,
+                            contentDescription = "Foto precedente",
+                            tint = Color.White
+                        )
+                    }
+                }
+            }
+            if (pagerState.currentPage < items.lastIndex) {
+                Surface(
+                    onClick = {
+                        scope.launch {
+                            pagerState.animateScrollToPage(
+                                page = (pagerState.currentPage + 1).coerceAtMost(items.lastIndex),
+                                animationSpec = spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMediumLow
+                                )
+                            )
+                        }
+                    },
+                    shape = CircleShape,
+                    color = Color.White.copy(alpha = 0.14f),
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 12.dp)
+                        .size(42.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "Foto successiva",
+                            tint = Color.White
+                        )
+                    }
                 }
             }
         }

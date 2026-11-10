@@ -1,17 +1,17 @@
 {
-  "apkFilename": "photocloud-release-v1.1.4-signed.apk",
-  "sha256": "f0aac0b2d0591af8fa28f0c5880a443091b52ac8c1aa1935746948cab08cd296",
-  "sizeBytes": 12409161,
+  "apkFilename": "photocloud-release-v1.1.5-signed.apk",
+  "sha256": "48d876f9788204af8bcb356e3240fdf527444f8f72dd49efe1af4a2aef7ef15e",
+  "sizeBytes": 12425532,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.1.4",
-  "versionCode": 15,
+  "versionName": "1.1.5",
+  "versionCode": 16,
   "features": [
-    "Drag-to-select sui media della galleria con marquee box traslucido Material You",
-    "Navigazione gestuale tra le foto con swipe fluido e animazioni coerenti nella lightbox",
-    "Swipe in basso per chiusura fluida (dismiss) con dissolvenza dello sfondo",
-    "Release APK nativa firmata v1.1.4 e compatibile con WebADB ed emulatore cloud"
+    "Drag-to-select sui media della galleria con marquee box su Web e selezione continua post-long-press su Android APK",
+    "Navigazione gestuale tra le foto con swipe fluido a 1 dito, doppio tap zoom e animazioni coerenti di scala/opacità/parallasse nella lightbox",
+    "Swipe verticale per chiusura fluida (dismiss) con dissolvenza dello sfondo",
+    "Release APK nativa firmata v1.1.5 compilata con Gradle 8.10.2 e Android SDK 35"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.1.4",
-  "publishedAt": "2026-11-10T07:35:00Z"
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.1.5",
+  "publishedAt": "2026-11-10T08:15:00Z"
 }
 

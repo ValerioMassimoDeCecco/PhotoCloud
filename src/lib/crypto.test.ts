@@ -386,7 +386,7 @@ test('album names are escaped in HTML attributes', () => {
   assert.ok(!html.includes("data-albums='[\"x'"));
 });
 
-test('Drag-to-select, Lightbox gesture transitions and signed APK release v1.1.4 are configured', () => {
+test('Drag-to-select, Lightbox gesture transitions and signed APK release v1.1.5 are configured', () => {
   // 1. Drag-to-select in GalleryView and static selection script
   const galleryViewTsx = fs.readFileSync(path.resolve(process.cwd(), 'src/components/GalleryView.tsx'), 'utf-8');
   assert.ok(galleryViewTsx.includes('isDragSelecting'));
@@ -401,7 +401,7 @@ test('Drag-to-select, Lightbox gesture transitions and signed APK release v1.1.4
   assert.ok(selectionJs.includes('pointermove'));
   assert.ok(selectionJs.includes('pointerdown'));
 
-  // 2. Lightbox Gestures and Coherent Animation
+  // 2. Lightbox Gestures and Coherent Animation (Web + Android Native)
   const lightboxModalTsx = fs.readFileSync(path.resolve(process.cwd(), 'src/components/LightboxModal.tsx'), 'utf-8');
   assert.ok(lightboxModalTsx.includes('lightbox-animate-next-in'));
   assert.ok(lightboxModalTsx.includes('lightbox-animate-prev-in'));
@@ -416,27 +416,37 @@ test('Drag-to-select, Lightbox gesture transitions and signed APK release v1.1.4
   assert.ok(lightboxJs.includes('lightbox-animate-dismiss'));
   assert.ok(lightboxJs.includes('pointermove'));
 
-  // 3. Release v1.1.4 signed APK, metadata, and Android Studio Project
-  const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.1.4-signed.apk');
+  const mainActivityKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
+    'utf-8'
+  );
+  assert.ok(mainActivityKt.includes('currentPageOffsetFraction'));
+  assert.ok(mainActivityKt.includes('dismissOffsetY'));
+  assert.ok(mainActivityKt.includes('detectTapGestures'));
+  assert.ok(mainActivityKt.includes('userScrollEnabled = currentTab == VaultTab.GALLERY && dragStartIndex == null'));
+
+  // 3. Release v1.1.5 signed APK, metadata, and Android Studio Project
+  const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.1.5-signed.apk');
   assert.ok(fs.existsSync(apkPath));
   assert.ok(fs.statSync(apkPath).size > 1000000, 'APK file should be a complete binary (> 1MB)');
 
   const buildJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'release/photocloud-release-build.json'), 'utf-8'));
-  assert.equal(buildJson.versionName, '1.1.4');
-  assert.equal(buildJson.versionCode, 15);
-  assert.equal(buildJson.apkFilename, 'photocloud-release-v1.1.4-signed.apk');
+  assert.equal(buildJson.versionName, '1.1.5');
+  assert.equal(buildJson.versionCode, 16);
+  assert.equal(buildJson.apkFilename, 'photocloud-release-v1.1.5-signed.apk');
 
   const metaJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'release/output-metadata.json'), 'utf-8'));
-  assert.equal(metaJson.elements[0].versionName, '1.1.4');
-  assert.equal(metaJson.elements[0].versionCode, 15);
-  assert.equal(metaJson.elements[0].outputFile, 'photocloud-release-v1.1.4-signed.apk');
+  assert.equal(metaJson.elements[0].versionName, '1.1.5');
+  assert.equal(metaJson.elements[0].versionCode, 16);
+  assert.equal(metaJson.elements[0].outputFile, 'photocloud-release-v1.1.5-signed.apk');
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.1.4"'));
-  assert.ok(appBuildGradle.includes('versionCode = 15'));
+  assert.ok(appBuildGradle.includes('versionName = "1.1.5"'));
+  assert.ok(appBuildGradle.includes('versionCode = 16'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.1.4');
+  assert.equal(pkgJson.version, '1.1.5');
 });
+
 
 

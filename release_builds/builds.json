@@ -1,12 +1,12 @@
 [
   {
-    "buildId": "v1.1.4-release",
-    "timestamp": 1794296551674,
+    "buildId": "v1.1.5-release",
+    "timestamp": 1794298500000,
     "config": {
       "appName": "PhotoCloud",
       "packageName": "com.valerio.photocloud",
-      "versionName": "1.1.4",
-      "versionCode": 15,
+      "versionName": "1.1.5",
+      "versionCode": 16,
       "serverUrl": "http://10.0.2.2:3000",
       "minSdk": 26,
       "targetSdk": 35,
@@ -16,11 +16,11 @@
       "signingMode": "release",
       "keystoreAlias": "photocloud-release-key"
     },
-    "apkFilename": "photocloud-release-v1.1.4-signed.apk",
-    "aabFilename": "photocloud-release-v1.1.4.aab",
-    "projectZipFilename": "photocloud-android-studio-project-v1.1.4.zip",
-    "sha256Fingerprint": "f0aac0b2d0591af8fa28f0c5880a443091b52ac8c1aa1935746948cab08cd296",
-    "apkSizeBytes": 12409161,
+    "apkFilename": "photocloud-release-v1.1.5-signed.apk",
+    "aabFilename": "photocloud-release-v1.1.5.aab",
+    "projectZipFilename": "photocloud-android-studio-project-v1.1.5.zip",
+    "sha256Fingerprint": "48d876f9788204af8bcb356e3240fdf527444f8f72dd49efe1af4a2aef7ef15e",
+    "apkSizeBytes": 12425532,
     "steps": [
       {
         "id": "step-validate",
@@ -48,7 +48,7 @@
         "label": "Verifica digest SHA-256 e pacchettizzazione progetto Android Studio (.ZIP)",
         "durationMs": 48,
         "status": "completed",
-        "command": "sha256sum photocloud-release-v1.1.4-signed.apk"
+        "command": "sha256sum photocloud-release-v1.1.5-signed.apk"
       }
     ]
   }
