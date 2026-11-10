@@ -671,5 +671,20 @@ test('Dual-Theme & Liquid Glass Design System (Web + Android Kyant0/AndroidLiqui
   assert.ok(lgKt.includes('data class LiquidGlassConfig'));
   assert.ok(lgKt.includes('fun Modifier.liquidGlassSurface'));
   assert.ok(lgKt.includes('fun LiquidGlassStudioSection'));
+
+  // Regression guard: isLgActive & lgCfg must be hoisted at top of NativeVaultScreen before Box(Modifier.fillMaxSize())
+  const mainActivityKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
+    'utf-8'
+  );
+  const vaultFnIdx = mainActivityKt.indexOf('fun NativeVaultScreen(');
+  const firstLgActiveIdx = mainActivityKt.indexOf('val isLgActive = LocalLiquidGlassActive.current', vaultFnIdx);
+  const firstLgCfgIdx = mainActivityKt.indexOf('val lgCfg = LocalLiquidGlassConfig.current', vaultFnIdx);
+  const firstVaultBoxIdx = mainActivityKt.indexOf('Box(modifier = Modifier.fillMaxSize())', vaultFnIdx);
+  assert.ok(vaultFnIdx > 0 && firstLgActiveIdx > vaultFnIdx && firstLgCfgIdx > vaultFnIdx);
+  assert.ok(
+    firstLgActiveIdx < firstVaultBoxIdx && firstLgCfgIdx < firstVaultBoxIdx,
+    'isLgActive and lgCfg must be hoisted above Box(Modifier.fillMaxSize()) so all NativeVaultScreen overlays and floating bar can resolve them'
+  );
 });
 

@@ -7,9 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag della Release GitHub (es. v1.2.0)'
+        description: 'Tag della Release GitHub (es. v1.2.5)'
         required: false
-        default: 'v1.2.0'
+        default: 'v1.2.5'
+      publish_release:
+        description: 'Pubblica l APK su GitHub Releases (solo su main o tag v*)'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -97,6 +102,7 @@ jobs:
           fi
 
       - name: Publish Signed APK to GitHub Releases
+        if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release != false && inputs.publish_release != 'false') }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_meta.outputs.TAG }}
