@@ -538,6 +538,23 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
   assert.equal(pkgJson.version, '1.2.4');
+
+  // 6. Multi-platform interactive CLI scripts (photocloud.bat & photocloud.sh)
+  const batPath = path.resolve(process.cwd(), 'photocloud.bat');
+  assert.ok(fs.existsSync(batPath), 'photocloud.bat must exist');
+  const batContent = fs.readFileSync(batPath, 'utf-8');
+  assert.ok(batContent.includes('git pull'), 'photocloud.bat must support updating');
+  assert.ok(batContent.includes('git clone'), 'photocloud.bat must support cloning');
+  assert.ok(batContent.includes('npm run dev'), 'photocloud.bat must support launching dev mode');
+  assert.ok(batContent.includes('winget'), 'photocloud.bat must detect and install missing dependencies');
+
+  const shPath = path.resolve(process.cwd(), 'photocloud.sh');
+  assert.ok(fs.existsSync(shPath), 'photocloud.sh must exist');
+  const shContent = fs.readFileSync(shPath, 'utf-8');
+  assert.ok(shContent.includes('git pull'), 'photocloud.sh must support updating');
+  assert.ok(shContent.includes('git clone'), 'photocloud.sh must support cloning');
+  assert.ok(shContent.includes('npm run dev'), 'photocloud.sh must support launching dev mode');
+  assert.ok(shContent.includes('check_and_install_dependencies'), 'photocloud.sh must check and install dependencies');
 });
 
 

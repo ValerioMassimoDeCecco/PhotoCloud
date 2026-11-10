@@ -223,7 +223,31 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 
 ## 💻 Come Scaricare, Compilare ed Avviare il Progetto sui Vari Sistemi Operativi
 
-### 🪟 1. Windows (Windows 10 / Windows 11)
+### ⚡ Script Eseguibili Interattivi Multi-Piattaforma (`photocloud.bat` & `photocloud.sh`)
+
+La repository include due script eseguibili interattivi che individuano automaticamente le dipendenze mancanti (Git, Node.js, npm), le installano ove possibile e mostrano un menu grafico a scelte per:
+- **Clonare** o re-inizializzare il repository
+- **Aggiornare** l'applicazione locale (`git pull` + `npm install` + `npm run build`)
+- **Avviare** la web app in modalità Sviluppo (`npm run dev`) o Produzione (`npm start`)
+- **Compilare** l'APK Release per Android
+
+#### 🪟 Windows (Windows 10 / 11)
+Fai doppio click su **`photocloud.bat`** oppure esegui da prompt dei comandi / PowerShell:
+```cmd
+photocloud.bat
+```
+*(Lo script verifica Git e Node.js; se non presenti, propone l'installazione automatica tramite `winget`)*
+
+#### 🐧 Linux / 🍎 macOS
+Apri il terminale ed esegui:
+```bash
+./photocloud.sh
+```
+*(Lo script verifica Git e Node.js; se mancanti li installa via `brew`, `apt`, `dnf` o `pacman`)*
+
+---
+
+### 🪟 1. Windows (Configurazione Manuale)
 
 1. Installa **Node.js (20.19+ o 22.12+)** da [https://nodejs.org](https://nodejs.org) e **Git** da [https://git-scm.com/download/win](https://git-scm.com/download/win).
 2. Apri **PowerShell** ed esegui:
@@ -242,7 +266,7 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 
 ---
 
-### 🍎 2. macOS (Intel & Apple Silicon M1 / M2 / M3 / M4)
+### 🍎 2. macOS (Configurazione Manuale)
 
 1. Installa Node.js e Git (`brew install node git`).
 2. Apri il **Terminale** ed esegui:
@@ -261,7 +285,7 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 
 ---
 
-### 🐧 3. Linux (Ubuntu / Debian, Fedora, Arch Linux)
+### 🐧 3. Linux (Configurazione Manuale)
 
 1. Installa **Node.js 20+** e **Git**:
    ```bash
@@ -287,7 +311,7 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 
 ### 🔄 4. Come Aggiornare la Web App Localmente (A Seguito di Nuove Release o Aggiornamenti)
 
-Quando vengono rilasciati nuovi aggiornamenti sul repository, esegui i seguenti comandi nel terminale all'interno della cartella del progetto (`PhotoCloud`) per aggiornare l'applicazione locale:
+Puoi aggiornare automaticamente la web app usando **`photocloud.bat`** (Opzione 3) su Windows o **`./photocloud.sh`** (Opzione 3) su Linux/macOS. Se preferisci farlo manualmente:
 
 1. **Scarica gli ultimi aggiornamenti dal repository:**
    ```bash
@@ -390,5 +414,7 @@ PhotoCloud/
 │   ├── scripts/                        # Logica client Web 0ms (grouping.js Keep-Alive Panes, photo-editor.js, lightbox.js, trash.js, document-viewer.js, upload.js)
 │   └── styles/                         # Fogli di stile Material You (base.css, gallery.css, login.css)
 ├── server.ts                           # Server Express principale (API Media, Document Preview, Photo Edit, File Cloud, Album, ZIP, Auth)
+├── photocloud.bat                      # Script interattivo Windows (installazione dipendenze, clone, aggiornamento e avvio)
+├── photocloud.sh                       # Script interattivo Linux / macOS (installazione dipendenze, clone, aggiornamento e avvio)
 └── package.json
 ```
