@@ -562,6 +562,9 @@ fun Modifier.liquidGlassSurface(
     if (!isActive) return this
 
     return this.drawWithCache {
+        if (size.width <= 0f || size.height <= 0f) {
+            return@drawWithCache onDrawBehind {}
+        }
         val cornerPx = cornerRadiusDp.dp.toPx()
         val intensity = (config.glassIntensity / 100f).coerceIn(0f, 1f)
         val baseAlpha = ((config.opacity / 100f) * (0.52f + intensity * 0.44f)).coerceIn(0.08f, 0.88f)
@@ -616,30 +619,38 @@ fun Modifier.liquidGlassSurface(
             end = Offset(size.width, size.height)
         )
 
+        val refractionBrush = if (refractionAlpha > 0.02f) {
+            Brush.radialGradient(
+                colors = listOf(
+                    Color.Transparent,
+                    config.primaryColor.copy(alpha = refractionAlpha * 0.55f),
+                    config.accentColor.copy(alpha = refractionAlpha * 0.85f)
+                ),
+                center = Offset(size.width * 0.5f, size.height * 0.5f),
+                radius = (maxOf(size.width, size.height) * 0.72f).coerceAtLeast(1f)
+            )
+        } else {
+            null
+        }
+        val refractionStrokeWidthPx = 2.5.dp.toPx()
+        val rimStrokeWidthPx = 1.25.dp.toPx()
+
         onDrawBehind {
             drawRoundRect(
                 brush = surfaceBrush,
                 cornerRadius = CornerRadius(cornerPx, cornerPx)
             )
-            if (refractionAlpha > 0.02f) {
+            if (refractionBrush != null) {
                 drawRoundRect(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color.Transparent,
-                            config.primaryColor.copy(alpha = refractionAlpha * 0.55f),
-                            config.accentColor.copy(alpha = refractionAlpha * 0.85f)
-                        ),
-                        center = Offset(size.width * 0.5f, size.height * 0.5f),
-                        radius = maxOf(size.width, size.height) * 0.72f
-                    ),
+                    brush = refractionBrush,
                     cornerRadius = CornerRadius(cornerPx, cornerPx),
-                    style = Stroke(width = 2.5.dp.toPx())
+                    style = Stroke(width = refractionStrokeWidthPx)
                 )
             }
             drawRoundRect(
                 brush = rimBrush,
                 cornerRadius = CornerRadius(cornerPx, cornerPx),
-                style = Stroke(width = 1.25.dp.toPx())
+                style = Stroke(width = rimStrokeWidthPx)
             )
         }
     }

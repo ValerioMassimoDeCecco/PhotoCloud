@@ -152,6 +152,7 @@ export async function triggerGitHubActionsBuild(options?: {
     'android-app/app/src/main/res/drawable/ic_launcher_bw.xml',
     'android-app/app/src/main/res/values/strings.xml',
     'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt',
+    'android-app/app/src/main/java/com/valerio/photocloud/LiquidGlassDesignSystem.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/GalleryDragSelectionController.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/AiModelDownloadManager.kt',
