@@ -1,18 +1,18 @@
 {
-  "apkFilename": "photocloud-release-v1.2.4-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.2.4-signed.apk",
-  "sha256": "b3a4d8699aa43c3a5a438a16fd9e01015cce60aec7565dfef07b001b3dbabfc3",
-  "sizeBytes": 58905670,
+  "apkFilename": "photocloud-release-v1.2.5-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.2.5-signed.apk",
+  "sha256": "1ec3cc2e2602d3ab4318cd9b23e297e2e795b91d05eceb6944d1ac1df860c90f",
+  "sizeBytes": 26214400,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.2.4",
-  "versionCode": 21,
-  "changelog": "Correzione definitiva Drag Selection nella Galleria Android (gestione unificata pointerInput su PointerEventPass.Initial, eliminazione conflitto doppi listener e combinedClickable, auto-scroll continuo a 60fps sui bordi superiore/inferiore, hit-testing multi-riga e benchmark 5.000 foto).",
+  "versionName": "1.2.5",
+  "versionCode": 22,
+  "changelog": "Release 1.2.5 — Security Hardening completo (OWASP Top 10 & ASVS): protezione Stored/DOM XSS con sandbox CSP, difesa CSRF, validazione anti-Path Traversal e anti-Prototype Pollution, verifica chiavi constant-time, rate-limiting anti-brute-force e protezione Zip Bomb su Web e Android.",
   "features": [
-    "Correzione critica Drag Selection nella Galleria Android: stato touch unificato (ACTION_DOWN, ACTION_MOVE, ACTION_UP, ACTION_CANCEL) senza cancellazioni premature",
-    "Auto-scroll fluido continuo a 60fps vicino ai bordi superiore e inferiore anche a dito fermo sul bordo",
-    "Hit-testing geometrico row-aware attraverso gap, intestazioni data/album e righe multiple con deselection bidirezionale",
-    "Modello AI locale EfficientNet-Lite4 facoltativo on-demand e sistema di aggiornamento automatico APK in-app"
+    "Security Hardening Backend & Web App: Content-Security-Policy, sandbox su /media/:filename, protezione CSRF Origin e rimozione X-Powered-By",
+    "Protezione Crittografica & Autenticazione: verifica chiavi constant-time (timingSafeEqual), generazione chiavi senza modulo bias (randomInt) e rate-limiting anti-brute-force preservando al 100% il flusso di login e registrazione",
+    "Protezione File System & Anti-DoS: blocco dot-file/Path Traversal/Prototype Pollution e limiti anti-Zip Bomb su parser documenti Web e Android (PhotoCloudApiClient)",
+    "Drag Selection unificata a 60fps nella Galleria Android, modello AI locale facoltativo on-demand e auto-update APK con verifica SHA-256 + X.509"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.4",
-  "publishedAt": "2026-11-10T11:33:00Z"
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.5",
+  "publishedAt": "2026-11-10T15:12:15.850Z"
 }

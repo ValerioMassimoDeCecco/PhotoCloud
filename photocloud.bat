@@ -32,7 +32,7 @@ echo   [2] Avvia PhotoCloud - Modalita Produzione (npm start)
 echo   [3] Aggiorna la Web App (git pull + npm install + npm run build)
 echo   [4] Clona Repository Git (in una nuova sottocartella)
 echo   [5] Verifica e Installa Dipendenze Mancanti (Git, Node.js, npm)
-echo   [6] Compila APK Release Android (v1.2.4)
+echo   [6] Compila APK Release Android (v1.2.5)
 echo   [7] Esci
 echo.
 echo ======================================================================
@@ -393,7 +393,7 @@ goto PAUSE_RETURN
 :BUILD_APK
 cls
 echo ======================================================================
-echo   Compilazione APK Release Android (v1.2.4)
+echo   Compilazione APK Release Android (v1.2.5)
 echo ======================================================================
 call :ENSURE_TOOLS
 if "%TOOLS_OK%"=="0" goto PAUSE_RETURN

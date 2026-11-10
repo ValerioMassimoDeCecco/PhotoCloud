@@ -38,8 +38,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.2.4';
-const APK_FILENAME = 'photocloud-release-v1.2.4-signed.apk';
+const DEFAULT_TAG = 'v1.2.5';
+const APK_FILENAME = 'photocloud-release-v1.2.5-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
@@ -58,7 +58,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     if (fs.existsSync(fallbackSource)) {
       source = fallbackSource;
     } else {
-      const prevSource = path.join(outputDir, 'photocloud-release-v1.2.3-signed.apk');
+      const prevSource = path.join(outputDir, 'photocloud-release-v1.2.4-signed.apk');
       if (fs.existsSync(prevSource)) source = prevSource;
     }
   }
@@ -74,16 +74,16 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     sha256,
     sizeBytes: apkBuffer.length,
     applicationId: 'com.valerio.photocloud',
-    versionName: '1.2.4',
-    versionCode: 21,
-    changelog: 'Correzione strutturale Drag Selection nella Galleria Android (GalleryDragSelectionController unificato su PointerEventPass.Initial, rimozione conflitti pointerInput/combinedClickable e auto-scroll continuo a 60fps).',
+    versionName: '1.2.5',
+    versionCode: 22,
+    changelog: 'Release 1.2.5 — Security Hardening completo (OWASP Top 10 & ASVS): protezione Stored/DOM XSS con sandbox CSP, difesa CSRF, validazione anti-Path Traversal e anti-Prototype Pollution, verifica chiavi constant-time, rate-limiting anti-brute-force e protezione Zip Bomb su Web e Android.',
     features: [
-      'Correzione definitiva Drag Selection nella Galleria Android con macchina a stati unificata (GalleryDragSelectionController) su PointerEventPass.Initial',
-      'Eliminazione del conflitto di cancellazione reciproca tra doppio pointerInput e combinedClickable dei singoli tile',
-      'Auto-scroll continuo a 60fps ai bordi superiore e inferiore anche a dito fermo con selezione automatica delle righe in scorrimento',
-      'Modello AI locale EfficientNet-Lite4 facoltativo on-demand e sistema di aggiornamento automatico in-app con verifica SHA-256 e firma X.509'
+      'Security Hardening Backend & Web App: Content-Security-Policy, sandbox su /media/:filename, protezione CSRF Origin e rimozione X-Powered-By',
+      'Protezione Crittografica & Autenticazione: verifica chiavi constant-time (timingSafeEqual), generazione chiavi senza modulo bias (randomInt) e rate-limiting anti-brute-force preservando al 100% il flusso di login e registrazione',
+      'Protezione File System & Anti-DoS: blocco dot-file/Path Traversal/Prototype Pollution e limiti anti-Zip Bomb su parser documenti Web e Android (PhotoCloudApiClient)',
+      'Drag Selection unificata a 60fps nella Galleria Android, modello AI locale facoltativo on-demand e auto-update APK con verifica SHA-256 + X.509'
     ],
-    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.4',
+    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.5',
     publishedAt: new Date().toISOString(),
   }, null, 2));
   return { apkPath, apkBuffer, sha256, metadataPath };

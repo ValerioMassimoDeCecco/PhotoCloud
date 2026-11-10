@@ -520,24 +520,25 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(mainActivityKt.includes('val autoScrollJob = scope.launch'));
   assert.equal(mainActivityKt.includes('detectDragGesturesAfterLongPress('), false, 'Conflicting dual pointerInput detector call must be removed');
 
-  // 5. Release v1.2.4 signed APK, historical APKs preserved, metadata, and Gradle configuration
-  const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.2.4-signed.apk');
+  // 5. Release v1.2.5 signed APK, historical APKs preserved, metadata, and Gradle configuration
+  const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.2.5-signed.apk');
   assert.ok(fs.existsSync(apkPath));
-  assert.ok(fs.statSync(apkPath).size > 20 * 1024 * 1024, 'Signed release APK v1.2.4 should be > 20MB');
+  assert.ok(fs.statSync(apkPath).size > 20 * 1024 * 1024, 'Signed release APK v1.2.5 should be > 20MB');
+  assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.2.4-signed.apk')));
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.2.3-signed.apk')));
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.2.2-signed.apk')));
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.1.3-signed.apk')));
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.2.4"'));
-  assert.ok(appBuildGradle.includes('versionCode = 21'));
+  assert.ok(appBuildGradle.includes('versionName = "1.2.5"'));
+  assert.ok(appBuildGradle.includes('versionCode = 22'));
   assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
   assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
   assert.ok(appBuildGradle.includes('androidx.work:work-runtime-ktx:2.9.0'));
   assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.2.4');
+  assert.equal(pkgJson.version, '1.2.5');
 
   // 6. Multi-platform interactive CLI scripts (photocloud.bat & photocloud.sh)
   const batPath = path.resolve(process.cwd(), 'photocloud.bat');
@@ -580,8 +581,8 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   const baseConfig = {
     appName: 'PhotoCloud "Vault" <Test>',
     packageName: 'com.valerio.photocloud',
-    versionName: '1.2.4',
-    versionCode: 21,
+    versionName: '1.2.5',
+    versionCode: 22,
     serverUrl: 'http://10.0.2.2:3000',
     minSdk: 26,
     targetSdk: 35,
@@ -607,7 +608,7 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   assert.ok(!manifestXml.includes('android:label="PhotoCloud "Vault"'));
 
   const gradleKts = generateAppBuildGradleKts(baseConfig);
-  assert.ok(gradleKts.includes('versionName = "1.2.4"'));
+  assert.ok(gradleKts.includes('versionName = "1.2.5"'));
 
   const mainKt = generateMainActivityKt(baseConfig);
   assert.ok(mainKt.includes('settings.allowFileAccess = false'));

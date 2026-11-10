@@ -470,7 +470,12 @@ class PhotoCloudApiClient(
     }
 
     private fun diskCacheFile(filename: String, fromTrash: Boolean): File {
-        val safeName = filename.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val safeName = filename
+            .replace("..", "_")
+            .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            .trimStart('.')
+            .take(180)
+            .ifBlank { "file" }
         val prefix = if (fromTrash) "trash" else "gal"
         return File(diskCacheDir, "${prefix}_${safeName}")
     }
@@ -2189,12 +2194,27 @@ class PhotoCloudApiClient(
         val zipEntries = mutableMapOf<String, String>()
         if (bytes.size >= 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4B.toByte()) {
             try {
+                val maxEntryBytes = 5 * 1024 * 1024 // 5 MB max per XML entry (Zip Bomb defense)
+                val maxEntries = 500
+                var entryCount = 0
                 ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
                     var entry = zis.nextEntry
-                    while (entry != null) {
-                        if (!entry.isDirectory && (entry.name.endsWith(".xml") || entry.name.endsWith(".rels"))) {
-                            val text = zis.readBytes().toString(Charsets.UTF_8)
-                            zipEntries[entry.name] = text
+                    while (entry != null && entryCount < maxEntries) {
+                        entryCount++
+                        val entryName = entry.name ?: ""
+                        if (!entry.isDirectory && !entryName.contains("..") && (entryName.endsWith(".xml") || entryName.endsWith(".rels"))) {
+                            val outBuf = java.io.ByteArrayOutputStream()
+                            val chunk = ByteArray(8192)
+                            var totalRead = 0
+                            var r: Int
+                            while (zis.read(chunk).also { r = it } != -1) {
+                                totalRead += r
+                                if (totalRead > maxEntryBytes) break
+                                outBuf.write(chunk, 0, r)
+                            }
+                            if (totalRead <= maxEntryBytes) {
+                                zipEntries[entryName] = outBuf.toByteArray().toString(Charsets.UTF_8)
+                            }
                         }
                         entry = zis.nextEntry
                     }

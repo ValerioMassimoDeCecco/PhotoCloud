@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.4)
+# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.5)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -7,6 +7,33 @@
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
+
+---
+
+## ⚡ Novità Principali della Release `v1.2.5` (`versionCode 22`) — Security Hardening Completo (Web App & APK Android)
+
+### 1. Hardening Backend, API & Sessioni (`server.ts` & `src/lib/crypto.ts`)
+- **Protezione Crittografica Constant-Time & Zero Modulo Bias**:
+  - `verifyKey` utilizza `crypto.timingSafeEqual` con verifica rigorosa del formato esadecimale a 64 caratteri, neutralizzando attacchi timing side-channel.
+  - `generateApiKey` utilizza `crypto.randomInt(0, CHARS.length)` per eliminare qualsiasi distorsione statistica nella generazione delle chiavi a 32 caratteri.
+- **Protezione Anti-Brute-Force & Anti-User-Enumeration su `/login`**:
+  - Esecuzione di una verifica PBKDF2 dummy constant-time quando l'utente non esiste e rate-limiting per IP (`429 Too Many Requests` dopo 20 tentativi falliti in 15 minuti), mantenendo **invariati al 100%** i flussi di login, registrazione e gestione sessioni.
+- **Validazione Rigorosa dei Nomi File (`isValidVaultFilename`) & Prevenzione Prototype Pollution**:
+  - Blocco di file nascosti/metadati interni (`.albums.json`), path traversal (`..`, `/`, `\`) e chiavi riservate (`__proto__`, `constructor`, `prototype`) su tutti gli endpoint (`/media/*`, `/trash/*`, `/restore/*`, `/delete_permanent/*`, `/prepare-zip`, `/api/media/edit`, `/api/albums/*`).
+  - L'indice `.albums.json` viene inizializzato con `Object.create(null)`.
+- **Sandboxing `/media/:filename` & Sicurezza HTTP Globale**:
+  - Header globali `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, `Permissions-Policy`, `Cross-Origin-Opener-Policy` e rimozione di `X-Powered-By`.
+  - Validazione CSRF dell'header `Origin` sulle richieste mutative autenticate (`POST`, `PUT`, `DELETE`, `PATCH`).
+  - Forzatura di `Content-Disposition: attachment` + `Content-Security-Policy: sandbox` sui file attivi (`.html`, `.svg`, `.xml`, `.js`) serviti da `/media/:filename`.
+  - Protezione con autenticazione obbligatoria per `POST /api/android/build-release` e validazione rigorosa di `buildId`.
+
+### 2. Hardening Frontend, Document Engine & App Android (`v1.2.5`)
+- **Prevenzione DOM XSS (`static/scripts/grouping.js` & `src/lib/templateRenderer.ts`)**:
+  - Sostituita l'interpolazione `innerHTML` in `renderTrashPaneDom` con nodi DOM sicuri (`createElement`, `textContent`, `dataset`) ed effettuato l'escaping HTML di `category` e `iconName`.
+- **Protezione Anti-Zip-Bomb DoS (`src/lib/documentEngine.ts` & `PhotoCloudApiClient.kt`)**:
+  - Limiti sul numero massimo di voci ZIP e sulla dimensione massima decompressa per singola entry sia sul server (`10 MB` / `1.000` voci) sia sul client Android (`5 MB` / `500` voci) durante l'anteprima di file `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp` e `.apk`.
+- **Hardening Client Android & Builder (`PhotoCloudApiClient.kt` & `src/lib/androidBuilder.ts`)**:
+  - Sanificazione di `diskCacheFile` contro caratteri separatori e sequenze `..`, escaping XML/Kotlin nel generatore Android e disabilitazione di `allowFileAccess` / `allowContentAccess` nelle WebView generate.
 
 ---
 
@@ -343,9 +370,9 @@ Puoi aggiornare automaticamente la web app usando **`photocloud.bat`** (Opzione 
 
 ### 🤖 5. Android (Installazione APK & Compilazione da Sorgente)
 
-#### Opzione A: Installare l'APK Firmato Pronto (`v1.2.4`)
-1. Scarica **`photocloud-release-v1.2.4-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.4)** (le Release GitHub sono la sorgente ufficiale dell'APK firmato; `release/photocloud-release-build.json` ne riporta il checksum SHA-256). In alternativa puoi compilarlo localmente con la Opzione B (`/release/photocloud-release-v1.2.4-signed.apk`).
-2. Apri il file `.apk` sul tuo dispositivo Android per installarlo o aggiornare direttamente una versione precedente (`v1.0.4`–`v1.2.3`) senza perdere dati o configurazioni. Dalle versioni `v1.2.3+` gli aggiornamenti successivi vengono rilevati e scaricati automaticamente all'apertura dell'app.
+#### Opzione A: Installare l'APK Firmato Pronto (`v1.2.5`)
+1. Scarica **`photocloud-release-v1.2.5-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.5)** (le Release GitHub sono la sorgente ufficiale dell'APK firmato; `release/photocloud-release-build.json` ne riporta il checksum SHA-256). In alternativa puoi compilarlo localmente con la Opzione B (`/release/photocloud-release-v1.2.5-signed.apk`).
+2. Apri il file `.apk` sul tuo dispositivo Android per installarlo o aggiornare direttamente una versione precedente (`v1.0.4`–`v1.2.4`) senza perdere dati o configurazioni. Dalle versioni `v1.2.3+` gli aggiornamenti successivi vengono rilevati e scaricati automaticamente all'apertura dell'app.
 3. Tocca il badge **Server** in alto a destra per inserire l'URL del tuo server PhotoCloud (`http://<IP-SERVER>:3000`), effettua il login con il tuo file `.json` e apri o modifica istantaneamente qualsiasi foto, video, PDF o documento Office.
 
 #### Opzione B: Compilare l'APK da Sorgente con Gradle
@@ -354,7 +381,7 @@ Puoi aggiornare automaticamente la web app usando **`photocloud.bat`** (Opzione 
 cd android-app
 gradle assembleRelease --no-daemon
 
-# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.2.4-signed.apk
+# Oppure tramite lo script integrato che genera e verifica /release/photocloud-release-v1.2.5-signed.apk
 npm run release:apk
 ```
 
@@ -367,9 +394,9 @@ npm run release:apk
 | `npm run dev` | Avvia il server full-stack Express + Vite in modalità sviluppo sulla porta `3000`. |
 | `npm run build` | Compila i bundle frontend ottimizzati per la produzione. |
 | `npm start` | Avvia il server Node.js/TypeScript in modalità produzione. |
-| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, test bytecode JVM per `GalleryDragSelectionController` e configurazione Android `v1.2.4`). |
+| `npm test` | Esegue la suite di test automatici (crittografia AES-256, deduplicazione SHA-256, Photo Editor Math & Manual Crop Grid, Document Viewer Engine per PDF/DOCX/XLSX/PPTX/CSV, Security Hardening, test bytecode JVM per `GalleryDragSelectionController` e configurazione Android `v1.2.5`). |
 | `npm run lint` | Verifica statica dei tipi TypeScript (`tsc --noEmit`). |
-| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.2.4-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
+| `npm run release:apk` | Compila l'APK firmato `/release/photocloud-release-v1.2.5-signed.apk` tramite Gradle e Android SDK; se `GITHUB_TOKEN` è presente nel sistema, sincronizza e avvia anche la GitHub Action di release. |
 
 ---
 
@@ -378,11 +405,11 @@ npm run release:apk
 ```text
 PhotoCloud/
 ├── .github/workflows/
-│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.2.4
+│   └── android-release.yml       # Pipeline CI/CD GitHub Actions (JDK 17 + Android SDK 35 + Gradle 8.10.2) per v1.2.5
 ├── android-app/                  # Progetto Nativo Android (Kotlin + Jetpack Compose Material You 120Hz)
 │   ├── app/
 │   │   ├── photocloud-release-key.jks  # Keystore RSA-2048 per firma APK
-│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.2.4 (versionCode 21)
+│   │   ├── build.gradle.kts            # Configurazione SDK 35, Compose, OkHttp, Biometric, versione 1.2.5 (versionCode 22)
 │   │   └── src/main/
 │   │       ├── AndroidManifest.xml     # Permessi (incluso REQUEST_INSTALL_PACKAGES), FileProvider (content:// URI) e alias icone
 │   │       ├── java/com/valerio/photocloud/
@@ -393,12 +420,12 @@ PhotoCloud/
 │   │       │   ├── LocalPhotoCategorizer.kt           # Inferenza AI locale on-device da file scaricato su richiesta
 │   │       │   ├── PhotoAiDatabase.kt                 # Database Room per categorie AI
 │   │       │   ├── PhotoAiIndexingWorker.kt           # Worker WorkManager per indicizzazione foto cloud quando il modello è installato
-│   │       │   └── PhotoCloudApiClient.kt             # Client HTTP, thumbnailCache RAM 0ms (380px), preview documenti, FileProvider chooser e tracker velocità
+│   │       │   └── PhotoCloudApiClient.kt             # Client HTTP, thumbnailCache RAM 0ms (380px), preview documenti anti-ZipBomb, FileProvider chooser e tracker velocità
 │   │       └── res/
 │   │           ├── xml/file_paths.xml                 # Percorsi autorizzati per FileProvider (inclusi APK di aggiornamento)
 │   │           └── drawable/                          # Icone Launcher Colorata e Monocromatica
 ├── release/
-│   ├── photocloud-release-v1.2.4-signed.apk           # APK firmato v1.2.4 (oltre a tutte le release storiche incluse v1.1.3–v1.2.3)
+│   ├── photocloud-release-v1.2.5-signed.apk           # APK firmato v1.2.5 (oltre a tutte le release storiche incluse v1.1.3–v1.2.4)
 │   ├── efficientnet_lite4.tflite                      # Modello AI servito on-demand dal server (/api/ai-model/efficientnet_lite4.tflite)
 │   └── photocloud-release-build.json                  # Manifest aggiornamenti con versione, versionCode, dimensione, changelog e SHA-256
 ├── src/

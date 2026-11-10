@@ -72,16 +72,16 @@ jobs:
             echo "Errore: nessun file APK trovato in app/build/outputs/apk/release"
             exit 1
           fi
-          cp "$APK_OUT" ../photocloud-release-v1.2.4-signed.apk
-          sha256sum ../photocloud-release-v1.2.4-signed.apk > ../photocloud-release-v1.2.4-signed.apk.sha256
+          cp "$APK_OUT" ../photocloud-release-v1.2.5-signed.apk
+          sha256sum ../photocloud-release-v1.2.5-signed.apk > ../photocloud-release-v1.2.5-signed.apk.sha256
 
       - name: Upload Signed APK as GitHub Actions Artifact
         uses: actions/upload-artifact@v4
         with:
           name: photocloud-release-signed-apk
           path: |
-            photocloud-release-v1.2.4-signed.apk
-            photocloud-release-v1.2.4-signed.apk.sha256
+            photocloud-release-v1.2.5-signed.apk
+            photocloud-release-v1.2.5-signed.apk.sha256
             release/photocloud-release-build.json
           if-no-files-found: error
 
@@ -93,7 +93,7 @@ jobs:
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "TAG=v1.2.4" >> $GITHUB_OUTPUT
+            echo "TAG=v1.2.5" >> $GITHUB_OUTPUT
           fi
 
       - name: Publish Signed APK to GitHub Releases
@@ -103,18 +103,18 @@ jobs:
           name: PhotoCloud Android Release ${{ steps.release_meta.outputs.TAG }}
           body: |
             ### PhotoCloud Android Release (${{ steps.release_meta.outputs.TAG }})
-            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.2.3** per aggiornamento diretto.
+            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.2.4** per aggiornamento diretto.
 
             - **Application ID**: `com.valerio.photocloud`
-            - **Versione**: `1.2.4` (`versionCode 21`)
-            - **Novità v1.2.4 — Correzione Strutturale Drag Selection nella Galleria Android**:
-              - **Motore Unificato `GalleryDragSelectionController` su `PointerEventPass.Initial`**: risolto il bug critico in cui i due blocchi `pointerInput` concorrenti e il `combinedClickable` dei singoli tile causavano la cancellazione immediata del gesto al primo pixel di movimento (`onDragCancel`).
-              - **Trascinamento Orizzontale, Verticale, Diagonale e Multi-Riga**: selezione e deselezione continua ad alta precisione su qualsiasi numero di foto con auto-scroll fluido a 60fps ai bordi superiore e inferiore dello schermo anche mantenendo il dito fermo sul bordo.
-            - **APK Firmato**: `photocloud-release-v1.2.4-signed.apk`
-            - **Checksum SHA-256**: `photocloud-release-v1.2.4-signed.apk.sha256`
+            - **Versione**: `1.2.5` (`versionCode 22`)
+            - **Novità v1.2.5 — Security Hardening Completo (OWASP Top 10 & ASVS)**:
+              - **Hardening Web, API & Vault**: protezione Stored/DOM XSS con sandbox CSP, difesa CSRF Origin, blocco dot-file/Path Traversal/Prototype Pollution, verifica chiavi constant-time e rate-limiting anti-brute-force.
+              - **Hardening Client Android & Parser Documenti**: protezione anti-Zip Bomb nella lettura di archivi Office/OpenDocument e sanitizzazione dei percorsi cache in `PhotoCloudApiClient`.
+            - **APK Firmato**: `photocloud-release-v1.2.5-signed.apk`
+            - **Checksum SHA-256**: `photocloud-release-v1.2.5-signed.apk.sha256`
           files: |
-            photocloud-release-v1.2.4-signed.apk
-            photocloud-release-v1.2.4-signed.apk.sha256
+            photocloud-release-v1.2.5-signed.apk
+            photocloud-release-v1.2.5-signed.apk.sha256
             release/photocloud-release-build.json
           draft: false
           prerelease: false

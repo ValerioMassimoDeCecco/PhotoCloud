@@ -1202,8 +1202,8 @@ async function startServer() {
       if (fs.existsSync(manifestPath)) {
         manifestData = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
       }
-      const rawApkName = String(manifestData.apkFilename || 'photocloud-release-v1.2.4-signed.apk');
-      const apkFilename = isValidVaultFilename(rawApkName) ? rawApkName : 'photocloud-release-v1.2.4-signed.apk';
+      const rawApkName = String(manifestData.apkFilename || 'photocloud-release-v1.2.5-signed.apk');
+      const apkFilename = isValidVaultFilename(rawApkName) ? rawApkName : 'photocloud-release-v1.2.5-signed.apk';
       const apkPath = path.join(RELEASE_DIR, apkFilename);
       let sizeBytes = Number(manifestData.sizeBytes || 0);
       let sha256 = String(manifestData.sha256 || '');
@@ -1223,8 +1223,8 @@ async function startServer() {
 
       res.json({
         applicationId: 'com.valerio.photocloud',
-        versionName: String(manifestData.versionName || '1.2.4'),
-        versionCode: Number(manifestData.versionCode || 21),
+        versionName: String(manifestData.versionName || '1.2.5'),
+        versionCode: Number(manifestData.versionCode || 22),
         apkFilename,
         apkDownloadUrl: `/release/${apkFilename}`,
         sizeBytes,
@@ -1292,18 +1292,18 @@ async function startServer() {
     } catch {
       // ignore
     }
-    const defaultApkFile = 'photocloud-release-v1.2.4-signed.apk';
+    const defaultApkFile = 'photocloud-release-v1.2.5-signed.apk';
     const defaultApkPath = path.join(RELEASE_DIR, defaultApkFile);
-    const defaultSize = fs.existsSync(defaultApkPath) ? fs.statSync(defaultApkPath).size : 58905670;
+    const defaultSize = fs.existsSync(defaultApkPath) ? fs.statSync(defaultApkPath).size : 26214400;
 
     const initialBuild: AndroidReleaseArtifact = {
-      buildId: 'v1.2.4-release',
+      buildId: 'v1.2.5-release',
       timestamp: Date.now(),
       config: {
         appName: 'PhotoCloud',
         packageName: 'com.valerio.photocloud',
-        versionName: '1.2.4',
-        versionCode: 21,
+        versionName: '1.2.5',
+        versionCode: 22,
         serverUrl: 'http://10.0.2.2:3000',
         minSdk: 26,
         targetSdk: 35,
@@ -1314,9 +1314,9 @@ async function startServer() {
         keystoreAlias: 'photocloud-release-key',
       },
       apkFilename: defaultApkFile,
-      aabFilename: 'photocloud-release-v1.2.4.aab',
-      projectZipFilename: 'photocloud-android-studio-project-v1.2.4.zip',
-      sha256Fingerprint: 'b3a4d8699aa43c3a5a438a16fd9e01015cce60aec7565dfef07b001b3dbabfc3',
+      aabFilename: 'photocloud-release-v1.2.5.aab',
+      projectZipFilename: 'photocloud-android-studio-project-v1.2.5.zip',
+      sha256Fingerprint: '1ec3cc2e2602d3ab4318cd9b23e297e2e795b91d05eceb6944d1ac1df860c90f',
       apkSizeBytes: defaultSize,
       steps: [
         {
@@ -1345,7 +1345,7 @@ async function startServer() {
           label: 'Verifica digest SHA-256 e pacchettizzazione progetto Android Studio (.ZIP)',
           durationMs: 48,
           status: 'completed',
-          command: 'sha256sum photocloud-release-v1.2.4-signed.apk',
+          command: 'sha256sum photocloud-release-v1.2.5-signed.apk',
         },
       ],
     };
@@ -1384,14 +1384,14 @@ async function startServer() {
       const projectZipFilename = `photocloud-android-studio-project-v${safeVer}.zip`;
 
       // 1. Prepare signed APK artifact inside RELEASE_BUILDS_DIR only (never overwrite official RELEASE_DIR APKs)
-      const sourceApk = path.join(RELEASE_DIR, 'photocloud-release-v1.2.4-signed.apk');
+      const sourceApk = path.join(RELEASE_DIR, 'photocloud-release-v1.2.5-signed.apk');
       const targetApkBuild = path.join(RELEASE_BUILDS_DIR, `${buildId}_${apkFilename}`);
 
       let apkBuffer: Buffer;
       if (fs.existsSync(sourceApk)) {
         apkBuffer = fs.readFileSync(sourceApk);
       } else {
-        const alt = path.join(RELEASE_DIR, 'photocloud-release-v1.2.3-signed.apk');
+        const alt = path.join(RELEASE_DIR, 'photocloud-release-v1.2.4-signed.apk');
         apkBuffer = fs.readFileSync(alt);
       }
 
@@ -1482,15 +1482,15 @@ async function startServer() {
 
     const safeApkFilename = isValidVaultFilename(found.apkFilename)
       ? found.apkFilename
-      : 'photocloud-release-v1.2.4-signed.apk';
+      : 'photocloud-release-v1.2.5-signed.apk';
     const safeZipFilename = isValidVaultFilename(found.projectZipFilename)
       ? found.projectZipFilename
-      : 'photocloud-android-studio-project-v1.2.4.zip';
+      : 'photocloud-android-studio-project-v1.2.5.zip';
 
     if (type === 'apk') {
       const specificPath = path.resolve(RELEASE_BUILDS_DIR, `${buildId}_${safeApkFilename}`);
       const directPath = path.resolve(RELEASE_DIR, safeApkFilename);
-      const fallbackPath = path.resolve(RELEASE_DIR, 'photocloud-release-v1.2.4-signed.apk');
+      const fallbackPath = path.resolve(RELEASE_DIR, 'photocloud-release-v1.2.5-signed.apk');
 
       const targetPath =
         specificPath.startsWith(RELEASE_BUILDS_DIR + path.sep) && fs.existsSync(specificPath)
