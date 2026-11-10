@@ -48,7 +48,7 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Compile Release & Debug Kotlin
+      - name: Verify Release Kotlin Compilation & Release APK Build
         working-directory: ./android-app
         run: |
-          gradle :app:compileReleaseKotlin :app:compileDebugKotlin --no-daemon --stacktrace
+          gradle :app:compileReleaseKotlin :app:assembleRelease --no-daemon --stacktrace
