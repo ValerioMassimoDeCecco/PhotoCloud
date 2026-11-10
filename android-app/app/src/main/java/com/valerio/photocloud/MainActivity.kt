@@ -4956,10 +4956,19 @@ fun NativeSettingsScreen(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "Controllo automatico all'apertura su GitHub Releases e server PhotoCloud con verifica integrità SHA-256 e firma digitale X.509 prima dell'installazione.",
+                text = "Controllo automatico all'apertura su GitHub Releases e server PhotoCloud con verifica integrità SHA-256 e firma digitale X.509 prima dell'installazione. L'app installa solo APK con versionCode superiore a quello installato, così un aggiornamento non può più ripresentarsi in loop.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (updateState.status == AppUpdateStatus.ERROR && !updateState.errorMessage.isNullOrBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = updateState.errorMessage.orEmpty(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
             Spacer(Modifier.height(12.dp))
             FilledTonalButton(
                 onClick = {

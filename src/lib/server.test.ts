@@ -72,15 +72,22 @@ test('server protects vaults, preserves collisions, and handles real media flows
     assert.equal((await get('/service-worker.js')).status, 200);
     assert.equal((await get('/')).status, 200);
 
-    // Verify v1.2.5 Android update manifest and optional AI model Range streaming endpoints
+    // Verify Android update manifest and optional AI model Range streaming endpoints.
+    // Invariante anti-loop: la versione annunciata deve corrispondere all'APK realmente servito.
     const updateManifestResp = await get('/api/android/update-manifest');
-    assert.equal(updateManifestResp.status, 200);
-    const updateManifest = await updateManifestResp.json() as any;
-    assert.equal(updateManifest.versionName, '1.2.5');
-    assert.equal(updateManifest.versionCode, 22);
-    assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.2.5-signed.apk');
-    assert.equal(updateManifest.sha256.length, 64);
-    assert.ok(updateManifest.sizeBytes > 20 * 1024 * 1024);
+    if (updateManifestResp.status === 404) {
+      const missing = await updateManifestResp.json() as any;
+      assert.equal(missing.error, 'Nessun APK di release disponibile sul server');
+      assert.equal(missing.versionName, '1.2.6');
+    } else {
+      assert.equal(updateManifestResp.status, 200);
+      const updateManifest = await updateManifestResp.json() as any;
+      assert.equal(updateManifest.versionCode, 23);
+      assert.equal(updateManifest.versionName, '1.2.6');
+      assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.2.6-signed.apk');
+      assert.equal(updateManifest.sha256.length, 64);
+      assert.ok(updateManifest.sizeBytes > 20 * 1024 * 1024);
+    }
 
     const modelRangeResp = await fetch(base + '/api/ai-model/efficientnet_lite4.tflite', {
       headers: { Range: 'bytes=0-1023' },

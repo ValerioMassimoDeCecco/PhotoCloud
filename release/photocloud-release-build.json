@@ -1,18 +1,17 @@
 {
-  "apkFilename": "photocloud-release-v1.2.5-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.2.5-signed.apk",
+  "apkFilename": "photocloud-release-v1.2.6-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.2.6-signed.apk",
   "sha256": "1ec3cc2e2602d3ab4318cd9b23e297e2e795b91d05eceb6944d1ac1df860c90f",
   "sizeBytes": 26214400,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.2.5",
-  "versionCode": 22,
-  "changelog": "Release 1.2.5 — Security Hardening completo (OWASP Top 10 & ASVS): protezione Stored/DOM XSS con sandbox CSP, difesa CSRF, validazione anti-Path Traversal e anti-Prototype Pollution, verifica chiavi constant-time, rate-limiting anti-brute-force e protezione Zip Bomb su Web e Android.",
+  "versionName": "1.2.6",
+  "versionCode": 23,
+  "changelog": "Release 1.2.6 — Fix aggiornamento automatico: la versione dell'APK pubblicato è ora verificata contro android-app/app/build.gradle.kts (versionName/versionCode) sia in CI sia nell'app, con blocco degli aggiornamenti \"fantasma\" che riproponevano la stessa versione ad ogni avvio.",
   "features": [
-    "Security Hardening Backend & Web App: Content-Security-Policy, sandbox su /media/:filename, protezione CSRF Origin e rimozione X-Powered-By",
-    "Protezione Crittografica & Autenticazione: verifica chiavi constant-time (timingSafeEqual), generazione chiavi senza modulo bias (randomInt) e rate-limiting anti-brute-force preservando al 100% il flusso di login e registrazione",
-    "Protezione File System & Anti-DoS: blocco dot-file/Path Traversal/Prototype Pollution e limiti anti-Zip Bomb su parser documenti Web e Android (PhotoCloudApiClient)",
-    "Drag Selection unificata a 60fps nella Galleria Android, modello AI locale facoltativo on-demand e auto-update APK con verifica SHA-256 + X.509"
+    "Auto-update: l'app verifica che l'APK scaricato abbia davvero un versionCode maggiore di quello installato, evitando il ciclo infinito di aggiornamenti",
+    "Pipeline GitHub Actions: tag di release, nome dell'APK e manifest di update derivano ora da un'unica fonte (versionName/versionCode in build.gradle.kts) con verifica bloccante",
+    "Endpoint /api/android/update-manifest allineato alla versione reale del progetto e all'APK effettivamente presente in /release"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.5",
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.6",
   "publishedAt": "2026-11-10T21:06:00.982Z"
 }
