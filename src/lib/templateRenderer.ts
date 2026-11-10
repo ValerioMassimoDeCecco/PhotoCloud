@@ -79,9 +79,9 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
       const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic', 'avif'].includes(ext);
       const isVid = ['mp4', 'mov', 'webm', 'mkv'].includes(ext);
       const isMedia = item.isMedia !== undefined ? item.isMedia : isImg || isVid;
-      const category = item.category || (isMedia ? 'media' : 'other');
+      const category = escapeHtml(item.category || (isMedia ? 'media' : 'other'));
       const album = escapeHtml(item.album || '');
-      const sizeBytes = item.size || 0;
+      const sizeBytes = Number(item.size) || 0;
       const humanSize = formatFileSize(sizeBytes);
 
       let mediaTag = '';
@@ -93,7 +93,7 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                     </video>
                     <div class="video-overlay"><span class="material-icons">play_circle</span></div>`;
       } else {
-        const iconName = getCategoryIcon(category, ext);
+        const iconName = escapeHtml(getCategoryIcon(item.category, ext));
         mediaTag = `<div class="cloud-file-preview" data-category="${category}">
                         <div class="cloud-file-icon-wrap">
                             <span class="material-icons">${iconName}</span>
@@ -113,7 +113,7 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
 
       return `
         <div class="media-card-wrapper ${isMedia ? 'is-media-item' : 'is-cloud-file'}"
-             data-timestamp="${item.timestamp}"
+             data-timestamp="${Number(item.timestamp) || 0}"
              data-filename="${file}"
              data-size="${sizeBytes}"
              data-is-media="${isMedia ? 'true' : 'false'}"

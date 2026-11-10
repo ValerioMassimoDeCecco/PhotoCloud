@@ -562,7 +562,54 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(shContent.includes('check_and_install_dependencies'), 'photocloud.sh must check and install dependencies');
 });
 
+test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and WebView file access lockdown', async () => {
+  const {
+    validateAndroidConfig,
+    generateAndroidManifestXml,
+    generateAppBuildGradleKts,
+    generateMainActivityKt,
+  } = await import('./androidBuilder');
 
+  const validKey = 'MyStrongKey#2026!';
+  const validHash = hashKey(validKey);
+  assert.equal(verifyKey(validKey, validHash), true);
+  assert.equal(verifyKey(validKey, validHash.toUpperCase() + '\n'), true);
+  assert.equal(verifyKey(validKey, 'short_invalid_hash'), false);
+  assert.equal(verifyKey('wrong', validHash), false);
 
+  const baseConfig = {
+    appName: 'PhotoCloud "Vault" <Test>',
+    packageName: 'com.valerio.photocloud',
+    versionName: '1.2.4',
+    versionCode: 21,
+    serverUrl: 'http://10.0.2.2:3000',
+    minSdk: 26,
+    targetSdk: 35,
+    enableBiometricLock: true,
+    enableOfflineCache: true,
+    enableAutoBackup: false,
+    signingMode: 'release' as const,
+    keystoreAlias: 'photocloud-release-key',
+  };
 
+  assert.equal(validateAndroidConfig(baseConfig), null);
+  assert.notEqual(
+    validateAndroidConfig({ ...baseConfig, serverUrl: 'javascript:alert(1)' }),
+    null
+  );
+  assert.notEqual(
+    validateAndroidConfig({ ...baseConfig, keystoreAlias: 'bad"alias' }),
+    null
+  );
 
+  const manifestXml = generateAndroidManifestXml(baseConfig);
+  assert.ok(manifestXml.includes('PhotoCloud &quot;Vault&quot; &lt;Test&gt;'));
+  assert.ok(!manifestXml.includes('android:label="PhotoCloud "Vault"'));
+
+  const gradleKts = generateAppBuildGradleKts(baseConfig);
+  assert.ok(gradleKts.includes('versionName = "1.2.4"'));
+
+  const mainKt = generateMainActivityKt(baseConfig);
+  assert.ok(mainKt.includes('settings.allowFileAccess = false'));
+  assert.ok(mainKt.includes('settings.allowContentAccess = false'));
+});

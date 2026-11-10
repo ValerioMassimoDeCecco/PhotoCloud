@@ -13,9 +13,8 @@ const ALL_CHARS = LOWER + UPPER + DIGITS + PUNCT;
 export function generateApiKey(length = 32): string {
   while (true) {
     let key = '';
-    const bytes = crypto.randomBytes(length);
     for (let i = 0; i < length; i++) {
-      key += ALL_CHARS[bytes[i] % ALL_CHARS.length];
+      key += ALL_CHARS[crypto.randomInt(0, ALL_CHARS.length)];
     }
     const hasLower = [...key].some((c) => LOWER.includes(c));
     const hasUpper = [...key].some((c) => UPPER.includes(c));
@@ -35,10 +34,20 @@ export function hashKey(key: string): string {
 }
 
 /**
- * Verifies an API key against a stored SHA-256 hex hash.
+ * Verifies an API key against a stored SHA-256 hex hash using constant-time comparison.
  */
 export function verifyKey(key: string, storedHash: string): boolean {
-  return hashKey(key) === storedHash.trim();
+  if (typeof key !== 'string' || typeof storedHash !== 'string') return false;
+  const computedHex = hashKey(key);
+  const cleanStored = storedHash.trim().toLowerCase();
+  const computedBuf = Buffer.from(computedHex, 'utf-8');
+  const storedBuf = Buffer.from(cleanStored, 'utf-8');
+  if (computedBuf.length !== storedBuf.length) {
+    // Compare computedBuf against itself to keep constant execution time before returning false
+    crypto.timingSafeEqual(computedBuf, computedBuf);
+    return false;
+  }
+  return crypto.timingSafeEqual(computedBuf, storedBuf);
 }
 
 /**

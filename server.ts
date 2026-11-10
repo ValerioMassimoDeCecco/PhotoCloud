@@ -56,6 +56,46 @@ interface UserAlbumsData {
 }
 
 const SESSIONS = new Map<string, SessionData>();
+const LOGIN_ATTEMPTS = new Map<string, { count: number; resetAt: number }>();
+const DUMMY_KEY_HASH = hashKey('PhotoCloud_Constant_Time_Dummy_Key_2026!@#');
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FORBIDDEN_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+export function isValidVaultFilename(name: unknown): name is string {
+  if (typeof name !== 'string') return false;
+  if (name.length < 1 || name.length > 255) return false;
+  if (FORBIDDEN_OBJECT_KEYS.has(name)) return false;
+  if (name.startsWith('.')) return false;
+  if (name !== path.basename(name)) return false;
+  if (/[\/\\:\x00-\x1f\x7f]/.test(name)) return false;
+  return true;
+}
+
+function isValidAlbumName(name: unknown): name is string {
+  if (typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  if (trimmed.length < 1 || trimmed.length > 128) return false;
+  if (FORBIDDEN_OBJECT_KEYS.has(trimmed)) return false;
+  if (/[\x00-\x1f\x7f]/.test(trimmed)) return false;
+  return true;
+}
+
+// Periodic cleanup of expired sessions and rate-limit records
+const sessionCleanupTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [sid, sess] of SESSIONS.entries()) {
+    if (sess.expiresAt <= now) {
+      SESSIONS.delete(sid);
+    }
+  }
+  for (const [key, entry] of LOGIN_ATTEMPTS.entries()) {
+    if (entry.resetAt <= now) {
+      LOGIN_ATTEMPTS.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
+sessionCleanupTimer.unref();
+
 const ZIP_TASKS = new Map<
   string,
   {
@@ -72,13 +112,17 @@ const ZIP_TASKS = new Map<
 
 
 function parseCookies(cookieHeader?: string): Record<string, string> {
-  const list: Record<string, string> = {};
+  const list: Record<string, string> = Object.create(null);
   if (!cookieHeader) return list;
   cookieHeader.split(';').forEach((cookie) => {
     const parts = cookie.split('=');
     const key = parts.shift()?.trim();
-    if (key) {
-      list[key] = decodeURIComponent(parts.join('='));
+    if (key && !FORBIDDEN_OBJECT_KEYS.has(key)) {
+      try {
+        list[key] = decodeURIComponent(parts.join('='));
+      } catch {
+        list[key] = parts.join('=');
+      }
     }
   });
   return list;
@@ -86,8 +130,9 @@ function parseCookies(cookieHeader?: string): Record<string, string> {
 
 function getSession(req: Request): SessionData | null {
   const cookies = parseCookies(req.headers.cookie);
-  const sid = cookies['photocloud_sid'] || (req.headers['x-session-id'] as string);
-  if (!sid) return null;
+  const rawHeaderSid = typeof req.headers['x-session-id'] === 'string' ? req.headers['x-session-id'].trim() : '';
+  const sid = cookies['photocloud_sid'] || rawHeaderSid;
+  if (!sid || !UUID_REGEX.test(sid)) return null;
   const session = SESSIONS.get(sid);
   if (session && session.expiresAt <= Date.now()) { SESSIONS.delete(sid); return null; }
   return session ?? null;
@@ -130,17 +175,29 @@ function getAlbumsFilePath(username: string): string {
 
 function loadUserAlbums(username: string): UserAlbumsData {
   const p = getAlbumsFilePath(username);
+  const emptyFileAlbums: Record<string, string> = Object.create(null);
   if (!fs.existsSync(p)) {
-    return { albums: [], fileAlbums: {} };
+    return { albums: [], fileAlbums: emptyFileAlbums };
   }
   try {
     const raw = JSON.parse(fs.readFileSync(p, 'utf-8')) as Partial<UserAlbumsData>;
+    const safeAlbums = Array.isArray(raw.albums)
+      ? raw.albums.filter((a): a is string => isValidAlbumName(a)).map((a) => a.trim())
+      : [];
+    const safeFileAlbums: Record<string, string> = Object.create(null);
+    if (raw.fileAlbums && typeof raw.fileAlbums === 'object') {
+      for (const [k, v] of Object.entries(raw.fileAlbums)) {
+        if (isValidVaultFilename(k) && isValidAlbumName(v)) {
+          safeFileAlbums[k] = v.trim();
+        }
+      }
+    }
     return {
-      albums: Array.isArray(raw.albums) ? raw.albums : [],
-      fileAlbums: raw.fileAlbums && typeof raw.fileAlbums === 'object' ? raw.fileAlbums : {},
+      albums: safeAlbums,
+      fileAlbums: safeFileAlbums,
     };
   } catch {
-    return { albums: [], fileAlbums: {} };
+    return { albums: [], fileAlbums: emptyFileAlbums };
   }
 }
 
@@ -153,10 +210,10 @@ function saveUserAlbums(username: string, data: UserAlbumsData): void {
 function listMediaFiles(folderPath: string, username?: string): MediaItem[] {
   if (!fs.existsSync(folderPath)) return [];
   const files = fs.readdirSync(folderPath);
-  const albumsData = username ? loadUserAlbums(username) : { albums: [], fileAlbums: {} };
+  const albumsData = username ? loadUserAlbums(username) : { albums: [], fileAlbums: Object.create(null) };
   const details: MediaItem[] = [];
   for (const f of files) {
-    if (f.startsWith('.')) continue; // skip .albums.json and hidden files
+    if (f.startsWith('.') || !isValidVaultFilename(f)) continue; // skip .albums.json and hidden files
     const full = path.join(folderPath, f);
     let stat: fs.Stats;
     try {
@@ -185,10 +242,53 @@ function listMediaFiles(folderPath: string, username?: string): MediaItem[] {
   return details;
 }
 
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 200 * 1024 * 1024, // 200 MB max per file
+    files: 50,
+    fieldSize: 25 * 1024 * 1024,
+  },
+});
 
 async function startServer() {
   const app = express();
+  app.disable('x-powered-by');
+
+  // Global Security Headers & CSRF Origin Defense Middleware
+  app.use((req: Request, res: Response, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+    );
+
+    if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+      const origin = req.headers.origin;
+      if (typeof origin === 'string' && origin.length > 0 && origin !== 'null') {
+        try {
+          const originHost = new URL(origin).host.toLowerCase();
+          const targetHost = String(req.headers['x-forwarded-host'] || req.headers.host || '')
+            .split(',')[0]
+            .trim()
+            .toLowerCase();
+          if (targetHost && originHost !== targetHost) {
+            res.status(403).json({ error: 'Richiesta cross-origin bloccata (CSRF protection).' });
+            return;
+          }
+        } catch {
+          res.status(403).json({ error: 'Header Origin non valido.' });
+          return;
+        }
+      }
+    }
+    next();
+  });
+
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
   app.use('/static', express.static(STATIC_DIR));
@@ -260,7 +360,7 @@ async function startServer() {
       return;
     }
     const rawName = String(req.body?.name || '').trim();
-    if (!rawName) {
+    if (!isValidAlbumName(rawName)) {
       res.status(400).json({ error: 'Nome album non valido' });
       return;
     }
@@ -279,8 +379,12 @@ async function startServer() {
       res.status(403).json({ error: 'Accesso negato' });
       return;
     }
-    const filenames: string[] = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
+    const filenames: unknown[] = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
     const albumName = String(req.body?.album || '').trim();
+    if (albumName && !isValidAlbumName(albumName)) {
+      res.status(400).json({ error: 'Nome album non valido' });
+      return;
+    }
     const data = loadUserAlbums(sess.username);
 
     if (albumName && !data.albums.includes(albumName)) {
@@ -289,6 +393,7 @@ async function startServer() {
     }
 
     for (const fn of filenames) {
+      if (!isValidVaultFilename(fn)) continue;
       if (albumName) {
         data.fileAlbums[fn] = albumName;
       } else {
@@ -306,6 +411,10 @@ async function startServer() {
       return;
     }
     const albumName = String(req.body?.name || '').trim();
+    if (!isValidAlbumName(albumName)) {
+      res.status(400).json({ error: 'Nome album non valido' });
+      return;
+    }
     const data = loadUserAlbums(sess.username);
     data.albums = data.albums.filter((a) => a !== albumName);
     for (const [fn, alb] of Object.entries(data.fileAlbums)) {
@@ -392,13 +501,25 @@ async function startServer() {
       return;
     }
 
+    const clientIp = String(req.ip || req.socket.remoteAddress || 'unknown');
+    const rateKey = `${clientIp}:${username}`;
+    const now = Date.now();
+    const attemptEntry = LOGIN_ATTEMPTS.get(rateKey);
+    if (attemptEntry && attemptEntry.resetAt > now && attemptEntry.count >= 20) {
+      res.status(429).send('Troppi tentativi di accesso falliti. Riprova più tardi.');
+      return;
+    }
+
     const storedHash = findUser(username);
-    if (storedHash && verifyKey(apiKey, storedHash)) {
+    const isValid = storedHash ? verifyKey(apiKey, storedHash) : (verifyKey(apiKey, DUMMY_KEY_HASH) && false);
+
+    if (isValid) {
+      LOGIN_ATTEMPTS.delete(rateKey);
       const sid = crypto.randomUUID();
       SESSIONS.set(sid, { username, apiKey, expiresAt: Date.now() + 86400000 });
       res.setHeader(
         'Set-Cookie',
-        `photocloud_sid=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${req.secure ? "; Secure" : ""}`
+        `photocloud_sid=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${req.secure ? '; Secure' : ''}`
       );
       if (req.headers.accept?.includes('application/json')) {
         res.json({ success: true, username });
@@ -406,6 +527,8 @@ async function startServer() {
       }
       res.redirect('/');
     } else {
+      const currentCount = attemptEntry && attemptEntry.resetAt > now ? attemptEntry.count + 1 : 1;
+      LOGIN_ATTEMPTS.set(rateKey, { count: currentCount, resetAt: now + 15 * 60 * 1000 });
       res.status(401).send('Credenziali non valide.');
     }
   });
@@ -417,7 +540,10 @@ async function startServer() {
     if (sid) {
       SESSIONS.delete(sid);
     }
-    res.setHeader('Set-Cookie', 'photocloud_sid=; Path=/; Max-Age=0');
+    res.setHeader(
+      'Set-Cookie',
+      `photocloud_sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${req.secure ? '; Secure' : ''}`
+    );
     if (req.headers.accept?.includes('application/json')) {
       res.json({ success: true });
       return;
@@ -528,7 +654,8 @@ async function startServer() {
       return;
     }
 
-    const originalFilename = path.basename(String(req.body?.originalFilename || '').trim());
+    const rawOriginal = String(req.body?.originalFilename || '').trim();
+    const originalFilename = isValidVaultFilename(rawOriginal) ? rawOriginal : '';
     const mode = String(req.body?.mode || 'copy').toLowerCase() === 'overwrite' ? 'overwrite' : 'copy';
 
     let imageBuffer: Buffer | null = null;
@@ -590,9 +717,8 @@ async function startServer() {
             : 'Foto modificata salvata come nuova copia.',
         mediaFiles: listMediaFiles(userFolder, sess.username),
       });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      res.status(500).json({ error: `Errore salvataggio foto modificata: ${msg}` });
+    } catch {
+      res.status(500).json({ error: 'Errore salvataggio foto modificata.' });
     }
   });
 
@@ -605,6 +731,11 @@ async function startServer() {
     }
 
     const filename = String(req.params.filename);
+    if (!isValidVaultFilename(filename)) {
+      res.status(403).json({ error: 'Accesso non autorizzato.' });
+      return;
+    }
+
     const fromTrash = req.query.from_trash === 'true';
     const userFolder = path.join(UPLOAD_FOLDER, sess.username);
     const basePath = fromTrash ? path.join(userFolder, 'trash') : userFolder;
@@ -627,13 +758,14 @@ async function startServer() {
       const decrypted = decryptFile(encrypted, sess.apiKey);
       const preview = await parseDocumentBuffer(filename, decrypted, fromTrash);
       res.json(preview);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      res.status(500).json({ error: `Errore durante l'apertura del documento: ${msg}` });
+    } catch {
+      res.status(500).json({ error: "Errore durante l'apertura del documento." });
     }
   });
 
   // --- MEDIA & CLOUD FILE DECRYPTION ---
+  const ACTIVE_SCRIPT_EXTS = new Set(['html', 'htm', 'xhtml', 'xml', 'js', 'mjs', 'svg']);
+
   app.get('/media/:filename', (req: Request, res: Response) => {
     const sess = getSession(req);
     if (!sess) {
@@ -642,6 +774,11 @@ async function startServer() {
     }
 
     const filename = String(req.params.filename);
+    if (!isValidVaultFilename(filename)) {
+      res.status(403).send('Accesso non autorizzato.');
+      return;
+    }
+
     const userFolder = path.join(UPLOAD_FOLDER, sess.username);
     const basePath =
       req.query.from_trash === 'true' ? path.join(userFolder, 'trash') : userFolder;
@@ -663,15 +800,32 @@ async function startServer() {
       const encrypted = fs.readFileSync(safeFilepath);
       const decrypted = decryptFile(encrypted, sess.apiKey);
       const spec = resolveFileViewerSpec(filename);
-      res.setHeader('Content-Type', spec.mimeType);
+      const isExplicitDownload = req.query.download === '1' || req.query.download === 'true';
+      const isDangerousExt = ACTIVE_SCRIPT_EXTS.has(spec.extension);
+
+      // Sandbox all /media responses so scripts can NEVER execute in the origin context
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox"
+      );
       res.setHeader('Accept-Ranges', 'bytes');
 
-      if (req.query.download === '1' || req.query.download === 'true') {
+      if (isExplicitDownload || isDangerousExt) {
+        // For active web content (.html, .svg, .xml, .js), serve safely and force attachment disposition
+        const safeMime =
+          spec.extension === 'svg' && req.headers['sec-fetch-dest'] === 'image'
+            ? 'image/svg+xml'
+            : isDangerousExt && !isExplicitDownload
+            ? 'text/plain; charset=utf-8'
+            : spec.mimeType;
+        res.setHeader('Content-Type', safeMime);
         res.setHeader(
           'Content-Disposition',
           `attachment; filename="${encodeURIComponent(filename)}"`
         );
       } else {
+        res.setHeader('Content-Type', spec.mimeType);
         res.setHeader(
           'Content-Disposition',
           `inline; filename="${encodeURIComponent(filename)}"`
@@ -721,18 +875,23 @@ async function startServer() {
     const errors: string[] = [];
 
     for (const f of filenames) {
-      const safePath = path.resolve(userFolder, String(f));
+      const fStr = String(f);
+      if (!isValidVaultFilename(fStr)) {
+        errors.push(`File '${fStr}' non trovato o non valido`);
+        continue;
+      }
+      const safePath = path.resolve(userFolder, fStr);
       if (safePath.startsWith(userFolder + path.sep) && fs.existsSync(safePath)) {
         try {
           const dest = path.join(trashFolder, path.basename(safePath));
           if (fs.existsSync(dest)) throw new Error('Un file con questo nome è già nel cestino');
           fs.renameSync(safePath, dest);
-          validFilenames.push(f);
+          validFilenames.push(fStr);
         } catch (err: unknown) {
-          errors.push(`Errore su ${f}: ${err instanceof Error ? err.message : String(err)}`);
+          errors.push(`Errore su ${fStr}: ${err instanceof Error ? err.message : String(err)}`);
         }
       } else {
-        errors.push(`File '${f}' non trovato o non valido`);
+        errors.push(`File '${fStr}' non trovato o non valido`);
       }
     }
 
@@ -753,6 +912,10 @@ async function startServer() {
       return;
     }
     const filename = String(req.params.filename);
+    if (!isValidVaultFilename(filename)) {
+      res.status(403).json({ error: 'Accesso non autorizzato', success: false });
+      return;
+    }
     const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
     const safeFilepath = path.resolve(userFolder, filename);
 
@@ -772,10 +935,10 @@ async function startServer() {
       if (fs.existsSync(dest)) { res.status(409).json({ success: false, error: 'Un file con questo nome è già nel cestino' }); return; }
       fs.renameSync(safeFilepath, dest);
       res.json({ success: true, message: `File ${filename} spostato nel cestino` });
-    } catch (e: unknown) {
+    } catch {
       res.status(500).json({
         success: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: 'Impossibile spostare il file nel cestino.',
       });
     }
   });
@@ -787,6 +950,10 @@ async function startServer() {
       return;
     }
     const filename = String(req.params.filename);
+    if (!isValidVaultFilename(filename)) {
+      res.status(403).json({ success: false, error: 'File non trovato o accesso negato' });
+      return;
+    }
     const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
     const trashFolder = path.resolve(userFolder, 'trash');
     const safeFilepath = path.resolve(trashFolder, filename);
@@ -801,10 +968,10 @@ async function startServer() {
       if (fs.existsSync(dest)) { res.status(409).json({ success: false, error: 'Un file con questo nome esiste già nell’archivio' }); return; }
       fs.renameSync(safeFilepath, dest);
       res.json({ success: true });
-    } catch (e: unknown) {
+    } catch {
       res.status(500).json({
         success: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: 'Impossibile ripristinare il file.',
       });
     }
   });
@@ -816,6 +983,10 @@ async function startServer() {
       return;
     }
     const filename = String(req.params.filename);
+    if (!isValidVaultFilename(filename)) {
+      res.status(403).json({ success: false, error: 'File non trovato o accesso negato' });
+      return;
+    }
     const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
     const trashFolder = path.resolve(userFolder, 'trash');
     const safeFilepath = path.resolve(trashFolder, filename);
@@ -833,10 +1004,10 @@ async function startServer() {
         saveUserAlbums(sess.username, data);
       }
       res.json({ success: true });
-    } catch (e: unknown) {
+    } catch {
       res.status(500).json({
         success: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: 'Impossibile eliminare definitivamente il file.',
       });
     }
   });
@@ -854,10 +1025,10 @@ async function startServer() {
         fs.mkdirSync(trashFolder, { recursive: true });
       }
       res.json({ success: true });
-    } catch (e: unknown) {
+    } catch {
       res.status(500).json({
         success: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: 'Impossibile svuotare il cestino.',
       });
     }
   });
@@ -901,8 +1072,9 @@ async function startServer() {
       res.status(403).json({ error: 'Accesso negato' });
       return;
     }
-    const filenames: string[] = req.body?.filenames;
-    if (!Array.isArray(filenames) || filenames.length === 0) {
+    const rawFilenames: unknown[] = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
+    const filenames = rawFilenames.filter((f): f is string => isValidVaultFilename(f)).slice(0, 500);
+    if (filenames.length === 0) {
       res.status(400).json({ error: 'Nessun file selezionato' });
       return;
     }
@@ -965,13 +1137,13 @@ async function startServer() {
           totalBytes: buf.length,
           processedBytes: buf.length,
         });
-      } catch (err: unknown) {
+      } catch {
         ZIP_TASKS.set(taskId, {
           owner: sess.username,
           status: 'error',
           progress: 0,
           filename: null,
-          error: err instanceof Error ? err.message : String(err),
+          error: 'Errore durante la creazione del file ZIP.',
         });
       }
     })();
@@ -985,7 +1157,12 @@ async function startServer() {
       res.status(403).json({ error: 'Accesso negato' });
       return;
     }
-    const info = ZIP_TASKS.get(String(req.params.taskId));
+    const taskId = String(req.params.taskId);
+    if (!UUID_REGEX.test(taskId)) {
+      res.status(404).json({ status: 'not_found', progress: 0 });
+      return;
+    }
+    const info = ZIP_TASKS.get(taskId);
     if (!info || info.owner !== sess.username) { res.status(404).json({ status: 'not_found', progress: 0 }); return; }
     const { owner, buffer, ...publicInfo } = info;
     res.json(publicInfo);
@@ -998,6 +1175,10 @@ async function startServer() {
       return;
     }
     const filename = String(req.params.filename);
+    if (!isValidVaultFilename(filename)) {
+      res.status(404).send('File non trovato');
+      return;
+    }
     const taskId = path.parse(filename).name;
     const task = ZIP_TASKS.get(taskId);
     if (!task || task.owner !== sess.username || task.filename !== filename || task.status !== 'complete') {
@@ -1009,7 +1190,7 @@ async function startServer() {
 
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Length', String(zipBytes.length));
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
     res.send(zipBytes);
   });
 
@@ -1021,7 +1202,8 @@ async function startServer() {
       if (fs.existsSync(manifestPath)) {
         manifestData = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
       }
-      const apkFilename = String(manifestData.apkFilename || 'photocloud-release-v1.2.4-signed.apk');
+      const rawApkName = String(manifestData.apkFilename || 'photocloud-release-v1.2.4-signed.apk');
+      const apkFilename = isValidVaultFilename(rawApkName) ? rawApkName : 'photocloud-release-v1.2.4-signed.apk';
       const apkPath = path.join(RELEASE_DIR, apkFilename);
       let sizeBytes = Number(manifestData.sizeBytes || 0);
       let sha256 = String(manifestData.sha256 || '');
@@ -1051,9 +1233,9 @@ async function startServer() {
         features,
         publishedAt: String(manifestData.publishedAt || new Date().toISOString()),
       });
-    } catch (e: unknown) {
+    } catch {
       res.status(500).json({
-        error: e instanceof Error ? e.message : 'Impossibile leggere il manifest di aggiornamento',
+        error: 'Impossibile leggere il manifest di aggiornamento',
       });
     }
   });
@@ -1092,9 +1274,9 @@ async function startServer() {
       res.setHeader('Content-Length', String(totalSize));
       const stream = fs.createReadStream(modelPath);
       stream.pipe(res);
-    } catch (e: unknown) {
+    } catch {
       res.status(500).json({
-        error: e instanceof Error ? e.message : 'Errore durante lo streaming del modello AI',
+        error: 'Errore durante lo streaming del modello AI',
       });
     }
   });
@@ -1182,6 +1364,12 @@ async function startServer() {
   });
 
   app.post('/api/android/build-release', async (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ success: false, error: 'Accesso negato' });
+      return;
+    }
+
     const config = req.body as AndroidBuildConfig;
     const validationError = validateAndroidConfig(config);
     if (validationError) {
@@ -1191,12 +1379,12 @@ async function startServer() {
 
     try {
       const buildId = crypto.randomBytes(4).toString('hex');
-      const apkFilename = `photocloud-release-v${config.versionName}-signed.apk`;
-      const projectZipFilename = `photocloud-android-studio-project-v${config.versionName}.zip`;
+      const safeVer = config.versionName.trim();
+      const apkFilename = `photocloud-release-v${safeVer}-signed.apk`;
+      const projectZipFilename = `photocloud-android-studio-project-v${safeVer}.zip`;
 
-      // 1. Prepare signed APK artifact
+      // 1. Prepare signed APK artifact inside RELEASE_BUILDS_DIR only (never overwrite official RELEASE_DIR APKs)
       const sourceApk = path.join(RELEASE_DIR, 'photocloud-release-v1.2.4-signed.apk');
-      const targetApkRelease = path.join(RELEASE_DIR, apkFilename);
       const targetApkBuild = path.join(RELEASE_BUILDS_DIR, `${buildId}_${apkFilename}`);
 
       let apkBuffer: Buffer;
@@ -1207,7 +1395,6 @@ async function startServer() {
         apkBuffer = fs.readFileSync(alt);
       }
 
-      fs.writeFileSync(targetApkRelease, apkBuffer);
       fs.writeFileSync(targetApkBuild, apkBuffer);
 
       const sha256 = crypto.createHash('sha256').update(apkBuffer).digest('hex');
@@ -1219,7 +1406,7 @@ async function startServer() {
       zip.file('gradle.properties', fs.existsSync('android-app/gradle.properties') ? fs.readFileSync('android-app/gradle.properties', 'utf-8') : '');
       zip.file('app/build.gradle.kts', generateAppBuildGradleKts(config));
       zip.file('app/src/main/AndroidManifest.xml', generateAndroidManifestXml(config));
-      zip.file(`app/src/main/java/${config.packageName.replace(/\./g, '/')}/MainActivity.kt`, generateMainActivityKt(config));
+      zip.file(`app/src/main/java/${config.packageName.trim().replace(/\./g, '/')}/MainActivity.kt`, generateMainActivityKt(config));
 
       const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
       fs.writeFileSync(path.join(RELEASE_BUILDS_DIR, `${buildId}_${projectZipFilename}`), zipBuffer);
@@ -1229,7 +1416,7 @@ async function startServer() {
         timestamp: Date.now(),
         config,
         apkFilename,
-        aabFilename: `photocloud-release-v${config.versionName}.aab`,
+        aabFilename: `photocloud-release-v${safeVer}.aab`,
         projectZipFilename,
         sha256Fingerprint: sha256,
         apkSizeBytes: apkBuffer.length,
@@ -1265,14 +1452,14 @@ async function startServer() {
         ],
       };
 
-      const existingBuilds = loadAndroidBuilds();
+      const existingBuilds = loadAndroidBuilds().slice(0, 49);
       saveAndroidBuilds([artifact, ...existingBuilds]);
 
       res.json({ success: true, artifact });
-    } catch (err: unknown) {
+    } catch {
       res.status(500).json({
         success: false,
-        error: err instanceof Error ? err.message : 'Errore creazione release Android',
+        error: 'Errore creazione release Android',
       });
     }
   });
@@ -1280,6 +1467,11 @@ async function startServer() {
   app.get('/api/android/download/:buildId/:type', (req: Request, res: Response) => {
     const buildId = String(req.params.buildId);
     const type = String(req.params.type); // 'apk' or 'project'
+    if (!/^[a-zA-Z0-9._-]{1,64}$/.test(buildId) || (type !== 'apk' && type !== 'project')) {
+      res.status(400).send('Parametri richiesta non validi');
+      return;
+    }
+
     const builds = loadAndroidBuilds();
     const found = builds.find((b) => b.buildId === buildId) || builds[0];
 
@@ -1288,39 +1480,48 @@ async function startServer() {
       return;
     }
 
-    if (type === 'apk') {
-      const specificPath = path.join(RELEASE_BUILDS_DIR, `${buildId}_${found.apkFilename}`);
-      const directPath = path.join(RELEASE_DIR, found.apkFilename);
-      const fallbackPath = path.join(RELEASE_DIR, 'photocloud-release-v1.2.4-signed.apk');
+    const safeApkFilename = isValidVaultFilename(found.apkFilename)
+      ? found.apkFilename
+      : 'photocloud-release-v1.2.4-signed.apk';
+    const safeZipFilename = isValidVaultFilename(found.projectZipFilename)
+      ? found.projectZipFilename
+      : 'photocloud-android-studio-project-v1.2.4.zip';
 
-      const targetPath = fs.existsSync(specificPath)
-        ? specificPath
-        : fs.existsSync(directPath)
-        ? directPath
-        : fallbackPath;
+    if (type === 'apk') {
+      const specificPath = path.resolve(RELEASE_BUILDS_DIR, `${buildId}_${safeApkFilename}`);
+      const directPath = path.resolve(RELEASE_DIR, safeApkFilename);
+      const fallbackPath = path.resolve(RELEASE_DIR, 'photocloud-release-v1.2.4-signed.apk');
+
+      const targetPath =
+        specificPath.startsWith(RELEASE_BUILDS_DIR + path.sep) && fs.existsSync(specificPath)
+          ? specificPath
+          : directPath.startsWith(RELEASE_DIR + path.sep) && fs.existsSync(directPath)
+          ? directPath
+          : fallbackPath;
 
       if (!fs.existsSync(targetPath)) {
         res.status(404).send('File APK non trovato');
         return;
       }
       res.setHeader('Content-Type', 'application/vnd.android.package-archive');
-      res.setHeader('Content-Disposition', `attachment; filename="${found.apkFilename}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeApkFilename)}"`);
       res.sendFile(targetPath);
     } else {
-      const specificPath = path.join(RELEASE_BUILDS_DIR, `${buildId}_${found.projectZipFilename}`);
-      const fallbackFiles = fs.readdirSync(RELEASE_BUILDS_DIR).filter((f) => f.endsWith('.zip'));
-      const fallbackPath = fallbackFiles[0] ? path.join(RELEASE_BUILDS_DIR, fallbackFiles[0]) : null;
+      const specificPath = path.resolve(RELEASE_BUILDS_DIR, `${buildId}_${safeZipFilename}`);
+      const fallbackFiles = fs.readdirSync(RELEASE_BUILDS_DIR).filter((f) => f.endsWith('.zip') && isValidVaultFilename(f));
+      const fallbackPath = fallbackFiles[0] ? path.resolve(RELEASE_BUILDS_DIR, fallbackFiles[0]) : null;
 
-      const targetPath = fs.existsSync(specificPath)
-        ? specificPath
-        : fallbackPath;
+      const targetPath =
+        specificPath.startsWith(RELEASE_BUILDS_DIR + path.sep) && fs.existsSync(specificPath)
+          ? specificPath
+          : fallbackPath;
 
       if (!targetPath || !fs.existsSync(targetPath)) {
         res.status(404).send('File ZIP progetto non trovato');
         return;
       }
       res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Content-Disposition', `attachment; filename="${found.projectZipFilename}"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeZipFilename)}"`);
       res.sendFile(targetPath);
     }
   });

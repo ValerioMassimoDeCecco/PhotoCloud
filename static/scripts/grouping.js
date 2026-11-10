@@ -485,21 +485,44 @@ document.addEventListener('DOMContentLoaded', () => {
                 img.loading = 'lazy';
                 card.appendChild(img);
             } else if (info.isVid) {
-                card.innerHTML = `<video preload="metadata"><source src="/media/${encodeURIComponent(filename)}?from_trash=true#t=0.5" type="video/mp4"></video>`;
+                const video = document.createElement('video');
+                video.preload = 'metadata';
+                const source = document.createElement('source');
+                source.src = `/media/${encodeURIComponent(filename)}?from_trash=true#t=0.5`;
+                source.type = 'video/mp4';
+                video.appendChild(source);
+                card.appendChild(video);
             } else {
                 const iconName = getCategoryIcon(category, info.ext);
-                card.innerHTML = `<div class="cloud-file-preview" data-category="${category}">
-                    <div class="cloud-file-icon-wrap">
-                        <span class="material-icons">${iconName}</span>
-                        <span class="cloud-file-ext">${(info.ext || 'FILE').toUpperCase()}</span>
-                    </div>
-                    <div class="cloud-file-meta">
-                        <span class="cloud-file-title"></span>
-                        <span class="cloud-file-sub">${formatBytesHuman(item.size)}</span>
-                    </div>
-                </div>`;
-                const titleSpan = card.querySelector('.cloud-file-title');
-                if (titleSpan) titleSpan.textContent = filename;
+                const preview = document.createElement('div');
+                preview.className = 'cloud-file-preview';
+                preview.dataset.category = String(category);
+
+                const iconWrap = document.createElement('div');
+                iconWrap.className = 'cloud-file-icon-wrap';
+                const iconSpan = document.createElement('span');
+                iconSpan.className = 'material-icons';
+                iconSpan.textContent = iconName;
+                const extSpan = document.createElement('span');
+                extSpan.className = 'cloud-file-ext';
+                extSpan.textContent = (info.ext || 'FILE').toUpperCase();
+                iconWrap.appendChild(iconSpan);
+                iconWrap.appendChild(extSpan);
+
+                const metaWrap = document.createElement('div');
+                metaWrap.className = 'cloud-file-meta';
+                const titleSpan = document.createElement('span');
+                titleSpan.className = 'cloud-file-title';
+                titleSpan.textContent = filename;
+                const subSpan = document.createElement('span');
+                subSpan.className = 'cloud-file-sub';
+                subSpan.textContent = formatBytesHuman(item.size);
+                metaWrap.appendChild(titleSpan);
+                metaWrap.appendChild(subSpan);
+
+                preview.appendChild(iconWrap);
+                preview.appendChild(metaWrap);
+                card.appendChild(preview);
             }
 
             const actions = document.createElement('div');

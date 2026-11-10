@@ -378,13 +378,37 @@ function colLettersToIndex(letters: string): number {
   return Math.max(0, idx - 1);
 }
 
-async function parseXlsxBuffer(buffer: Buffer): Promise<SpreadsheetSheet[]> {
+const MAX_ZIP_ENTRIES = 1000;
+const MAX_ZIP_ENTRY_BYTES = 10 * 1024 * 1024; // 10 MB per XML entry
+
+async function loadSafeZip(buffer: Buffer): Promise<JSZip> {
   const zip = await JSZip.loadAsync(buffer);
+  const entryKeys = Object.keys(zip.files);
+  if (entryKeys.length > MAX_ZIP_ENTRIES) {
+    throw new Error('Archivio documento contiene troppi elementi interni.');
+  }
+  return zip;
+}
+
+async function readZipEntryTextLimited(file: JSZip.JSZipObject, maxBytes = MAX_ZIP_ENTRY_BYTES): Promise<string> {
+  const rawData = (file as unknown as { _data?: { uncompressedSize?: number } })._data;
+  if (rawData && typeof rawData.uncompressedSize === 'number' && rawData.uncompressedSize > maxBytes) {
+    throw new Error('Contenuto XML interno supera il limite massimo consentito.');
+  }
+  const bytes = await file.async('uint8array');
+  if (bytes.byteLength > maxBytes) {
+    throw new Error('Contenuto XML interno supera il limite massimo consentito.');
+  }
+  return Buffer.from(bytes).toString('utf-8');
+}
+
+async function parseXlsxBuffer(buffer: Buffer): Promise<SpreadsheetSheet[]> {
+  const zip = await loadSafeZip(buffer);
   const sharedStrings: string[] = [];
 
   const sharedFile = zip.file('xl/sharedStrings.xml');
   if (sharedFile) {
-    const sharedXml = await sharedFile.async('string');
+    const sharedXml = await readZipEntryTextLimited(sharedFile);
     const siRegex = /<si\b[\s\S]*?<\/si>/g;
     let siMatch: RegExpExecArray | null;
     while ((siMatch = siRegex.exec(sharedXml)) !== null) {
@@ -401,7 +425,7 @@ async function parseXlsxBuffer(buffer: Buffer): Promise<SpreadsheetSheet[]> {
   const sheetNames: string[] = [];
   const wbFile = zip.file('xl/workbook.xml');
   if (wbFile) {
-    const wbXml = await wbFile.async('string');
+    const wbXml = await readZipEntryTextLimited(wbFile);
     const sRegex = /<sheet\b[^>]*name="([^"]+)"/g;
     let sMatch: RegExpExecArray | null;
     while ((sMatch = sRegex.exec(wbXml)) !== null) {
@@ -422,7 +446,7 @@ async function parseXlsxBuffer(buffer: Buffer): Promise<SpreadsheetSheet[]> {
   for (let i = 0; i < sheetFiles.length; i++) {
     const sf = zip.file(sheetFiles[i]);
     if (!sf) continue;
-    const xml = await sf.async('string');
+    const xml = await readZipEntryTextLimited(sf);
     const rows: string[][] = [];
 
     const rowRegex = /<row\b[\s\S]*?<\/row>/g;
@@ -436,7 +460,7 @@ async function parseXlsxBuffer(buffer: Buffer): Promise<SpreadsheetSheet[]> {
         const inner = cMatch[2];
         const refMatch = attrs.match(/\br="([A-Z]+)\d+"/);
         const typeMatch = attrs.match(/\bt="([^"]+)"/);
-        const colIdx = refMatch ? colLettersToIndex(refMatch[1]) : rowCells.length;
+        const colIdx = refMatch ? Math.min(256, colLettersToIndex(refMatch[1])) : rowCells.length;
         const cellType = typeMatch?.[1] || '';
 
         let val = '';
@@ -515,7 +539,7 @@ export function parseDelimitedTextToSheet(text: string, delimiter = ',', sheetNa
 }
 
 async function parsePptxBuffer(buffer: Buffer): Promise<PresentationSlide[]> {
-  const zip = await JSZip.loadAsync(buffer);
+  const zip = await loadSafeZip(buffer);
   const slidePaths = Object.keys(zip.files)
     .filter((p) => /^ppt\/slides\/slide\d+\.xml$/i.test(p))
     .sort((a, b) => {
@@ -529,7 +553,7 @@ async function parsePptxBuffer(buffer: Buffer): Promise<PresentationSlide[]> {
   for (let i = 0; i < slidePaths.length; i++) {
     const slideFile = zip.file(slidePaths[i]);
     if (!slideFile) continue;
-    const slideXml = await slideFile.async('string');
+    const slideXml = await readZipEntryTextLimited(slideFile);
     const slideNum = Number(slidePaths[i].match(/slide(\d+)\.xml/i)?.[1] || i + 1);
 
     const paragraphs: string[] = [];
@@ -549,7 +573,7 @@ async function parsePptxBuffer(buffer: Buffer): Promise<PresentationSlide[]> {
     let notes = '';
     const notesFile = zip.file(`ppt/notesSlides/notesSlide${slideNum}.xml`);
     if (notesFile) {
-      const notesXml = await notesFile.async('string');
+      const notesXml = await readZipEntryTextLimited(notesFile);
       const noteTexts: string[] = [];
       const ntRegex = /<a:t\b[^>]*>([\s\S]*?)<\/a:t>/g;
       let ntMatch: RegExpExecArray | null;
@@ -612,10 +636,10 @@ export async function parseDocumentBuffer(
 
     if (spec.viewerMode === 'word') {
       if (spec.extension === 'docx') {
-        const zip = await JSZip.loadAsync(buffer);
+        const zip = await loadSafeZip(buffer);
         const docFile = zip.file('word/document.xml');
         if (docFile) {
-          const xml = await docFile.async('string');
+          const xml = await readZipEntryTextLimited(docFile);
           const blocks = extractWordXmlBlocks(xml);
           const allText = blocks
             .map((b) => (b.rows ? b.rows.map((r) => r.join(' ')).join(' ') : b.text || ''))
@@ -627,10 +651,10 @@ export async function parseDocumentBuffer(
           };
         }
       } else if (spec.extension === 'odt') {
-        const zip = await JSZip.loadAsync(buffer);
+        const zip = await loadSafeZip(buffer);
         const contentFile = zip.file('content.xml');
         if (contentFile) {
-          const xml = await contentFile.async('string');
+          const xml = await readZipEntryTextLimited(contentFile);
           const blocks = extractOdtXmlBlocks(xml);
           const allText = blocks.map((b) => b.text || '').join(' ');
           return {
@@ -676,10 +700,10 @@ export async function parseDocumentBuffer(
         };
       }
       if (spec.extension === 'ods') {
-        const zip = await JSZip.loadAsync(buffer);
+        const zip = await loadSafeZip(buffer);
         const contentFile = zip.file('content.xml');
         if (contentFile) {
-          const xml = await contentFile.async('string');
+          const xml = await readZipEntryTextLimited(contentFile);
           const rows: string[][] = [];
           const trRegex = /<table:table-row\b[\s\S]*?<\/table:table-row>/g;
           let trMatch: RegExpExecArray | null;
@@ -719,10 +743,10 @@ export async function parseDocumentBuffer(
         };
       }
       if (spec.extension === 'odp') {
-        const zip = await JSZip.loadAsync(buffer);
+        const zip = await loadSafeZip(buffer);
         const contentFile = zip.file('content.xml');
         if (contentFile) {
-          const xml = await contentFile.async('string');
+          const xml = await readZipEntryTextLimited(contentFile);
           const slides: PresentationSlide[] = [];
           const pageRegex = /<draw:page\b[\s\S]*?<\/draw:page>/g;
           let pMatch: RegExpExecArray | null;
@@ -788,11 +812,11 @@ export async function parseDocumentBuffer(
     }
 
     return base;
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+  } catch {
     return {
       ...base,
-      warning: `Impossibile analizzare la struttura interna del documento (${msg}). Puoi comunque aprirlo con un'applicazione esterna o scaricarlo.`,
+      warning:
+        "Impossibile analizzare la struttura interna del documento. Puoi comunque aprirlo con un'applicazione esterna o scaricarlo.",
     };
   }
 }

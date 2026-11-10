@@ -1,25 +1,54 @@
 import { AndroidBuildConfig } from '../types';
 
+function escapeXmlAttr(str: string): string {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function escapeKotlinString(str: string): string {
+  return String(str || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\$/g, '\\$')
+    .replace(/\r/g, '')
+    .replace(/\n/g, '');
+}
+
 export function validateAndroidConfig(config: AndroidBuildConfig): string | null {
-  if (!config.appName.trim()) {
-    return 'Il nome dell\'applicazione Android è obbligatorio.';
+  if (!config || typeof config !== 'object') {
+    return 'Configurazione Android non valida.';
   }
-  if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/i.test(config.packageName.trim())) {
+  if (!config.appName || typeof config.appName !== 'string' || !config.appName.trim() || config.appName.length > 64) {
+    return "Il nome dell'applicazione Android è obbligatorio (max 64 caratteri).";
+  }
+  if (typeof config.packageName !== 'string' || !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/i.test(config.packageName.trim())) {
     return 'Il Package Name deve avere il formato valido (es. com.valerio.photocloud).';
   }
-  if (!/^\d+\.\d+(\.\d+)?(-[a-zA-Z0-9.]+)?$/.test(config.versionName.trim())) {
+  if (typeof config.versionName !== 'string' || !/^\d+\.\d+(\.\d+)?(-[a-zA-Z0-9.]+)?$/.test(config.versionName.trim())) {
     return 'La Version Name deve essere in formato semantico (es. 1.0.0).';
   }
-  if (config.versionCode < 1 || !Number.isInteger(config.versionCode)) {
+  if (typeof config.versionCode !== 'number' || config.versionCode < 1 || !Number.isInteger(config.versionCode)) {
     return 'Il Version Code deve essere un numero intero positivo.';
+  }
+  if (config.serverUrl !== undefined && (typeof config.serverUrl !== 'string' || !/^https?:\/\/[^\s"'<>\\]+$/i.test(config.serverUrl.trim()))) {
+    return "L'URL del server deve iniziare con http:// o https://.";
+  }
+  if (config.keystoreAlias !== undefined && (typeof config.keystoreAlias !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(config.keystoreAlias.trim()))) {
+    return 'Il Keystore Alias contiene caratteri non validi.';
   }
   return null;
 }
 
 export function generateAndroidManifestXml(config: AndroidBuildConfig): string {
+  const safePkg = escapeXmlAttr(config.packageName.trim());
+  const safeAppName = escapeXmlAttr(config.appName.trim());
   return `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="${config.packageName}">
+    package="${safePkg}">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -28,9 +57,9 @@ export function generateAndroidManifestXml(config: AndroidBuildConfig): string {
     ${config.enableBiometricLock ? '<uses-permission android:name="android.permission.USE_BIOMETRIC" />' : ''}
 
     <application
-        android:allowBackup="${config.enableAutoBackup}"
+        android:allowBackup="${Boolean(config.enableAutoBackup)}"
         android:icon="@mipmap/ic_launcher"
-        android:label="${config.appName}"
+        android:label="${safeAppName}"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
@@ -57,6 +86,13 @@ export function generateAndroidManifestXml(config: AndroidBuildConfig): string {
 }
 
 export function generateAppBuildGradleKts(config: AndroidBuildConfig): string {
+  const safePkg = escapeKotlinString(config.packageName.trim());
+  const safeVersionName = escapeKotlinString(config.versionName.trim());
+  const safeServerUrl = escapeKotlinString(config.serverUrl || 'http://10.0.2.2:3000');
+  const safeAlias = escapeKotlinString(config.keystoreAlias || 'photocloud-release-key');
+  const minSdk = Number.isInteger(config.minSdk) ? config.minSdk : 26;
+  const targetSdk = Number.isInteger(config.targetSdk) ? config.targetSdk : 35;
+
   return `plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -64,26 +100,26 @@ export function generateAppBuildGradleKts(config: AndroidBuildConfig): string {
 }
 
 android {
-    namespace = "${config.packageName}"
-    compileSdk = ${config.targetSdk}
+    namespace = "${safePkg}"
+    compileSdk = ${targetSdk}
 
     defaultConfig {
-        applicationId = "${config.packageName}"
-        minSdk = ${config.minSdk}
-        targetSdk = ${config.targetSdk}
-        versionCode = ${config.versionCode}
-        versionName = "${config.versionName}"
+        applicationId = "${safePkg}"
+        minSdk = ${minSdk}
+        targetSdk = ${targetSdk}
+        versionCode = ${Number(config.versionCode)}
+        versionName = "${safeVersionName}"
 
-        buildConfigField("String", "SERVER_URL", "\\"${config.serverUrl}\\"")
-        buildConfigField("boolean", "ENABLE_BIOMETRIC", "${config.enableBiometricLock}")
-        buildConfigField("boolean", "ENABLE_OFFLINE_CACHE", "${config.enableOfflineCache}")
+        buildConfigField("String", "SERVER_URL", "\\"${safeServerUrl}\\"")
+        buildConfigField("boolean", "ENABLE_BIOMETRIC", "${Boolean(config.enableBiometricLock)}")
+        buildConfigField("boolean", "ENABLE_OFFLINE_CACHE", "${Boolean(config.enableOfflineCache)}")
     }
 
     signingConfigs {
         create("release") {
             storeFile = file("photocloud-release-key.jks")
             storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "photocloud_release_2026"
-            keyAlias = "${config.keystoreAlias}"
+            keyAlias = "${safeAlias}"
             keyPassword = System.getenv("KEY_PASSWORD") ?: "photocloud_release_2026"
             enableV1Signing = true
             enableV2Signing = true
@@ -138,7 +174,12 @@ dependencies {
 }
 
 export function generateMainActivityKt(config: AndroidBuildConfig): string {
-  return `package ${config.packageName}
+  const safePkg = config.packageName.trim();
+  const safeAppName = escapeKotlinString(config.appName.trim());
+  const safeVersionName = escapeKotlinString(config.versionName.trim());
+  const safeServerUrl = escapeKotlinString(config.serverUrl || 'http://10.0.2.2:3000');
+
+  return `package ${safePkg}
 
 import android.annotation.SuppressLint
 import android.net.Uri
@@ -167,9 +208,9 @@ import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * ${config.appName} - Native Android Client + Hybrid Encrypted Vault
- * Version: ${config.versionName} (Code ${config.versionCode})
- * Endpoint: ${config.serverUrl}
+ * ${safeAppName} - Native Android Client + Hybrid Encrypted Vault
+ * Version: ${safeVersionName} (Code ${Number(config.versionCode)})
+ * Endpoint: ${safeServerUrl}
  */
 class MainActivity : ComponentActivity() {
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -197,7 +238,7 @@ class MainActivity : ComponentActivity() {
                                 selected = currentTab == "gallery",
                                 onClick = {
                                     currentTab = "gallery"
-                                    webViewRef?.loadUrl("${config.serverUrl}/")
+                                    webViewRef?.loadUrl("${safeServerUrl}/")
                                 },
                                 icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = "Galleria") },
                                 label = { Text("Galleria") }
@@ -206,7 +247,7 @@ class MainActivity : ComponentActivity() {
                                 selected = currentTab == "trash",
                                 onClick = {
                                     currentTab = "trash"
-                                    webViewRef?.loadUrl("${config.serverUrl}/trash")
+                                    webViewRef?.loadUrl("${safeServerUrl}/trash")
                                 },
                                 icon = { Icon(Icons.Default.DeleteOutline, contentDescription = "Cestino") },
                                 label = { Text("Cestino") }
@@ -215,7 +256,7 @@ class MainActivity : ComponentActivity() {
                                 selected = currentTab == "security",
                                 onClick = {
                                     currentTab = "security"
-                                    webViewRef?.loadUrl("${config.serverUrl}/security")
+                                    webViewRef?.loadUrl("${safeServerUrl}/security")
                                 },
                                 icon = { Icon(Icons.Default.Security, contentDescription = "Sicurezza") },
                                 label = { Text("Sicurezza") }
@@ -231,7 +272,8 @@ class MainActivity : ComponentActivity() {
                             WebView(context).apply {
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
-                                settings.allowFileAccess = true
+                                settings.allowFileAccess = false
+                                settings.allowContentAccess = false
                                 settings.cacheMode = ${config.enableOfflineCache ? 'WebSettings.LOAD_DEFAULT' : 'WebSettings.LOAD_NO_CACHE'}
                                 webViewClient = WebViewClient()
                                 webChromeClient = object : WebChromeClient() {
@@ -246,7 +288,7 @@ class MainActivity : ComponentActivity() {
                                         return true
                                     }
                                 }
-                                loadUrl("${config.serverUrl}")
+                                loadUrl("${safeServerUrl}")
                                 webViewRef = this
                             }
                         }
