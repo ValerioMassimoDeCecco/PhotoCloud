@@ -53,13 +53,14 @@ data class AiCategoryChipModel(
 @Dao
 interface PhotoAiDao {
 
-    @Query("SELECT * FROM photo_ai_categories WHERE isAnalyzed = 1 ORDER BY timestamp DESC")
+    @Query("SELECT * FROM photo_ai_categories WHERE isAnalyzed = 1 AND uriString LIKE 'cloud://%' ORDER BY timestamp DESC")
     fun observeAllAnalyzed(): Flow<List<PhotoAiEntity>>
 
     @Query(
         """
         SELECT * FROM photo_ai_categories
         WHERE isAnalyzed = 1
+          AND uriString LIKE 'cloud://%'
           AND (',' || categories || ',' LIKE '%,' || :category || ',%'
                OR categories LIKE '%' || :category || '%')
         ORDER BY topConfidence DESC, timestamp DESC
@@ -70,18 +71,28 @@ interface PhotoAiDao {
     @Query(
         """
         SELECT
-            COUNT(*) AS totalCount,
+            COALESCE(SUM(CASE WHEN isAnalyzed = 0 THEN 1 ELSE 0 END), 0) AS totalCount,
             COALESCE(SUM(CASE WHEN isAnalyzed = 1 THEN 1 ELSE 0 END), 0) AS analyzedCount
         FROM photo_ai_categories
+        WHERE uriString LIKE 'cloud://%'
         """
     )
     fun observeIndexingProgress(): Flow<PhotoAiProgressTuple>
 
-    @Query("SELECT uriString FROM photo_ai_categories WHERE isAnalyzed = 1")
+    @Query("SELECT uriString FROM photo_ai_categories WHERE isAnalyzed = 1 AND uriString LIKE 'cloud://%'")
     suspend fun getAnalyzedUriStrings(): List<String>
 
-    @Query("SELECT mediaStoreId FROM photo_ai_categories WHERE isAnalyzed = 1 AND mediaStoreId > 0")
-    suspend fun getAnalyzedMediaStoreIds(): List<Long>
+    @Query("SELECT uriString FROM photo_ai_categories WHERE uriString LIKE 'cloud://%'")
+    suspend fun getAllCloudUriStrings(): List<String>
+
+    @Query("DELETE FROM photo_ai_categories WHERE uriString NOT LIKE 'cloud://%'")
+    suspend fun deleteNonCloudEntries()
+
+    @Query("DELETE FROM photo_ai_categories WHERE uriString IN (:uriStrings)")
+    suspend fun deleteByUriStrings(uriStrings: List<String>)
+
+    @Query("DELETE FROM photo_ai_categories")
+    suspend fun clearAllEntries()
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(entities: List<PhotoAiEntity>)
@@ -89,7 +100,7 @@ interface PhotoAiDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: PhotoAiEntity)
 
-    @Query("UPDATE photo_ai_categories SET isAnalyzed = 0")
+    @Query("UPDATE photo_ai_categories SET isAnalyzed = 0 WHERE uriString LIKE 'cloud://%'")
     suspend fun resetAllForReindex()
 }
 

@@ -1,12 +1,9 @@
 package com.valerio.photocloud
 
 import android.Manifest
-import android.content.ContentUris
 import android.content.Context
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
-import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
@@ -23,13 +20,11 @@ import kotlinx.coroutines.withContext
  * using [LocalPhotoCategorizer] (`efficientnet_lite4.tflite`) and persists results to [PhotoAiDatabase].
  *
  * Features:
- * - Queries `MediaStore.Images.Media.EXTERNAL_CONTENT_URI` when `READ_MEDIA_IMAGES` / `READ_EXTERNAL_STORAGE`
- *   permissions are granted (terminates cleanly with `Result.success()` without crashing if not granted).
- * - Also indexes PhotoCloud vault photos so all gallery photos receive real-time AI tags.
- * - Intelligent diffing: compares candidate photo IDs/keys against `isAnalyzed = true` entries in Room
- *   and only processes new or unanalyzed photos.
- * - Chunk/batch progressive updates: writes results in batches of 4 and emits live `setProgress` updates
- *   so category chips and progress indicators update in real time in the UI.
+ * - Indexes exclusively PhotoCloud encrypted vault photos (`cloud://<filename>`), ignoring local device MediaStore photos.
+ * - Automatically purges any legacy non-cloud entries and prunes deleted/trashed cloud photos from the Room AI index.
+ * - Intelligent diffing: compares vault photo keys against `isAnalyzed = true` entries in Room
+ *   and processes strictly the newly uploaded or unanalyzed photos in the current batch.
+ * - Emits live `setProgress` updates (`processedCount / totalToProcess`) for the active batch only.
  * - Always closes [LocalPhotoCategorizer] in `finally` to release native JNI pointers.
  */
 class PhotoAiIndexingWorker(
@@ -39,9 +34,7 @@ class PhotoAiIndexingWorker(
 
     private data class CandidatePhoto(
         val uriString: String,
-        val mediaStoreId: Long,
-        val filename: String,
-        val contentUri: Uri?
+        val filename: String
     )
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -49,76 +42,47 @@ class PhotoAiIndexingWorker(
         val dao = db.photoAiDao()
         val forceReindex = inputData.getBoolean(KEY_FORCE_REINDEX, false)
 
-        if (forceReindex) {
-            dao.resetAllForReindex()
-        }
+        // 1. Purge any legacy non-cloud (MediaStore) rows so only PhotoCloud vault photos exist in DB
+        dao.deleteNonCloudEntries()
 
-        val analyzedUris = dao.getAnalyzedUriStrings().toHashSet()
-        val analyzedMediaStoreIds = dao.getAnalyzedMediaStoreIds().toHashSet()
-
-        val candidates = mutableListOf<CandidatePhoto>()
-        val seenUris = HashSet<String>()
-
-        // 1. Query MediaStore.Images.Media.EXTERNAL_CONTENT_URI if media permission is granted
-        if (hasMediaReadPermission(applicationContext)) {
-            try {
-                val projection = arrayOf(
-                    MediaStore.Images.Media._ID,
-                    MediaStore.Images.Media.DISPLAY_NAME,
-                    MediaStore.Images.Media.MIME_TYPE
-                )
-                val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
-                applicationContext.contentResolver.query(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    projection,
-                    null,
-                    null,
-                    sortOrder
-                )?.use { cursor ->
-                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-                    val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-                    var count = 0
-                    while (cursor.moveToNext() && count < MAX_MEDIASTORE_SCAN_LIMIT) {
-                        val id = cursor.getLong(idCol)
-                        val name = cursor.getString(nameCol) ?: "media_$id.jpg"
-                        val contentUri = ContentUris.withAppendedId(
-                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                            id
-                        )
-                        val uriStr = contentUri.toString()
-                        if (id !in analyzedMediaStoreIds && uriStr !in analyzedUris && seenUris.add(uriStr)) {
-                            candidates.add(
-                                CandidatePhoto(
-                                    uriString = uriStr,
-                                    mediaStoreId = id,
-                                    filename = name,
-                                    contentUri = contentUri
-                                )
-                            )
-                        }
-                        count++
-                    }
-                }
-            } catch (e: Throwable) {
-                Log.w(TAG, "MediaStore query warning: ${e.message}")
-            }
-        }
-
-        // 2. Also include PhotoCloud Vault image items (cached or active server session)
+        // 2. Load active PhotoCloud Vault image items (excluding videos and non-media documents)
         val prefs = applicationContext.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE)
         val serverUrl = prefs.getString("server_url", BuildConfig.DEFAULT_SERVER_URL)
             ?: BuildConfig.DEFAULT_SERVER_URL
         val apiClient = PhotoCloudApiClient(applicationContext, serverUrl)
         val vaultMedia = apiClient.getCachedGalleryItems().filter { it.isMedia && !it.isVideo }
+
+        // 3. Prune stale AI index entries for photos that were deleted or moved to trash
+        val activeCloudUris = vaultMedia.map { "cloud://${it.filename}" }.toHashSet()
+        if (activeCloudUris.isEmpty()) {
+            dao.clearAllEntries()
+            setProgress(workDataOf(KEY_ANALYZED to 0, KEY_TOTAL to 0))
+            return@withContext Result.success(workDataOf(KEY_ANALYZED to 0, KEY_TOTAL to 0))
+        } else {
+            val existingCloudUris = dao.getAllCloudUriStrings()
+            val staleUris = existingCloudUris.filter { it !in activeCloudUris }
+            if (staleUris.isNotEmpty()) {
+                staleUris.chunked(400).forEach { chunk ->
+                    dao.deleteByUriStrings(chunk)
+                }
+            }
+        }
+
+        if (forceReindex) {
+            dao.resetAllForReindex()
+        }
+
+        val analyzedUris = dao.getAnalyzedUriStrings().toHashSet()
+        val candidates = ArrayList<CandidatePhoto>()
+        val seenUris = HashSet<String>()
+
         for (item in vaultMedia) {
             val cloudKey = "cloud://${item.filename}"
             if (cloudKey !in analyzedUris && seenUris.add(cloudKey)) {
                 candidates.add(
                     CandidatePhoto(
                         uriString = cloudKey,
-                        mediaStoreId = 0L,
-                        filename = item.filename,
-                        contentUri = null
+                        filename = item.filename
                     )
                 )
             }
@@ -126,14 +90,14 @@ class PhotoAiIndexingWorker(
 
         if (candidates.isEmpty()) {
             setProgress(workDataOf(KEY_ANALYZED to 0, KEY_TOTAL to 0))
-            return@withContext Result.success()
+            return@withContext Result.success(workDataOf(KEY_ANALYZED to 0, KEY_TOTAL to 0))
         }
 
-        // Pre-seed pending rows with isAnalyzed = false so Room progress Flow shows exact queue size
+        // Pre-seed pending rows for the current batch with isAnalyzed = false
         val pendingEntities = candidates.map { cand ->
             PhotoAiEntity(
                 uriString = cand.uriString,
-                mediaStoreId = cand.mediaStoreId,
+                mediaStoreId = 0L,
                 filename = cand.filename,
                 categories = "",
                 topConfidence = 0f,
@@ -155,23 +119,19 @@ class PhotoAiIndexingWorker(
             for (candidate in candidates) {
                 if (isStopped) break
 
-                val aiResult = if (candidate.contentUri != null) {
-                    categorizer.classifyUri(candidate.contentUri)
+                val bmp = apiClient.getRamThumbnailBitmap(candidate.filename, fromTrash = false)
+                    ?: apiClient.loadThumbnailBitmap(candidate.filename, fromTrash = false)
+                val aiResult = if (bmp != null) {
+                    categorizer.classifyBitmap(bmp)
                 } else {
-                    val bmp = apiClient.getRamThumbnailBitmap(candidate.filename, fromTrash = false)
-                        ?: apiClient.loadThumbnailBitmap(candidate.filename, fromTrash = false)
-                    if (bmp != null) {
-                        categorizer.classifyBitmap(bmp)
-                    } else {
-                        AiClassificationResult(emptyList(), 0f, categorizer.isUsingGpuDelegate)
-                    }
+                    AiClassificationResult(emptyList(), 0f, categorizer.isUsingGpuDelegate)
                 }
 
                 val categoriesCsv = aiResult.categories.joinToString(",")
                 batchBuffer.add(
                     PhotoAiEntity(
                         uriString = candidate.uriString,
-                        mediaStoreId = candidate.mediaStoreId,
+                        mediaStoreId = 0L,
                         filename = candidate.filename,
                         categories = categoriesCsv,
                         topConfidence = aiResult.topConfidence,
@@ -181,7 +141,11 @@ class PhotoAiIndexingWorker(
                 )
                 processedCount++
 
-                if (batchBuffer.size >= BATCH_SIZE || processedCount == totalToProcess) {
+                val shouldFlush = batchBuffer.size >= BATCH_SIZE ||
+                    totalToProcess <= 16 ||
+                    processedCount == totalToProcess
+
+                if (shouldFlush) {
                     dao.upsertAll(batchBuffer.toList())
                     batchBuffer.clear()
                     setProgress(
@@ -221,7 +185,6 @@ class PhotoAiIndexingWorker(
         const val KEY_ANALYZED = "analyzed"
         const val KEY_TOTAL = "total"
         private const val BATCH_SIZE = 4
-        private const val MAX_MEDIASTORE_SCAN_LIMIT = 500
 
         fun hasMediaReadPermission(context: Context): Boolean {
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -245,7 +208,7 @@ class PhotoAiIndexingWorker(
 
             WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
                 UNIQUE_WORK_NAME,
-                if (forceReindex) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
+                if (forceReindex) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.APPEND_OR_REPLACE,
                 workRequest
             )
         }

@@ -1,6 +1,6 @@
 {
-  "summary":  "Piano di implementazione per PhotoCloud Android v1.0.4: avvio istantaneo a 0ms senza cerchio di caricamento (cache locale + sync silenzioso in background) e certificato di firma Keystore persistente nel repository per aggiornamenti diretti dell'APK senza disinstallazione.",
-  "updatedAt":  "2026-11-08T19:27:09.936615710Z",
+  "summary":  "Piano di correzione per l'indicizzazione AI on-device in PhotoCloud: limitazione dell'analisi alle sole foto caricate nel cloud PhotoCloud e visualizzazione del progresso limitata al solo lotto di caricamento in corso.",
+  "updatedAt":  "2026-11-10T09:07:01.690880395Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

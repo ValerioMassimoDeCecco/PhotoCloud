@@ -1,92 +1,30 @@
-# PhotoCloud Android v1.0.4 — Avvio Istantaneo (0ms) e Firma Keystore Persistente
+# Piano di Correzione — Indicizzazione AI On-Device (PhotoCloud)
 
-Questa versione elimina completamente il cerchio di caricamento all'apertura dell'app Android rendendo l'avvio istantaneo (0ms) grazie alla persistenza locale dello stato e della galleria con sincronizzazione silenziosa in background, e introduce un certificato di firma RSA-2048 fisso nel repository per garantire che tutte le release presenti e future aggiornino direttamente l'APK installato senza conflitti di firma.
+## Obiettivo e Contesto
+Quando l'utente carica $n$ nuove foto nel vault PhotoCloud, il banner di avanzamento (`"Indicizzazione AI in corso: X/Y foto..."`) mostra un totale $Y$ molto più alto rispetto alle $n$ foto effettivamente caricate.
 
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> Le scelte confermate garantiscono un'apertura immediata dell'interfaccia nativa a 120Hz e la continuità crittografica del certificato di firma tra tutte le versioni successive.
-
-- **Avvio Istantaneo a 0ms (Zero Spinner)**: Rimozione totale dello stato di blocco iniziale (`CircularProgressIndicator`). L'app legge sincronamente in memoria i cookie di sessione e la cache locale dei metadati mostrando nel primo frame la schermata di Login oppure la Galleria/Sblocco Biometrico, aggiornando i dati in background senza bloccare l'utente.
-- **Keystore Fisso nel Repository**: Salvataggio di un keystore RSA-2048 persistente e immutabile nel repository e rimozione della rigenerazione casuale ad ogni esecuzione di GitHub Actions, così ogni nuova release (`v1.0.4` e successive) mantiene la stessa identica firma digitale e aggiorna l'app Android direttamente.
+Dall'analisi del codice emergono due cause principali:
+1. **Scansione della galleria locale del telefono (`MediaStore`)**: Il worker di indicizzazione (`PhotoAiIndexingWorker`) interroga anche `MediaStore.Images.Media.EXTERNAL_CONTENT_URI`, aggiungendo fino a 500 immagini locali del dispositivo alla coda di analisi insieme alle foto caricate su PhotoCloud.
+2. **Conteggio cumulativo dal database Room**: La barra di progresso utilizza come fallback il conteggio totale cumulativo delle righe presenti nella tabella `photo_ai_categories` (che include tutte le foto già analizzate in precedenza e le immagini locali), anziché mostrare esclusivamente il numero di nuove foto del caricamento corrente.
 
 ---
 
-## 1. Overview & Core Concept
+## Funzionalità e Modifiche Chiave
 
-- **Cosa fa**: All'apertura dell'app Android nativa, l'interfaccia compare istantaneamente al primo frame (0ms) senza alcuno spinner di attesa. Se l'utente non ha una sessione salvata, vede subito la schermata di Login (con pulsante biometrico rapido); se ha una sessione attiva, vede immediatamente la propria Galleria (o il prompt biometrico se attivo) popolata con gli elementi in cache mentre la sincronizzazione col server avviene silenziosamente in background.
-- **Target & Contesto**: Utenti dell'app nativa Android PhotoCloud che desiderano una reattività istantanea a 120Hz e aggiornamenti diretti tramite APK da GitHub Releases.
-- **Valore Chiave**: Eliminazione di qualsiasi latenza percepita all'avvio (anche quando il server locale impiega qualche secondo a rispondere o non è raggiungibile) e aggiornamenti in-place dell'APK senza dover disinstallare la versione precedente.
+### 1. Analisi Esclusiva delle Foto Caricate su PhotoCloud
+- **Rimozione scansione `MediaStore`**: Il worker `PhotoAiIndexingWorker` analizzerà esclusivamente gli elementi immagine presenti nel vault PhotoCloud (`uriString` con prefisso `cloud://`), ignorando le foto salvate nella memoria locale del telefono.
+- **Pulizia automatica del database AI (`PhotoAiDatabase`)**:
+  - Rimozione immediata di eventuali record non appartenenti al cloud (`uriString NOT LIKE 'cloud://%'`) salvati da esecuzioni precedenti.
+  - Allineamento automatico con il catalogo attivo del vault: le foto eliminate o spostate nel cestino verranno rimosse anche dall'indice AI, mantenendo i contatori dei chip categorie sempre coerenti con le foto effettivamente presenti nel cloud.
+- **Rimozione richiesta permessi superflui**: All'apertura della galleria non verrà più richiesto automaticamente il permesso `READ_MEDIA_IMAGES` per la scansione in background del dispositivo.
 
----
+### 2. Conteggio del Banner Limitato al Caricamento in Corso
+- **Calcolo del batch attivo**: Ad ogni nuovo caricamento di $n$ foto (o avvio dell'indicizzazione), il worker calcolerà esclusivamente le foto del cloud non ancora analizzate (`totalToProcess = n`) ed emetterà il progresso `processedCount / totalToProcess` (es. `1/n`, `2/n`, ..., `n/n`).
+- **Visibilità e stato del banner UI**:
+  - Il banner di avanzamento nella schermata principale mostrerà unicamente i valori del batch attivo (`workerAnalyzed / workerTotal`) riportati dal `WorkInfo` in stato `RUNNING` quando `workerTotal > 0`.
+  - Al termine dell'analisi delle $n$ foto caricate, il banner scomparirà immediatamente senza mostrare il totale storico cumulativo del database.
+- **Ricalcolo manuale ("Ricalcola AI")**: Premendo il pulsante di ricalcolo manuale, il database AI del vault verrà azzerato e il banner mostrerà l'analisi completa delle sole foto presenti nel cloud PhotoCloud.
 
-## 2. User Experience & Visual Design
-
-- **Flusso di Avvio Istantaneo (0ms Cold/Warm Start)**:
-  1. **Utente non autenticato (nessun cookie di sessione salvato)**: L'app apre istantaneamente al frame 0 la schermata `NativeAuthScreen` senza effettuare chiamate di rete bloccanti né mostrare indicatori di caricamento.
-  2. **Utente autenticato (sessione presente)**: L'app carica in meno di 1 millisecondo dalla cache locale l'elenco delle foto e del cestino dell'ultima sessione, mostrando subito la griglia Material You (o la schermata `NativeBiometricLockScreen` con `BiometricPrompt` immediato se il blocco biometrico è attivo).
-  3. **Sincronizzazione Silenziosa in Background**: In parallelo, il client interroga il server con timeout ridotti per aggiornare eventuali nuovi scatti senza interrompere la navigazione o lo scorrimento a 120Hz.
-- **Identità Visiva & Tema**:
-  - *Estetica*: Material You (Material Design 3 Dynamic Color) nativo Jetpack Compose, minimalista, 120Hz con Floating Bar posizionata in basso.
-  - *Feedback Visivo*: Nessuno spinner a schermo intero all'apertura; transizioni fluide tra le viste e apertura immediata della Lightbox tramite cache `Bitmap` condivisa in memoria e su disco.
-
----
-
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decisione 1: Persistenza Locale della Sessione e della Galleria (`Offline-First Instant Hydration`)**
-  - *Approccio scelto*: Memorizzazione locale istantanea dello stato di autenticazione e della lista JSON degli elementi di Galleria e Cestino, unita alla verifica sincrona della presenza del cookie di sessione prima di qualsiasi richiesta HTTP.
-  - *Perché*: Evita di attendere il round-trip HTTP verso il server locale prima di disegnare l'interfaccia, eliminando completamente il cerchio di caricamento iniziale.
-  - *Alternative scartate*: Ridurre soltanto il timeout HTTP (mostrerebbe comunque il cerchio per 1-2 secondi a ogni apertura).
-- **Decisione 2: Keystore RSA-2048 Persistente e Deterministico**
-  - *Approccio scelto*: Generazione e inclusione diretta del keystore di rilascio fisso nel repository Android, modificando la pipeline CI/CD di GitHub Actions affinché utilizzi sempre il keystore esistente anziché eseguire `rm -f` e `keytool -genkeypair` ad ogni build.
-  - *Perché*: Il sistema operativo Android consente l'aggiornamento diretto (`adb install -r` o installazione da pacchetto scaricato) solo se il certificato X.509 dell'APK coincide esattamente con quello già installato.
-
----
-
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
-
-- **Architettura di Avvio Istantaneo e Pipeline di Firma**:
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    AVVIO APP ANDROID NATIVA (0ms)                       │
-└───────────────────────────────────┬─────────────────────────────────────┘
-                                    │
-                  Lettura Sincrona Cookie + Cache Locale
-                                    │
-            ┌───────────────────────┴───────────────────────┐
-            ▼                                               ▼
-┌───────────────────────────────┐               ┌───────────────────────────────┐
-│   Nessun Cookie di Sessione   │               │    Cookie Sessione Presente   │
-│  ───────────────────────────  │               │  ───────────────────────────  │
-│  Mostra subito al Frame 0:    │               │  Idrata subito da Cache:      │
-│  • NativeAuthScreen           │               │  • NativeBiometricLockScreen  │
-│  • Login Rapido con Impronta  │               │    oppure NativeVaultScreen   │
-│  (Zero chiamate di rete)      │               │  • Sync silenzioso in bg      │
-└───────────────────────────────┘               └───────────────┬───────────────┘
-                                                                │
-                                                                ▼
-                                                ┌───────────────────────────────┐
-                                                │   Background Coroutine Sync   │
-                                                │  ───────────────────────────  │
-                                                │  • Aggiorna lista foto/trash  │
-                                                │  • Salva nuova cache locale   │
-                                                └───────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│             PIPELINE DI FIRMA PERSISTente (v1.0.4 -> v1.0.x)            │
-│  ┌──────────────────────────────┐      ┌─────────────────────────────┐  │
-│  │ Keystore RSA-2048 Fisso      │ ───► │ Gradle assembleRelease      │  │
-│  │ (Stesso Certificato SHA-256) │      │ APK v1.0.4 (versionCode 5)  │  │
-│  └──────────────────────────────┘      └─────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-- **Modello Dati & Stato Locale**:
-  - **Stato di Sessione Sincrono**: Metodo immediato `hasActiveSessionCookie()` sul `CookieJar` persistente per sapere a 0ms se esiste un cookie `photocloud_sid` per il server configurato.
-  - **Cache Metadati Galleria/Cestino**: Serializzazione immediata della lista di `MediaItemModel` in `SharedPreferences` a ogni caricamento o modifica (upload, spostamento nel cestino, ripristino, eliminazione), letta sincronamente nel blocco `remember` iniziale di `MainActivity`.
-  - **Cache Miniature su Disco + RAM**: Oltre alla `LruCache<String, Bitmap>` in RAM per l'apertura istantanea della Lightbox, salvataggio delle immagini decifrate nella directory `cacheDir` privata dell'app per mostrare le miniature istantaneamente anche al riavvio dell'app.
-- **Mappatura Interazioni & Gestione Stato**:
-  - All'avvio (`onCreate`), se `hasActiveSessionCookie()` è falso, `isAuthenticated` parte a `false` e non viene lanciata alcuna richiesta di rete finché l'utente non effettua il login.
-  - Se `hasActiveSessionCookie()` è vero, `isAuthenticated` parte subito a `true`, `galleryItems` e `trashItems` vengono popolati istantaneamente dalla cache locale, l'eventuale `BiometricPrompt` viene mostrato immediatamente e in background `refreshVault()` aggiorna silenziosamente i dati.
+### 3. Verifica e Build APK Aggiornata
+- Compilazione e verifica di `assembleDebug` e `assembleRelease` tramite Gradle.
+- Aggiornamento dell'APK firmato nella cartella `release/` e verifica della suite di test.

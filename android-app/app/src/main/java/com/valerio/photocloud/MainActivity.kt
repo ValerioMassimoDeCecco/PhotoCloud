@@ -1441,29 +1441,31 @@ fun NativeVaultScreen(
     var externalFallbackItem by remember { mutableStateOf<MediaItemModel?>(null) }
     var pendingTrashConfirmFilenames by remember { mutableStateOf<List<String>?>(null) }
 
-    // On-Device AI Categorization (Room reactive Flows + WorkManager indexing state)
+    // On-Device AI Categorization (Room reactive Flows + WorkManager active batch state)
     val appCtx = LocalContext.current.applicationContext
     val photoAiDb = remember(appCtx) { PhotoAiDatabase.getInstance(appCtx) }
     val photoAiDao = remember(photoAiDb) { photoAiDb.photoAiDao() }
     val aiAnalyzedEntities by photoAiDao.observeAllAnalyzed().collectAsState(initial = emptyList())
-    val aiCategoryChips by photoAiDb.observeDistinctCategoriesWithCount().collectAsState(initial = emptyList())
-    val aiProgressTuple by photoAiDao.observeIndexingProgress().collectAsState(
-        initial = PhotoAiProgressTuple(totalCount = 0, analyzedCount = 0)
-    )
     val aiWorkInfos by remember(appCtx) {
         WorkManager.getInstance(appCtx).getWorkInfosForUniqueWorkFlow(PhotoAiIndexingWorker.UNIQUE_WORK_NAME)
     }.collectAsState(initial = emptyList())
 
     val activeAiWorkInfo = remember(aiWorkInfos) {
-        aiWorkInfos.firstOrNull { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+        aiWorkInfos.firstOrNull { it.state == WorkInfo.State.RUNNING }
     }
     val workerAnalyzed = activeAiWorkInfo?.progress?.getInt(PhotoAiIndexingWorker.KEY_ANALYZED, -1) ?: -1
     val workerTotal = activeAiWorkInfo?.progress?.getInt(PhotoAiIndexingWorker.KEY_TOTAL, -1) ?: -1
 
-    val effectiveAiTotal = if (workerTotal > 0) workerTotal else aiProgressTuple.totalCount
-    val effectiveAiAnalyzed = if (workerAnalyzed >= 0 && workerTotal > 0) workerAnalyzed else aiProgressTuple.analyzedCount
-    val isAiIndexingRunning = activeAiWorkInfo?.state == WorkInfo.State.RUNNING ||
-        (effectiveAiTotal > 0 && effectiveAiAnalyzed < effectiveAiTotal)
+    // Show strictly the count of the current upload/indexing batch (never the cumulative DB total)
+    val effectiveAiTotal = if (workerTotal > 0) workerTotal else 0
+    val effectiveAiAnalyzed = if (workerAnalyzed >= 0 && workerTotal > 0) {
+        workerAnalyzed.coerceIn(0, workerTotal)
+    } else {
+        0
+    }
+    val isAiIndexingRunning = activeAiWorkInfo?.state == WorkInfo.State.RUNNING &&
+        effectiveAiTotal > 0 &&
+        effectiveAiAnalyzed < effectiveAiTotal
 
     val aiCategoriesByFilename = remember(aiAnalyzedEntities) {
         val map = HashMap<String, List<String>>()
@@ -1482,27 +1484,16 @@ fun NativeVaultScreen(
         map
     }
 
-    val mediaPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { grants ->
-        if (grants.values.any { it }) {
-            PhotoAiIndexingWorker.enqueueIndexing(appCtx, forceReindex = false)
-        }
+    val galleryCloudPhotoKey = remember(galleryItems) {
+        galleryItems.asSequence()
+            .filter { it.isMedia && !it.isVideo }
+            .map { it.filename }
+            .sorted()
+            .joinToString("|")
     }
 
-    LaunchedEffect(galleryItems.size) {
+    LaunchedEffect(galleryCloudPhotoKey) {
         PhotoAiIndexingWorker.enqueueIndexing(appCtx, forceReindex = false)
-        if (!PhotoAiIndexingWorker.hasMediaReadPermission(appCtx)) {
-            val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
-            } else {
-                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-            try {
-                mediaPermissionLauncher.launch(perms)
-            } catch (_: Throwable) {
-            }
-        }
     }
 
     // Top-Right Discreet Transfer Operations State (Uploads & Downloads with live speed & size)
@@ -1567,6 +1558,21 @@ fun NativeVaultScreen(
     }
     val nonMediaCloudFiles = remember(visibleGalleryItems) {
         visibleGalleryItems.filter { !it.isMedia }
+    }
+
+    // Compute AI category chips strictly from active PhotoCloud gallery photos
+    val aiCategoryChips = remember(mediaOnlyItems, aiCategoriesByFilename) {
+        val counts = LinkedHashMap<String, Int>()
+        for (item in mediaOnlyItems) {
+            if (item.isVideo) continue
+            val cats = aiCategoriesByFilename[item.filename].orEmpty()
+            for (cat in cats) {
+                counts[cat] = (counts[cat] ?: 0) + 1
+            }
+        }
+        counts.entries
+            .map { AiCategoryChipModel(category = it.key, count = it.value) }
+            .sortedWith(compareByDescending<AiCategoryChipModel> { it.count }.thenBy { it.category })
     }
 
     val allAlbumNames = remember(albumsList, visibleGalleryItems) {
@@ -2021,24 +2027,13 @@ fun NativeVaultScreen(
                     AssistChip(
                         onClick = {
                             triggerHaptic()
-                            if (!PhotoAiIndexingWorker.hasMediaReadPermission(appCtx)) {
-                                val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
-                                } else {
-                                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-                                }
-                                try {
-                                    mediaPermissionLauncher.launch(perms)
-                                } catch (_: Throwable) {
-                                }
-                            }
                             PhotoAiIndexingWorker.enqueueIndexing(appCtx, forceReindex = true)
-                            onShowInfo("Indicizzazione AI locale avviata (EfficientNet-Lite4)")
+                            onShowInfo("Indicizzazione AI delle foto cloud avviata")
                         },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
-                                contentDescription = "Rianalizza foto con AI locale",
+                                contentDescription = "Rianalizza foto cloud con AI locale",
                                 modifier = Modifier.size(16.dp)
                             )
                         },

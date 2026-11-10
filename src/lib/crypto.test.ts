@@ -456,10 +456,14 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
     path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/PhotoAiIndexingWorker.kt'),
     'utf-8'
   );
-  assert.ok(workerKt.includes('MediaStore.Images.Media.EXTERNAL_CONTENT_URI'));
+  assert.equal(workerKt.includes('MediaStore.Images.Media.EXTERNAL_CONTENT_URI'), false);
+  assert.ok(workerKt.includes('deleteNonCloudEntries()'));
+  assert.ok(workerKt.includes('getCachedGalleryItems()'));
   assert.ok(workerKt.includes('ai_photo_indexing'));
   assert.ok(workerKt.includes('ExistingWorkPolicy'));
   assert.ok(workerKt.includes('categorizer?.close()'));
+  assert.ok(mainActivityKt.includes('val effectiveAiTotal = if (workerTotal > 0) workerTotal else 0'));
+  assert.ok(mainActivityKt.includes('galleryCloudPhotoKey'));
 
   const proguardRules = fs.readFileSync(
     path.resolve(process.cwd(), 'android-app/app/proguard-rules.pro'),
