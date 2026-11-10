@@ -614,3 +614,62 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   assert.ok(mainKt.includes('settings.allowFileAccess = false'));
   assert.ok(mainKt.includes('settings.allowContentAccess = false'));
 });
+
+test('Dual-Theme & Liquid Glass Design System (Web + Android Kyant0/AndroidLiquidGlass parity)', async () => {
+  const {
+    DEFAULT_LIQUID_GLASS_CONFIG,
+    LIQUID_GLASS_PRESETS,
+    sanitizeLiquidGlassConfig,
+    computeLiquidGlassCssVariables,
+    exportLiquidGlassConfigJson,
+    importLiquidGlassConfigJson,
+  } = await import('./liquidGlassEngine');
+
+  assert.equal(LIQUID_GLASS_PRESETS.length, 6);
+  const sanitized = sanitizeLiquidGlassConfig({
+    glassIntensity: 95,
+    transparency: 60,
+    blurRadius: 40,
+    primaryColor: '#c084fc',
+    navBarGlassStyle: 'crystal',
+    cardGlassStyle: 'prism',
+  });
+  assert.equal(sanitized.glassIntensity, 95);
+  assert.equal(sanitized.transparency, 60);
+  assert.equal(sanitized.opacity, 40);
+  assert.equal(sanitized.blurRadius, 40);
+  assert.equal(sanitized.primaryColor, '#C084FC');
+  assert.equal(sanitized.navBarGlassStyle, 'crystal');
+  assert.equal(sanitized.cardGlassStyle, 'prism');
+
+  const cssVars = computeLiquidGlassCssVariables(sanitized, true);
+  assert.equal(cssVars['--lg-primary'], '#C084FC');
+  assert.equal(cssVars['--lg-blur'], '40px');
+  assert.ok(Number(cssVars['--lg-surface-alpha']) > 0);
+
+  const exported = exportLiquidGlassConfigJson(sanitized);
+  const reimported = importLiquidGlassConfigJson(exported);
+  assert.ok(reimported);
+  assert.equal(reimported?.primaryColor, '#C084FC');
+  assert.equal(reimported?.glassIntensity, 95);
+  assert.equal(importLiquidGlassConfigJson('not-valid-json'), null);
+  assert.equal(DEFAULT_LIQUID_GLASS_CONFIG.glassIntensity, 78);
+
+  const galleryHtml = renderGalleryTemplate([], []);
+  assert.ok(galleryHtml.includes('id="lg-settings-modal-backdrop"'));
+  assert.ok(galleryHtml.includes('id="open-settings-btn"'));
+  assert.ok(galleryHtml.includes('/static/styles/liquid-glass.css'));
+  assert.ok(galleryHtml.includes('/static/scripts/liquid-glass.js'));
+
+  const lgKtPath = path.resolve(
+    process.cwd(),
+    'android-app/app/src/main/java/com/valerio/photocloud/LiquidGlassDesignSystem.kt'
+  );
+  assert.ok(fs.existsSync(lgKtPath));
+  const lgKt = fs.readFileSync(lgKtPath, 'utf-8');
+  assert.ok(lgKt.includes('enum class DesignThemeMode'));
+  assert.ok(lgKt.includes('data class LiquidGlassConfig'));
+  assert.ok(lgKt.includes('fun Modifier.liquidGlassSurface'));
+  assert.ok(lgKt.includes('fun LiquidGlassStudioSection'));
+});
+

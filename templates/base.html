@@ -12,6 +12,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles/base.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles/liquid-glass.css') }}">
     {% block styles %}{% endblock %}
 </head>
 <body>
@@ -223,7 +224,267 @@
         <div id="document-viewer-toolbar" class="document-viewer-toolbar"></div>
         <main id="document-viewer-stage" class="document-viewer-stage"></main>
     </div>
+
+    <!-- DUAL-THEME SETTINGS & LIQUID GLASS CUSTOMIZATION STUDIO MODAL -->
+    <div id="lg-settings-modal-backdrop" class="lg-settings-modal-backdrop" role="dialog" aria-modal="true" aria-label="Impostazioni Sistema di Temi e Liquid Glass">
+        <div class="lg-settings-dialog">
+            <header class="lg-settings-header">
+                <div>
+                    <h2>Sistema di Design &amp; Impostazioni Tema</h2>
+                    <p style="margin:2px 0 0;font-size:12px;">Seleziona tra il Tema Originale e il sistema ottico Liquid Glass</p>
+                </div>
+                <button type="button" class="btn icon" id="lg-settings-close-btn" aria-label="Chiudi Impostazioni Tema" title="Chiudi">
+                    <span class="material-icons">close</span>
+                </button>
+            </header>
+
+            <div class="lg-settings-body">
+                <!-- 1. Theme Selector -->
+                <div class="lg-section-block">
+                    <h3><span class="material-icons">palette</span> Selezione Tema Applicazione</h3>
+                    <div class="lg-theme-selector-grid">
+                        <button type="button" id="lg-select-theme-original" class="lg-theme-choice-card active">
+                            <div class="lg-theme-choice-title">
+                                <span>Tema 1 — Originale</span>
+                                <span class="material-icons">layers</span>
+                            </div>
+                            <span style="font-size:12px;opacity:0.8;">Material You 120Hz classico: superfici tonali, layout e stili originali invariati.</span>
+                        </button>
+
+                        <button type="button" id="lg-select-theme-liquid" class="lg-theme-choice-card">
+                            <div class="lg-theme-choice-title">
+                                <span>Tema 2 — Liquid Glass</span>
+                                <span class="material-icons">auto_awesome</span>
+                            </div>
+                            <span style="font-size:12px;opacity:0.8;">Sistema ottico completo ispirato a Kyant0/AndroidLiquidGlass con rifrazione, blur e riflessi speculari.</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 2. Dedicated Liquid Glass Customization Studio (Visible when Liquid Glass is active) -->
+                <div id="lg-customization-studio" style="display: none;">
+                    <!-- Real-Time Interactive Preview Stage -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">visibility</span> Anteprima in Tempo Reale</h3>
+                        <div class="lg-live-preview-stage">
+                            <div class="lg-live-preview-card">
+                                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                                    <div>
+                                        <strong style="font-size:15px;">Superficie Ottica Liquid Glass</strong>
+                                        <p style="margin:2px 0 0;font-size:12px;">Rifrazione SDF, sfocatura adattiva, saturazione e bordi speculari attivi in tempo reale.</p>
+                                    </div>
+                                    <span class="btn primary" style="pointer-events:none;height:34px;padding:0 14px;font-size:12px;">Attivo 120Hz</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Preconfigured & Custom Presets -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">style</span> Preset Grafici Preconfigurati &amp; Salvati</h3>
+                        <div id="lg-builtin-presets-grid" class="lg-presets-grid"></div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+                            <input type="text" id="lg-custom-preset-name" placeholder="Nome della tua configurazione..." aria-label="Nome configurazione personalizzata" style="flex:1;min-width:180px;height:38px;padding:0 12px;" />
+                            <button type="button" class="btn primary" id="lg-save-preset-btn" style="width:auto;margin:0;">
+                                <span class="material-icons">bookmark_add</span>
+                                <span>Salva Configurazione</span>
+                            </button>
+                            <button type="button" class="btn outlined" id="lg-reset-defaults-btn" style="width:auto;margin:0;">
+                                <span class="material-icons">restart_alt</span>
+                                <span>Ripristina Predefiniti</span>
+                            </button>
+                        </div>
+                        <div id="lg-saved-presets-grid" class="lg-presets-grid"></div>
+                    </div>
+
+                    <!-- General Appearance -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">tune</span> Aspetto Generale</h3>
+                        <div class="lg-controls-grid">
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Effetto Vetro</span><strong id="lg-val-intensity">78%</strong></span>
+                                <input type="range" id="lg-slider-intensity" min="0" max="100" value="78" aria-label="Intensità effetto vetro" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Trasparenza</span><strong id="lg-val-transparency">68%</strong></span>
+                                <input type="range" id="lg-slider-transparency" min="0" max="100" value="68" aria-label="Trasparenza" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Opacità</span><strong id="lg-val-opacity">32%</strong></span>
+                                <input type="range" id="lg-slider-opacity" min="0" max="100" value="32" aria-label="Opacità" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Sfocatura (Blur)</span><strong id="lg-val-blur">28px</strong></span>
+                                <input type="range" id="lg-slider-blur" min="0" max="60" value="28" aria-label="Intensità sfocatura blur" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Saturazione Sfondo</span><strong id="lg-val-saturation">185%</strong></span>
+                                <input type="range" id="lg-slider-saturation" min="50" max="250" value="185" aria-label="Saturazione dello sfondo" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Luminosità</span><strong id="lg-val-brightness">106%</strong></span>
+                                <input type="range" id="lg-slider-brightness" min="50" max="150" value="106" aria-label="Luminosità vetro" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Contrasto</span><strong id="lg-val-contrast">108%</strong></span>
+                                <input type="range" id="lg-slider-contrast" min="50" max="150" value="108" aria-label="Contrasto vetro" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Profondità Visiva</span><strong id="lg-val-depth">75%</strong></span>
+                                <input type="range" id="lg-slider-depth" min="0" max="100" value="75" aria-label="Profondità visiva" />
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Colors -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">color_lens</span> Colori &amp; Tonalità Vetro</h3>
+                        <label class="lg-toggle-row" style="margin-bottom:6px;">
+                            <span>Forza Colori Personalizzati anche in Modalità Chiara</span>
+                            <input type="checkbox" id="lg-toggle-custom-colors" />
+                        </label>
+                        <div class="lg-colors-grid">
+                            <label class="lg-color-picker-item">
+                                <span>Colore Principale</span>
+                                <input type="color" id="lg-color-primary" value="#38BDF8" aria-label="Colore principale del tema" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Colore Secondario</span>
+                                <input type="color" id="lg-color-secondary" value="#818CF8" aria-label="Colore secondario" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Elementi Glass</span>
+                                <input type="color" id="lg-color-glass" value="#E0F2FE" aria-label="Colore degli elementi glass" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Tonalità Superfici</span>
+                                <input type="color" id="lg-color-surface" value="#0B132B" aria-label="Tonalità delle superfici" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Colore Bordi</span>
+                                <input type="color" id="lg-color-border" value="#BAE6FD" aria-label="Colore dei bordi" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Colore Icone</span>
+                                <input type="color" id="lg-color-icon" value="#E0F2FE" aria-label="Colore delle icone" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Colore Testo</span>
+                                <input type="color" id="lg-color-text" value="#F8FAFC" aria-label="Colore del testo" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Colore Accenti</span>
+                                <input type="color" id="lg-color-accent" value="#00F5D4" aria-label="Colore degli accenti" />
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Visual Effects -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">flare</span> Effetti Visivi &amp; Rifrazione</h3>
+                        <div class="lg-toggles-grid">
+                            <label class="lg-toggle-row">
+                                <span>Riflessi Luminosi Speculari</span>
+                                <input type="checkbox" id="lg-toggle-highlights" checked />
+                            </label>
+                            <label class="lg-toggle-row">
+                                <span>Bordi Luminosi</span>
+                                <input type="checkbox" id="lg-toggle-borders" checked />
+                            </label>
+                            <label class="lg-toggle-row">
+                                <span>Gradiente delle Superfici</span>
+                                <input type="checkbox" id="lg-toggle-gradient" checked />
+                            </label>
+                            <label class="lg-toggle-row">
+                                <span>Ombre Multilivello</span>
+                                <input type="checkbox" id="lg-toggle-shadows" checked />
+                            </label>
+                            <label class="lg-toggle-row">
+                                <span>Effetto Profondità 3D</span>
+                                <input type="checkbox" id="lg-toggle-depth" checked />
+                            </label>
+                            <label class="lg-toggle-row">
+                                <span>Animazioni e Transizioni</span>
+                                <input type="checkbox" id="lg-toggle-animations" checked />
+                            </label>
+                        </div>
+                        <div class="lg-controls-grid">
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Riflessi</span><strong id="lg-val-highlight">80%</strong></span>
+                                <input type="range" id="lg-slider-highlight" min="0" max="100" value="80" aria-label="Intensità riflessi luminosi" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Bordi Luminosi</span><strong id="lg-val-border-glow">72%</strong></span>
+                                <input type="range" id="lg-slider-border-glow" min="0" max="100" value="72" aria-label="Intensità bordi luminosi" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Angolo Gradiente Superfici</span><strong id="lg-val-gradient-angle">135°</strong></span>
+                                <input type="range" id="lg-slider-gradient-angle" min="0" max="360" value="135" aria-label="Angolo gradiente superfici" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Ombre</span><strong id="lg-val-shadow">70%</strong></span>
+                                <input type="range" id="lg-slider-shadow" min="0" max="100" value="70" aria-label="Intensità ombre" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Rifrazioni Ottiche</span><strong id="lg-val-refraction">65%</strong></span>
+                                <input type="range" id="lg-slider-refraction" min="0" max="100" value="65" aria-label="Intensità rifrazioni" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Animazioni</span><strong id="lg-val-anim-intensity">80%</strong></span>
+                                <input type="range" id="lg-slider-anim-intensity" min="0" max="100" value="80" aria-label="Intensità animazioni" />
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Components Style -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">widgets</span> Componenti &amp; Geometria</h3>
+                        <div class="lg-controls-grid">
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Arrotondamento Componenti</span><strong id="lg-val-corner-radius">24px</strong></span>
+                                <input type="range" id="lg-slider-corner-radius" min="8" max="40" value="24" aria-label="Arrotondamento componenti" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Stile Navbar &amp; Barra Superiore</span></span>
+                                <select id="lg-select-nav-style" class="btn-like-select" aria-label="Stile Navbar e Barra Superiore" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                    <option value="capsule">Capsula Continua (Capsule)</option>
+                                    <option value="floating">Sospesa Staccata (Floating)</option>
+                                    <option value="crystal">Cristallo Speculare (Crystal)</option>
+                                </select>
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Stile Schede &amp; Card</span></span>
+                                <select id="lg-select-card-style" class="btn-like-select" aria-label="Stile Schede e Card" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                    <option value="elevated">Stratificato Elevato (Elevated)</option>
+                                    <option value="frosted">Vetro Satinato (Frosted)</option>
+                                    <option value="prism">Prisma Rifrattivo (Prism)</option>
+                                </select>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Export / Import JSON -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">import_export</span> Esporta / Importa Configurazione JSON</h3>
+                        <textarea id="lg-config-json-area" class="lg-json-area" placeholder="Clicca 'Esporta JSON' per generare la configurazione o incolla qui un JSON Liquid Glass per importarlo..." aria-label="JSON configurazione Liquid Glass"></textarea>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                            <button type="button" class="btn outlined" id="lg-export-json-btn" style="width:auto;margin:0;">
+                                <span class="material-icons">file_download</span>
+                                <span>Esporta JSON</span>
+                            </button>
+                            <button type="button" class="btn primary" id="lg-import-json-btn" style="width:auto;margin:0;">
+                                <span class="material-icons">file_upload</span>
+                                <span>Importa JSON</span>
+                            </button>
+                            <span id="lg-json-status-msg" style="font-size:12px;"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
     
+    <script src="{{ url_for('static', filename='scripts/liquid-glass.js') }}"></script>
     <script src="{{ url_for('static', filename='scripts/lightbox.js') }}"></script>
     <script src="{{ url_for('static', filename='scripts/photo-editor.js') }}"></script>
     <script src="{{ url_for('static', filename='scripts/document-viewer.js') }}"></script>

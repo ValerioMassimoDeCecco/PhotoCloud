@@ -301,6 +301,11 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                 <span class="pill-label">Cestino</span>
             </a>
 
+            <button type="button" class="nav-pill" id="open-settings-btn" title="Impostazioni e Temi (Originale / Liquid Glass)" aria-label="Impostazioni Tema">
+                <span class="material-icons">settings</span>
+                <span class="pill-label">Temi</span>
+            </button>
+
             <button class="nav-pill" id="theme-toggle-btn" title="Tema">
                 <span class="material-icons">light_mode</span>
             </button>
@@ -338,6 +343,9 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                 body.classList.remove('dark-mode');
                 icon.textContent = 'light_mode';
                 themeToggleBtn.title = 'Passa a tema scuro';
+            }
+            if (window.PhotoCloudThemeManager && typeof window.PhotoCloudThemeManager.refresh === 'function') {
+                window.PhotoCloudThemeManager.refresh();
             }
         };
 
@@ -573,6 +581,10 @@ export function renderTrashTemplate(trashedFiles: MediaItem[]): string {
                 <span class="material-icons">delete</span>
                 <span class="pill-label">Cestino</span>
             </a>
+            <button type="button" class="nav-pill" id="open-settings-btn" title="Impostazioni e Temi (Originale / Liquid Glass)" aria-label="Impostazioni Tema">
+                <span class="material-icons">settings</span>
+                <span class="pill-label">Temi</span>
+            </button>
         </nav>
     </div>
 </div>

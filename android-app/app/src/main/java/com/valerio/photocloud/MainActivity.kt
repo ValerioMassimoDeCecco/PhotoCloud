@@ -268,6 +268,8 @@ enum class VaultTab {
 }
 
 data class CustomizationState(
+    val designThemeMode: DesignThemeMode = DesignThemeMode.ORIGINAL,
+    val liquidGlassConfig: LiquidGlassConfig = LiquidGlassConfig(),
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val amoledBlack: Boolean = false,
     val dynamicColors: Boolean = true,
@@ -424,6 +426,8 @@ class MainActivity : FragmentActivity() {
             var custom by remember {
                 mutableStateOf(
                     CustomizationState(
+                        designThemeMode = LiquidGlassConfigStore.loadDesignTheme(prefs),
+                        liquidGlassConfig = LiquidGlassConfigStore.loadConfig(prefs),
                         themeMode = ThemeMode.entries.find {
                             it.name == prefs.getString("theme_mode", ThemeMode.SYSTEM.name)
                         } ?: ThemeMode.SYSTEM,
@@ -458,6 +462,8 @@ class MainActivity : FragmentActivity() {
 
             fun updateCustom(newState: CustomizationState) {
                 custom = newState
+                LiquidGlassConfigStore.saveDesignTheme(prefs, newState.designThemeMode)
+                LiquidGlassConfigStore.saveConfig(prefs, newState.liquidGlassConfig)
                 prefs.edit()
                     .putString("theme_mode", newState.themeMode.name)
                     .putBoolean("amoled_black", newState.amoledBlack)
@@ -492,7 +498,36 @@ class MainActivity : FragmentActivity() {
                 ThemeMode.LIGHT -> false
             }
 
-            val baseScheme = if (custom.dynamicColors && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val isLiquidGlass = custom.designThemeMode == DesignThemeMode.LIQUID_GLASS
+            val lgCfg = custom.liquidGlassConfig
+
+            val baseScheme = if (isLiquidGlass) {
+                if (isDark || lgCfg.useCustomColors) {
+                    darkColorScheme(
+                        primary = lgCfg.primaryColor,
+                        secondary = lgCfg.secondaryColor,
+                        tertiary = lgCfg.accentColor,
+                        primaryContainer = lgCfg.primaryColor.copy(alpha = 0.28f),
+                        onPrimaryContainer = lgCfg.textColor,
+                        secondaryContainer = lgCfg.secondaryColor.copy(alpha = 0.32f),
+                        onSecondaryContainer = lgCfg.textColor,
+                        background = lgCfg.surfaceToneColor,
+                        surface = lgCfg.surfaceToneColor,
+                        onBackground = lgCfg.textColor,
+                        onSurface = lgCfg.textColor
+                    )
+                } else {
+                    lightColorScheme(
+                        primary = lgCfg.primaryColor,
+                        secondary = lgCfg.secondaryColor,
+                        tertiary = lgCfg.accentColor,
+                        primaryContainer = lgCfg.primaryColor.copy(alpha = 0.24f),
+                        onPrimaryContainer = Color(0xFF071324),
+                        secondaryContainer = lgCfg.secondaryColor.copy(alpha = 0.26f),
+                        onSecondaryContainer = Color(0xFF071324)
+                    )
+                }
+            } else if (custom.dynamicColors && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (isDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
             } else {
                 val preset = custom.accentPreset
@@ -515,7 +550,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            val finalColorScheme = if (isDark && custom.amoledBlack) {
+            val finalColorScheme = if (!isLiquidGlass && isDark && custom.amoledBlack) {
                 baseScheme.copy(
                     background = Color.Black,
                     surface = Color.Black,
@@ -527,24 +562,37 @@ class MainActivity : FragmentActivity() {
                 baseScheme
             }
 
-            MaterialTheme(colorScheme = finalColorScheme) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    PhotoCloudNativeApp(
-                        activity = this@MainActivity,
-                        apiClient = apiClient,
-                        initialServerUrl = initialServerUrl,
-                        custom = custom,
-                        isDarkTheme = isDark,
-                        onUpdateCustom = { updateCustom(it) },
-                        onSaveServerUrl = { newUrl ->
-                            val cleaned = newUrl.trim().removeSuffix("/")
-                            apiClient.baseUrl = cleaned
-                            prefs.edit().putString("server_url", cleaned).apply()
+            CompositionLocalProvider(
+                LocalLiquidGlassActive provides isLiquidGlass,
+                LocalLiquidGlassConfig provides lgCfg
+            ) {
+                MaterialTheme(colorScheme = finalColorScheme) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            if (isLiquidGlass) {
+                                LiquidGlassBackdropCanvas(
+                                    config = lgCfg,
+                                    isDarkTheme = isDark
+                                )
+                            }
+                            PhotoCloudNativeApp(
+                                activity = this@MainActivity,
+                                apiClient = apiClient,
+                                initialServerUrl = initialServerUrl,
+                                custom = custom,
+                                isDarkTheme = isDark,
+                                onUpdateCustom = { updateCustom(it) },
+                                onSaveServerUrl = { newUrl ->
+                                    val cleaned = newUrl.trim().removeSuffix("/")
+                                    apiClient.baseUrl = cleaned
+                                    prefs.edit().putString("server_url", cleaned).apply()
+                                }
+                            )
                         }
-                    )
+                    }
                 }
             }
         }
@@ -1820,9 +1868,27 @@ fun NativeVaultScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Minimalist Material You Top Header with Top-Right Transfer Center Button
+            val isLgActive = LocalLiquidGlassActive.current
+            val lgCfg = LocalLiquidGlassConfig.current
             Surface(
-                color = MaterialTheme.colorScheme.background.copy(alpha = 0.94f),
-                modifier = Modifier.fillMaxWidth()
+                color = if (isLgActive) Color.Transparent else MaterialTheme.colorScheme.background.copy(alpha = 0.94f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (isLgActive && lgCfg.navBarGlassStyle == NavBarGlassStyle.FLOATING) {
+                            Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .liquidGlassSurface(
+                        config = lgCfg,
+                        isActive = isLgActive,
+                        cornerRadiusDp = if (lgCfg.navBarGlassStyle == NavBarGlassStyle.FLOATING) {
+                            lgCfg.componentCornerRadius.toFloat()
+                        } else 0f,
+                        isElevated = lgCfg.navBarGlassStyle == NavBarGlassStyle.CRYSTAL
+                    )
             ) {
                 Row(
                     modifier = Modifier
@@ -2613,6 +2679,12 @@ fun NativeVaultScreen(
                                 .fillMaxSize()
                                 .background(MaterialTheme.colorScheme.background)
                         ) {
+                            if (isLgActive) {
+                                LiquidGlassBackdropCanvas(
+                                    config = lgCfg,
+                                    isDarkTheme = isDarkTheme
+                                )
+                            }
                             NativeSettingsScreen(
                                 activity = activity,
                                 apiClient = apiClient,
@@ -2648,6 +2720,12 @@ fun NativeVaultScreen(
                                 .fillMaxSize()
                                 .background(MaterialTheme.colorScheme.background)
                         ) {
+                            if (isLgActive) {
+                                LiquidGlassBackdropCanvas(
+                                    config = lgCfg,
+                                    isDarkTheme = isDarkTheme
+                                )
+                            }
                             NativeCloudFileManagerScreen(
                                 files = filesSortedItems,
                                 selectedFilenames = selectedFilenames,
@@ -2692,6 +2770,12 @@ fun NativeVaultScreen(
                                 .fillMaxSize()
                                 .background(MaterialTheme.colorScheme.background)
                         ) {
+                            if (isLgActive) {
+                                LiquidGlassBackdropCanvas(
+                                    config = lgCfg,
+                                    isDarkTheme = isDarkTheme
+                                )
+                            }
                             if (trashSortedItems.isEmpty()) {
                                 Box(
                                     modifier = Modifier
@@ -2893,15 +2977,24 @@ fun NativeVaultScreen(
 
             Surface(
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
-                tonalElevation = 6.dp,
-                shadowElevation = 16.dp,
+                color = if (isLgActive) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f),
+                tonalElevation = if (isLgActive) 0.dp else 6.dp,
+                shadowElevation = if (isLgActive) 0.dp else 16.dp,
                 modifier = Modifier
                     .height(barHeight)
-                    .border(
-                        width = 1.dp,
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
-                        shape = CircleShape
+                    .liquidGlassSurface(
+                        config = lgCfg,
+                        isActive = isLgActive,
+                        cornerRadiusDp = 36f,
+                        isElevated = true
+                    )
+                    .then(
+                        if (isLgActive) Modifier
+                        else Modifier.border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                            shape = CircleShape
+                        )
                     )
             ) {
                 Row(
@@ -4140,6 +4233,8 @@ fun NativeSettingsScreen(
     onShowInfo: (String) -> Unit
 ) {
     var cacheStats by remember { mutableStateOf(apiClient.getDiskCacheStats()) }
+    val prefs = remember { activity.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE) }
+    var savedLgPresets by remember { mutableStateOf(LiquidGlassConfigStore.loadSavedPresets(prefs)) }
     val scrollState = rememberScrollState()
 
     Column(
@@ -4150,6 +4245,31 @@ fun NativeSettingsScreen(
             .padding(top = 6.dp, bottom = 140.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // 0. DUAL-THEME SELECTOR & LIQUID GLASS CUSTOMIZATION STUDIO
+        LiquidGlassStudioSection(
+            context = activity,
+            designThemeMode = custom.designThemeMode,
+            liquidConfig = custom.liquidGlassConfig,
+            savedPresets = savedLgPresets,
+            onSelectDesignTheme = { mode ->
+                onUpdateCustom(custom.copy(designThemeMode = mode))
+            },
+            onUpdateLiquidConfig = { newLg ->
+                onUpdateCustom(custom.copy(liquidGlassConfig = newLg))
+            },
+            onSaveCustomPreset = { presetName ->
+                savedLgPresets = LiquidGlassConfigStore.saveCustomPreset(
+                    prefs = prefs,
+                    name = presetName,
+                    config = custom.liquidGlassConfig
+                )
+            },
+            onResetDefaults = {
+                onUpdateCustom(custom.copy(liquidGlassConfig = LiquidGlassConfig()))
+            },
+            onShowInfo = onShowInfo
+        )
+
         // 1. APP ICON SWITCHER (COLOR vs BLACK & WHITE)
         SettingsSectionCard(
             title = "Icona App & Identità",
@@ -5057,11 +5177,22 @@ fun SettingsSectionCard(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val isLgActive = LocalLiquidGlassActive.current
+    val lgCfg = LocalLiquidGlassConfig.current
+    val cardRadius = if (isLgActive) lgCfg.componentCornerRadius.dp else 26.dp
+
     Surface(
-        shape = RoundedCornerShape(26.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth()
+        shape = RoundedCornerShape(cardRadius),
+        color = if (isLgActive) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = if (isLgActive) 0.dp else 2.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .liquidGlassSurface(
+                config = lgCfg,
+                isActive = isLgActive,
+                cornerRadiusDp = cardRadius.value,
+                isElevated = lgCfg.cardGlassStyle != CardGlassStyle.FROSTED
+            )
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
             Row(
