@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.0)
+# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.2)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -7,6 +7,17 @@
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
+
+---
+
+## ⚡ Novità Principali della Release `v1.2.2` (`versionCode 19`) — Selezione Multipla Drag-to-Select Perfezionata con Auto-Scroll su Android
+
+### 1. Selezione Continua e Fluida con Pressione Prolungata (Long-Press + Drag)
+- **Attivazione Intelligente e Immediata**: tenendo premuto su una qualsiasi foto della griglia, la modalità di selezione si attiva evidenziando l'elemento con bordo, scala elastica e checkbox Material You.
+- **Trascinamento Sequenziale su più Righe e Colonne**: senza sollevare il dito, scorrendo sopra le altre miniature vengono selezionati automaticamente tutti gli elementi attraversati, calcolando con precisione millimetrica l'intervallo tra il punto di inizio e la posizione corrente.
+- **Deselezione Naturale a Ritroso**: tornando indietro con il dito sulle immagini precedentemente attraversate, queste vengono deselezionate istantaneamente, evitando duplicazioni o selezioni errate.
+- **Auto-Scroll Attivo**: quando il dito raggiunge la parte superiore (< 140dp) o inferiore dello schermo durante il drag, la griglia scorre automaticamente permettendo di estendere la selezione anche su migliaia di foto non visibili inizialmente.
+- **Persistenza della Modalità Selezione al Rilascio**: al sollevamento del dito la modalità di selezione resta attiva con il pannello operativo `SelectionActionsPanel` (Sposta in Album, Scarica ZIP, Cestina), consentendo di rifinire la selezione con ulteriori tocchi singoli.
 
 ---
 
