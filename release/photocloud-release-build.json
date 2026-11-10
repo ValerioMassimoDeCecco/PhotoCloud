@@ -1,8 +1,8 @@
 {
   "apkFilename": "photocloud-release-v1.2.6-signed.apk",
   "apkDownloadUrl": "/release/photocloud-release-v1.2.6-signed.apk",
-  "sha256": "1ec3cc2e2602d3ab4318cd9b23e297e2e795b91d05eceb6944d1ac1df860c90f",
-  "sizeBytes": 26214400,
+  "sha256": "c4c5978c2fa1ef94b2b9ee21613711f8e06abd8088385ba5bde552a681e50045",
+  "sizeBytes": 58954822,
   "applicationId": "com.valerio.photocloud",
   "versionName": "1.2.6",
   "versionCode": 23,
