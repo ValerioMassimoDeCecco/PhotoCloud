@@ -1510,6 +1510,8 @@ fun NativeVaultScreen(
 ) {
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
+    val isLgActive = LocalLiquidGlassActive.current
+    val lgCfg = LocalLiquidGlassConfig.current
 
     var currentTab by remember { mutableStateOf(VaultTab.GALLERY) }
     var groupingMode by remember(custom.defaultGrouping) { mutableStateOf(custom.defaultGrouping) }
@@ -1868,8 +1870,6 @@ fun NativeVaultScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Minimalist Material You Top Header with Top-Right Transfer Center Button
-            val isLgActive = LocalLiquidGlassActive.current
-            val lgCfg = LocalLiquidGlassConfig.current
             Surface(
                 color = if (isLgActive) Color.Transparent else MaterialTheme.colorScheme.background.copy(alpha = 0.94f),
                 modifier = Modifier
