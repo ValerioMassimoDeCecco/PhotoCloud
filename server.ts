@@ -31,8 +31,77 @@ import {
   generateMainActivityKt,
 } from './src/lib/androidBuilder';
 
-const UPLOAD_FOLDER = path.resolve(process.cwd(), 'user_media');
+const APP_ROOT = process.cwd();
+const UPLOAD_FOLDER = path.resolve(APP_ROOT, 'user_media');
 const RELEASE_DIR = path.resolve(process.cwd(), 'release');
+
+/**
+ * Versione dell'app Android dichiarata in `android-app/app/build.gradle.kts`.
+ * Unica fonte di verità: il manifest di update ed i nomi degli APK derivano da qui,
+ * così non si può più annunciare una versione diversa da quella realmente compilata.
+ */
+function readAndroidAppVersion(): { versionName: string; versionCode: number } {
+  const fallback = { versionName: '1.2.6', versionCode: 23 };
+  try {
+    const gradlePath = path.resolve(APP_ROOT, 'android-app/app/build.gradle.kts');
+    if (!fs.existsSync(gradlePath)) return fallback;
+    const gradle = fs.readFileSync(gradlePath, 'utf-8');
+    const nameMatch = gradle.match(/versionName\s*=\s*"([^"]+)"/);
+    const codeMatch = gradle.match(/versionCode\s*=\s*([0-9]+)/);
+    const versionName = nameMatch ? nameMatch[1].trim() : fallback.versionName;
+    const versionCode = codeMatch ? Number(codeMatch[1]) : fallback.versionCode;
+    return { versionName, versionCode };
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Risolve l'APK firmato da servire per una data versione annunciata.
+ *
+ * Regola: si serve SOLO un APK realmente presente in `/release`. Se manca l'APK della versione
+ * annunciata si usa quello indicato dal manifest (o null): mai un file di una release diversa
+ * scelta "a caso", che produrrebbe un aggiornamento fantasma (il bug v1.2.6 → v1.2.5).
+ */
+function resolveReleaseApk(preferredVersionName?: string, manifestApkFilename?: string): string | null {
+  const isUsableApk = (name: string): boolean => {
+    if (!/^photocloud-release-v[0-9][0-9a-zA-Z.\-]*-signed\.apk$/.test(name)) return false;
+    const fullPath = path.join(RELEASE_DIR, name);
+    try {
+      return fs.existsSync(fullPath) && fs.statSync(fullPath).size > 100_000;
+    } catch {
+      return false;
+    }
+  };
+
+  if (preferredVersionName) {
+    const exact = `photocloud-release-v${preferredVersionName}-signed.apk`;
+    if (isUsableApk(exact)) return exact;
+  }
+  if (manifestApkFilename && isValidVaultFilename(manifestApkFilename) && isUsableApk(manifestApkFilename)) {
+    return manifestApkFilename;
+  }
+  return null;
+}
+
+/** Estrae la versione dal nome di un APK di release (`photocloud-release-v1.2.6-signed.apk` → `1.2.6`). */
+function versionNameFromApkFilename(filename: string): string {
+  const match = filename.match(/photocloud-release-v([0-9][0-9a-zA-Z.\-]*)-signed\.apk$/);
+  return match ? match[1] : '';
+}
+
+function compareVersionStrings(a: string, b: string): number {
+  const pa = a.split(/[^0-9]+/).filter(Boolean).map(Number);
+  const pb = b.split(/[^0-9]+/).filter(Boolean).map(Number);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i += 1) {
+    const na = pa[i] ?? 0;
+    const nb = pb[i] ?? 0;
+    if (na !== nb) return na - nb;
+  }
+  return 0;
+}
+
 const RELEASE_BUILDS_DIR = path.resolve(process.cwd(), 'release_builds');
 const USERS_FILE = path.resolve(process.cwd(), 'users.txt');
 const STATIC_DIR = path.resolve(process.cwd(), 'static');
@@ -1197,23 +1266,54 @@ async function startServer() {
   // --- ANDROID AUTO-UPDATER MANIFEST & OPTIONAL AI MODEL ENDPOINTS (v1.2.3) ---
   app.get('/api/android/update-manifest', (_req: Request, res: Response) => {
     try {
+      const appVersion = readAndroidAppVersion();
       const manifestPath = path.join(RELEASE_DIR, 'photocloud-release-build.json');
       let manifestData: Record<string, unknown> = {};
       if (fs.existsSync(manifestPath)) {
         manifestData = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
       }
-      const rawApkName = String(manifestData.apkFilename || 'photocloud-release-v1.2.5-signed.apk');
-      const apkFilename = isValidVaultFilename(rawApkName) ? rawApkName : 'photocloud-release-v1.2.5-signed.apk';
-      const apkPath = path.join(RELEASE_DIR, apkFilename);
-      let sizeBytes = Number(manifestData.sizeBytes || 0);
-      let sha256 = String(manifestData.sha256 || '');
-      if (fs.existsSync(apkPath)) {
-        const stat = fs.statSync(apkPath);
-        sizeBytes = stat.size;
-        if (!sha256) {
-          sha256 = crypto.createHash('sha256').update(fs.readFileSync(apkPath)).digest('hex');
-        }
+
+      // Il manifest può essere rimasto indietro rispetto al codice: la versione autorevole è
+      // quella di android-app/app/build.gradle.kts, e l'APK deve esistere davvero in /release.
+      const manifestVersionName =
+        typeof manifestData.versionName === 'string'
+          ? manifestData.versionName.trim().replace(/^v/, '')
+          : '';
+      const manifestVersionCode = Number(manifestData.versionCode || 0);
+      const manifestAheadOfCode =
+        manifestVersionCode > 0 && manifestVersionCode > appVersion.versionCode;
+
+      const versionName = manifestAheadOfCode
+        ? manifestVersionName || appVersion.versionName
+        : appVersion.versionName;
+      const versionCode = manifestAheadOfCode ? manifestVersionCode : appVersion.versionCode;
+
+      const manifestApkFilename =
+        typeof manifestData.apkFilename === 'string' ? manifestData.apkFilename : '';
+      const resolvedApk = resolveReleaseApk(versionName, manifestApkFilename);
+      if (!resolvedApk) {
+        res.status(404).json({
+          error: 'Nessun APK di release disponibile sul server',
+          versionName,
+          versionCode,
+        });
+        return;
       }
+
+      // L'endpoint non deve MAI annunciare una versione diversa da quella dell'APK servito:
+      // altrimenti l'app scarica un pacchetto che non aggiorna nulla (loop di aggiornamenti).
+      const servedApkVersionName = versionNameFromApkFilename(resolvedApk);
+      const apkMatchesAnnouncedVersion =
+        servedApkVersionName !== '' && compareVersionStrings(servedApkVersionName, versionName) === 0;
+      const servedVersionName = apkMatchesAnnouncedVersion ? versionName : servedApkVersionName || versionName;
+      const servedVersionCode = apkMatchesAnnouncedVersion ? versionCode : 0;
+
+      const apkPath = path.join(RELEASE_DIR, resolvedApk);
+      const stat = fs.statSync(apkPath);
+      const sha256 = crypto
+        .createHash('sha256')
+        .update(fs.readFileSync(apkPath))
+        .digest('hex');
 
       const features = Array.isArray(manifestData.features) ? manifestData.features : [];
       const changelog =
@@ -1223,11 +1323,11 @@ async function startServer() {
 
       res.json({
         applicationId: 'com.valerio.photocloud',
-        versionName: String(manifestData.versionName || '1.2.5'),
-        versionCode: Number(manifestData.versionCode || 22),
-        apkFilename,
-        apkDownloadUrl: `/release/${apkFilename}`,
-        sizeBytes,
+        versionName: servedVersionName,
+        versionCode: servedVersionCode,
+        apkFilename: resolvedApk,
+        apkDownloadUrl: `/release/${resolvedApk}`,
+        sizeBytes: stat.size,
         sha256,
         changelog,
         features,
@@ -1292,18 +1392,21 @@ async function startServer() {
     } catch {
       // ignore
     }
-    const defaultApkFile = 'photocloud-release-v1.2.5-signed.apk';
+    const appVersion = readAndroidAppVersion();
+    const defaultApkFile =
+      resolveReleaseApk(appVersion.versionName) ||
+      `photocloud-release-v${appVersion.versionName}-signed.apk`;
     const defaultApkPath = path.join(RELEASE_DIR, defaultApkFile);
     const defaultSize = fs.existsSync(defaultApkPath) ? fs.statSync(defaultApkPath).size : 26214400;
 
     const initialBuild: AndroidReleaseArtifact = {
-      buildId: 'v1.2.5-release',
+      buildId: `v${appVersion.versionName}-release`,
       timestamp: Date.now(),
       config: {
         appName: 'PhotoCloud',
         packageName: 'com.valerio.photocloud',
-        versionName: '1.2.5',
-        versionCode: 22,
+        versionName: appVersion.versionName,
+        versionCode: appVersion.versionCode,
         serverUrl: 'http://10.0.2.2:3000',
         minSdk: 26,
         targetSdk: 35,
@@ -1314,8 +1417,8 @@ async function startServer() {
         keystoreAlias: 'photocloud-release-key',
       },
       apkFilename: defaultApkFile,
-      aabFilename: 'photocloud-release-v1.2.5.aab',
-      projectZipFilename: 'photocloud-android-studio-project-v1.2.5.zip',
+      aabFilename: `photocloud-release-v${appVersion.versionName}.aab`,
+      projectZipFilename: `photocloud-android-studio-project-v${appVersion.versionName}.zip`,
       sha256Fingerprint: '1ec3cc2e2602d3ab4318cd9b23e297e2e795b91d05eceb6944d1ac1df860c90f',
       apkSizeBytes: defaultSize,
       steps: [
@@ -1345,7 +1448,7 @@ async function startServer() {
           label: 'Verifica digest SHA-256 e pacchettizzazione progetto Android Studio (.ZIP)',
           durationMs: 48,
           status: 'completed',
-          command: 'sha256sum photocloud-release-v1.2.5-signed.apk',
+          command: `sha256sum ${defaultApkFile}`,
         },
       ],
     };
@@ -1383,17 +1486,21 @@ async function startServer() {
       const apkFilename = `photocloud-release-v${safeVer}-signed.apk`;
       const projectZipFilename = `photocloud-android-studio-project-v${safeVer}.zip`;
 
-      // 1. Prepare signed APK artifact inside RELEASE_BUILDS_DIR only (never overwrite official RELEASE_DIR APKs)
-      const sourceApk = path.join(RELEASE_DIR, 'photocloud-release-v1.2.5-signed.apk');
+      // 1. Prepare signed APK artifact inside RELEASE_BUILDS_DIR only (never overwrite official RELEASE_DIR APKs).
+      // Usa l'APK della versione richiesta se presente, altrimenti il più recente realmente disponibile.
       const targetApkBuild = path.join(RELEASE_BUILDS_DIR, `${buildId}_${apkFilename}`);
 
-      let apkBuffer: Buffer;
-      if (fs.existsSync(sourceApk)) {
-        apkBuffer = fs.readFileSync(sourceApk);
-      } else {
-        const alt = path.join(RELEASE_DIR, 'photocloud-release-v1.2.4-signed.apk');
-        apkBuffer = fs.readFileSync(alt);
+      const requestedApkName = `photocloud-release-v${safeVer}-signed.apk`;
+      const sourceApkRel = resolveReleaseApk(safeVer) || requestedApkName;
+      const sourceApk = path.join(RELEASE_DIR, sourceApkRel);
+      if (!fs.existsSync(sourceApk)) {
+        res.status(404).json({
+          success: false,
+          error: 'Nessun APK di release disponibile: compila prima l\'APK con Gradle o GitHub Actions.',
+        });
+        return;
       }
+      const apkBuffer = fs.readFileSync(sourceApk);
 
       fs.writeFileSync(targetApkBuild, apkBuffer);
 
@@ -1480,17 +1587,18 @@ async function startServer() {
       return;
     }
 
+    const fallbackVersionName = readAndroidAppVersion().versionName;
     const safeApkFilename = isValidVaultFilename(found.apkFilename)
       ? found.apkFilename
-      : 'photocloud-release-v1.2.5-signed.apk';
+      : `photocloud-release-v${fallbackVersionName}-signed.apk`;
     const safeZipFilename = isValidVaultFilename(found.projectZipFilename)
       ? found.projectZipFilename
-      : 'photocloud-android-studio-project-v1.2.5.zip';
+      : `photocloud-android-studio-project-v${fallbackVersionName}.zip`;
 
     if (type === 'apk') {
       const specificPath = path.resolve(RELEASE_BUILDS_DIR, `${buildId}_${safeApkFilename}`);
       const directPath = path.resolve(RELEASE_DIR, safeApkFilename);
-      const fallbackPath = path.resolve(RELEASE_DIR, 'photocloud-release-v1.2.5-signed.apk');
+      const fallbackPath = path.resolve(RELEASE_DIR, safeApkFilename);
 
       const targetPath =
         specificPath.startsWith(RELEASE_BUILDS_DIR + path.sep) && fs.existsSync(specificPath)

@@ -520,7 +520,7 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(mainActivityKt.includes('val autoScrollJob = scope.launch'));
   assert.equal(mainActivityKt.includes('detectDragGesturesAfterLongPress('), false, 'Conflicting dual pointerInput detector call must be removed');
 
-  // 5. Release v1.2.5 signed APK, historical APKs preserved, metadata, and Gradle configuration
+  // 5. Release APK, historical APKs preserved, metadata, and Gradle configuration
   const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.2.5-signed.apk');
   assert.ok(fs.existsSync(apkPath));
   assert.ok(fs.statSync(apkPath).size > 20 * 1024 * 1024, 'Signed release APK v1.2.5 should be > 20MB');
@@ -530,15 +530,15 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.1.3-signed.apk')));
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.2.5"'));
-  assert.ok(appBuildGradle.includes('versionCode = 22'));
+  assert.ok(appBuildGradle.includes('versionName = "1.2.6"'));
+  assert.ok(appBuildGradle.includes('versionCode = 23'));
   assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
   assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
   assert.ok(appBuildGradle.includes('androidx.work:work-runtime-ktx:2.9.0'));
   assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.2.5');
+  assert.equal(pkgJson.version, '1.2.6');
 
   // 6. Multi-platform interactive CLI scripts (photocloud.bat & photocloud.sh)
   const batPath = path.resolve(process.cwd(), 'photocloud.bat');
@@ -581,8 +581,8 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   const baseConfig = {
     appName: 'PhotoCloud "Vault" <Test>',
     packageName: 'com.valerio.photocloud',
-    versionName: '1.2.5',
-    versionCode: 22,
+    versionName: '1.2.6',
+    versionCode: 23,
     serverUrl: 'http://10.0.2.2:3000',
     minSdk: 26,
     targetSdk: 35,
@@ -608,7 +608,7 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   assert.ok(!manifestXml.includes('android:label="PhotoCloud "Vault"'));
 
   const gradleKts = generateAppBuildGradleKts(baseConfig);
-  assert.ok(gradleKts.includes('versionName = "1.2.5"'));
+  assert.ok(gradleKts.includes('versionName = "1.2.6"'));
 
   const mainKt = generateMainActivityKt(baseConfig);
   assert.ok(mainKt.includes('settings.allowFileAccess = false'));
@@ -688,3 +688,69 @@ test('Dual-Theme & Liquid Glass Design System (Web + Android Kyant0/AndroidLiqui
   );
 });
 
+test('Auto-update anti-loop: APK version must be newer than installed and match the announced release', async () => {
+  const root = process.cwd();
+  const read = (rel: string) => fs.readFileSync(path.resolve(root, rel), 'utf-8');
+
+  const updaterKt = read('android-app/app/src/main/java/com/valerio/photocloud/AppAutoUpdater.kt');
+
+  // 1. L'APK scaricato viene ispezionato a runtime: la sua versione deve essere > di quella installata
+  assert.ok(updaterKt.includes('val declaredVersionName = archiveInfo.versionName'));
+  assert.ok(updaterKt.includes('archiveInfo.longVersionCode'));
+  assert.ok(
+    updaterKt.includes('declaredVersionCode <= BuildConfig.VERSION_CODE.toLong()'),
+    'AppAutoUpdater must reject APKs whose versionCode is not greater than the installed one'
+  );
+  assert.ok(
+    updaterKt.includes('declaredVersionCode != manifest.versionCode.toLong()'),
+    'AppAutoUpdater must reject APKs whose versionCode differs from the announced one'
+  );
+
+  // 2. Guardia lato manifest: se la release pubblica ancora l'APK della versione installata,
+  //    nessun download e nessun modal (era la causa del loop v1.2.6 -> v1.2.5).
+  assert.ok(updaterKt.includes('fun isPublishedApkOlderThanInstalled('));
+  assert.ok(updaterKt.includes('if (isPublishedApkOlderThanInstalled(manifest)) {'));
+  assert.ok(updaterKt.includes('renderStaleReleaseNotice'));
+
+  // 3. Il versionName mostrato proviene dal manifest allegato alla release, non solo dal tag
+  assert.ok(updaterKt.includes('versionName = extraManifest?.versionName'));
+  assert.equal(
+    updaterKt.includes('extraManifest?.versionName?.takeIf { it == tagName }'),
+    false,
+    'Il versionName non deve essere scartato quando differisce dal tag della release'
+  );
+
+  // 4. Il server deriva versione e APK dalla configurazione Gradle reale
+  const serverTs = read('server.ts');
+  assert.ok(serverTs.includes('function readAndroidAppVersion()'));
+  assert.ok(serverTs.includes('function resolveReleaseApk('));
+  assert.ok(serverTs.includes("const versionName = manifestAheadOfCode"));
+  assert.equal(
+    /versionName:\s*String\(manifestData\.versionName\s*\|\|\s*'1\.2\.5'\)/.test(serverTs),
+    false,
+    'Il manifest server non deve più avere la versione hardcoded 1.2.5'
+  );
+
+  // 5. Il workflow CI non deve più avere nomi APK/tag hardcoded e deve validare la versione
+  const workflow = read('.github/workflows/android-release.yml');
+  assert.equal(
+    /photocloud-release-v1\.2\.5-signed\.apk/.test(workflow),
+    false,
+    'Il workflow non deve più produrre APK con nome versione hardcoded'
+  );
+  assert.ok(workflow.includes('Read version from Gradle configuration'));
+  assert.ok(workflow.includes('Determine and validate Release Tag'));
+  assert.ok(workflow.includes('Verify built APK declares the expected version'));
+  assert.ok(workflow.includes('Generate auto-update manifest from the built APK'));
+
+  // 6. Coerenza versione tra Gradle, package.json e manifest di update nel repository
+  const gradle = read('android-app/app/build.gradle.kts');
+  const gradleVersion = gradle.match(/versionName\s*=\s*"([^"]+)"/)?.[1];
+  const gradleCode = Number(gradle.match(/versionCode\s*=\s*([0-9]+)/)?.[1]);
+  const pkgJson = JSON.parse(read('package.json'));
+  const manifestJson = JSON.parse(read('release/photocloud-release-build.json'));
+  assert.equal(pkgJson.version, gradleVersion);
+  assert.equal(manifestJson.versionName, gradleVersion);
+  assert.equal(manifestJson.versionCode, gradleCode);
+  assert.ok(gradleCode > 22, 'versionCode must be greater than the previous release (22)');
+});

@@ -79,7 +79,10 @@ data class AppUpdateState(
 
 data class ApkVerificationResult(
     val isValid: Boolean,
-    val errorReason: String? = null
+    val errorReason: String? = null,
+    /** VersionName/versionCode dichiarati nell'APK scaricato (dal suo AndroidManifest). */
+    val apkVersionName: String? = null,
+    val apkVersionCode: Int = 0
 )
 
 /**
@@ -165,6 +168,7 @@ object AppAutoUpdater {
                 return@launch
             }
 
+            // Se il versionCode remoto non è più nuovo dell'app installata non c'è nulla da fare.
             val isNewer = isRemoteVersionNewer(
                 installedVersionName = BuildConfig.VERSION_NAME,
                 installedVersionCode = BuildConfig.VERSION_CODE,
@@ -207,6 +211,21 @@ object AppAutoUpdater {
                     } catch (_: Throwable) {
                     }
                 }
+            }
+
+            // Anti-loop guard lato release: se la release annuncia la versione X ma l'APK
+            // pubblicato è ancora una versione vecchia già installata, inutile scaricare decine
+            // di MB per poi riproporre lo stesso aggiornamento ad ogni avvio.
+            if (isPublishedApkOlderThanInstalled(manifest)) {
+                _state.value = AppUpdateState(
+                    status = AppUpdateStatus.UP_TO_DATE,
+                    showModal = false,
+                    manifest = null
+                )
+                if (!silentIfUpToDate) {
+                    onManualResult?.invoke(renderStaleReleaseNotice(manifest))
+                }
+                return@launch
             }
 
             downloadAndVerifyUpdateInternal(appCtx, manifest)
@@ -472,6 +491,43 @@ object AppAutoUpdater {
                 )
             }
 
+            val declaredVersionName = archiveInfo.versionName?.removePrefix("v")?.trim().orEmpty()
+            val declaredVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                archiveInfo.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                archiveInfo.versionCode.toLong()
+            }
+
+            // 3. Anti-loop guard: l'APK scaricato deve essere REALMENTE più nuovo dell'app installata.
+            // Se la release annuncia una versione ma pubblica un APK vecchio (stesso versionCode o
+            // inferiore), l'installazione non aggiornerebbe nulla e l'app riproporrebbe l'update
+            // ad ogni avvio: blocchiamo subito con un errore esplicito.
+            if (declaredVersionCode > 0L && declaredVersionCode <= BuildConfig.VERSION_CODE.toLong()) {
+                return ApkVerificationResult(
+                    isValid = false,
+                    errorReason = "La release v${manifest.versionName} pubblica un APK con versione " +
+                        "v${declaredVersionName.ifBlank { "?" }} (versionCode $declaredVersionCode), " +
+                        "uguale o precedente a quella installata v${BuildConfig.VERSION_NAME} " +
+                        "(versionCode ${BuildConfig.VERSION_CODE}). Aggiornamento annullato per evitare " +
+                        "un ciclo di installazioni inutili: l'APK corretto non è ancora stato pubblicato.",
+                    apkVersionName = declaredVersionName,
+                    apkVersionCode = declaredVersionCode.toInt()
+                )
+            }
+
+            if (manifest.versionCode > 0 && declaredVersionCode > 0L &&
+                declaredVersionCode != manifest.versionCode.toLong()
+            ) {
+                return ApkVerificationResult(
+                    isValid = false,
+                    errorReason = "L'APK scaricato dichiara versionCode $declaredVersionCode ma la release " +
+                        "annuncia versionCode ${manifest.versionCode}: file non corrispondente.",
+                    apkVersionName = declaredVersionName,
+                    apkVersionCode = declaredVersionCode.toInt()
+                )
+            }
+
             val archiveCertDigests = extractSigningCertificateDigests(archiveInfo)
             val installedInfo: PackageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 pm.getPackageInfo(
@@ -497,7 +553,11 @@ object AppAutoUpdater {
                 }
             }
 
-            ApkVerificationResult(isValid = true)
+            ApkVerificationResult(
+                isValid = true,
+                apkVersionName = declaredVersionName,
+                apkVersionCode = declaredVersionCode.toInt()
+            )
         } catch (t: Throwable) {
             Log.w(TAG, "Signature verification error: ${t.message}", t)
             ApkVerificationResult(
@@ -586,6 +646,38 @@ object AppAutoUpdater {
         } catch (_: Throwable) {
         }
         return digests
+    }
+
+    /**
+     * Rileva il caso "release fantasma": il manifest annuncia un versionCode più alto di quello
+     * installato, ma il nome file dell'APK pubblicato contiene ancora la versione installata
+     * (es. tag v1.2.6 con asset `photocloud-release-v1.2.5-signed.apk`).
+     *
+     * In questa situazione ogni avvio proporrebbe un aggiornamento che non cambia la versione
+     * dell'app: meglio non mostrare nulla (o avvisare in caso di controllo manuale).
+     */
+    fun isPublishedApkOlderThanInstalled(manifest: AppUpdateManifest): Boolean {
+        if (manifest.apkDownloadUrl.isBlank()) return false
+        val installed = BuildConfig.VERSION_NAME.trim().removePrefix("v")
+        if (installed.isBlank()) return false
+        val fileName = manifest.apkFilename.ifBlank { manifest.apkDownloadUrl.substringAfterLast('/') }
+        if (fileName.isBlank() || !fileName.endsWith(".apk", ignoreCase = true)) return false
+
+        // Estrae la versione (es. 1.2.5) dal nome asset `photocloud-release-v1.2.5-signed.apk`
+        val versionInFileName = Regex("""v?(\d+(?:\.\d+)*)""").find(fileName)?.groupValues?.getOrNull(1)
+            ?.trim()
+            .orEmpty()
+        if (versionInFileName.isBlank()) return false
+
+        // L'asset pubblicato corrisponde alla versione già installata => nessun aggiornamento reale
+        return compareSemanticVersions(versionInFileName, installed) <= 0 &&
+            compareSemanticVersions(manifest.versionName, installed) > 0
+    }
+
+    fun renderStaleReleaseNotice(manifest: AppUpdateManifest): String {
+        return "La release più recente (v${manifest.versionName}) contiene ancora l'APK della versione " +
+            "installata (v${BuildConfig.VERSION_NAME}). Non c'è nulla da aggiornare: l'APK corretto " +
+            "non è stato ancora pubblicato."
     }
 
     fun computeFileSha256(file: File): String {
@@ -701,7 +793,13 @@ object AppAutoUpdater {
                     .take(6)
 
                 AppUpdateManifest(
-                    versionName = extraManifest?.versionName?.takeIf { it == tagName } ?: tagName,
+                    // Il versionName ufficiale proviene dal manifest allegato alla release; il tag
+                    // viene usato solo come fallback quando il manifest non è disponibile.
+                    versionName = extraManifest?.versionName
+                        ?.removePrefix("v")
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() }
+                        ?: tagName,
                     versionCode = extraManifest?.versionCode?.takeIf { it > 0 } ?: 0,
                     apkDownloadUrl = finalApkUrl,
                     apkFilename = apkName.ifBlank { "photocloud-release-v$tagName-signed.apk" },

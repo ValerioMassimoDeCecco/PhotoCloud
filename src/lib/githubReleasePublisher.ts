@@ -38,8 +38,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.2.5';
-const APK_FILENAME = 'photocloud-release-v1.2.5-signed.apk';
+const DEFAULT_TAG = 'v1.2.6';
+const APK_FILENAME = 'photocloud-release-v1.2.6-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
@@ -74,16 +74,17 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     sha256,
     sizeBytes: apkBuffer.length,
     applicationId: 'com.valerio.photocloud',
-    versionName: '1.2.5',
-    versionCode: 22,
-    changelog: 'Release 1.2.5 — Security Hardening completo (OWASP Top 10 & ASVS): protezione Stored/DOM XSS con sandbox CSP, difesa CSRF, validazione anti-Path Traversal e anti-Prototype Pollution, verifica chiavi constant-time, rate-limiting anti-brute-force e protezione Zip Bomb su Web e Android.',
+    versionName: '1.2.6',
+    versionCode: 23,
+    changelog: 'Release 1.2.6 — Fix aggiornamento automatico: la versione dell\'APK pubblicato è verificata contro android-app/app/build.gradle.kts in CI e a runtime nell\'app, bloccando gli aggiornamenti fantasma che riproponevano la stessa versione ad ogni avvio.',
     features: [
+      'Fix aggiornamento automatico: verifica del versionCode reale dell\'APK scaricato e blocco degli aggiornamenti fantasma',
       'Security Hardening Backend & Web App: Content-Security-Policy, sandbox su /media/:filename, protezione CSRF Origin e rimozione X-Powered-By',
       'Protezione Crittografica & Autenticazione: verifica chiavi constant-time (timingSafeEqual), generazione chiavi senza modulo bias (randomInt) e rate-limiting anti-brute-force preservando al 100% il flusso di login e registrazione',
       'Protezione File System & Anti-DoS: blocco dot-file/Path Traversal/Prototype Pollution e limiti anti-Zip Bomb su parser documenti Web e Android (PhotoCloudApiClient)',
       'Drag Selection unificata a 60fps nella Galleria Android, modello AI locale facoltativo on-demand e auto-update APK con verifica SHA-256 + X.509'
     ],
-    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.5',
+    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.6',
     publishedAt: new Date().toISOString(),
   }, null, 2));
   return { apkPath, apkBuffer, sha256, metadataPath };

@@ -7,14 +7,22 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag della Release GitHub (es. v1.2.5)'
+        description: 'Tag della Release GitHub (es. v1.2.6). Deve coincidere con versionName in android-app/app/build.gradle.kts'
         required: false
-        default: 'v1.2.5'
+        default: ''
       publish_release:
         description: 'Pubblica l APK su GitHub Releases (solo su main o tag v*)'
         required: false
         default: true
         type: boolean
+      changelog:
+        description: 'Changelog della release (opzionale, finisce nel manifest di auto-update)'
+        required: false
+        default: ''
+      features:
+        description: 'Elenco novità in formato JSON (opzionale)'
+        required: false
+        default: '[]'
 
 permissions:
   contents: write
@@ -47,6 +55,32 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      # ----------------------------------------------------------------------
+      # SINGLE SOURCE OF TRUTH: la versione viene SEMPRE letta da
+      # android-app/app/build.gradle.kts (versionName + versionCode).
+      # Nomi file APK, manifest di auto-update e tag di release derivano da qui,
+      # così non è più possibile pubblicare un tag v1.2.6 con l'APK v1.2.5
+      # (che causava l'aggiornamento infinito nell'app).
+      # ----------------------------------------------------------------------
+      - name: Read version from Gradle configuration
+        id: app_version
+        working-directory: ./android-app
+        run: |
+          set -euo pipefail
+          VERSION_NAME=$(grep -m1 'versionName = ' app/build.gradle.kts | sed -E 's/.*versionName = "([^"]+)".*/\1/')
+          VERSION_CODE=$(grep -m1 'versionCode = ' app/build.gradle.kts | sed -E 's/.*versionCode = ([0-9]+).*/\1/')
+          if [ -z "$VERSION_NAME" ] || [ -z "$VERSION_CODE" ]; then
+            echo "::error::Impossibile leggere versionName/versionCode da android-app/app/build.gradle.kts"
+            exit 1
+          fi
+          {
+            echo "VERSION_NAME=$VERSION_NAME"
+            echo "VERSION_CODE=$VERSION_CODE"
+            echo "APK_NAME=photocloud-release-v$VERSION_NAME-signed.apk"
+            echo "TAG=v$VERSION_NAME"
+          } >> "$GITHUB_OUTPUT"
+          echo "Versione sorgente: v$VERSION_NAME (versionCode $VERSION_CODE)"
+
       - name: Verify Persistent Release Keystore (RSA-2048 from v1.0.4)
         working-directory: ./android-app/app
         env:
@@ -68,38 +102,119 @@ jobs:
             -alias photocloud-release-key \
             -storepass "${KEYSTORE_PASSWORD:-photocloud_release_2026}"
 
+      - name: Determine and validate Release Tag
+        id: release_meta
+        env:
+          INPUT_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          GRADLE_TAG="v${{ steps.app_version.outputs.VERSION_NAME }}"
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref_name }}"
+          elif [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$GRADLE_TAG"
+          fi
+          TAG="${TAG#v}"
+          TAG="v$TAG"
+          if [ "$TAG" != "$GRADLE_TAG" ]; then
+            echo "::error::Il tag $TAG non corrisponde a versionName=${{ steps.app_version.outputs.VERSION_NAME }} in android-app/app/build.gradle.kts. Aggiorna versionName/versionCode prima di pubblicare, altrimenti l'app proporrà un aggiornamento che non cambia versione."
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Tag release validato: $TAG"
+
       - name: Build Signed Release APK with Gradle
         working-directory: ./android-app
         run: |
+          set -euo pipefail
           gradle assembleRelease --no-daemon --stacktrace
           APK_OUT=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
           if [ -z "$APK_OUT" ]; then
-            echo "Errore: nessun file APK trovato in app/build/outputs/apk/release"
+            echo "::error::Nessun file APK trovato in app/build/outputs/apk/release"
             exit 1
           fi
-          cp "$APK_OUT" ../photocloud-release-v1.2.5-signed.apk
-          sha256sum ../photocloud-release-v1.2.5-signed.apk > ../photocloud-release-v1.2.5-signed.apk.sha256
+          APK_NAME="${{ steps.app_version.outputs.APK_NAME }}"
+          cp "$APK_OUT" "../$APK_NAME"
+          sha256sum "../$APK_NAME" > "../$APK_NAME.sha256"
+          echo "APK prodotto: $APK_NAME"
+
+      - name: Verify built APK declares the expected version
+        id: apk_check
+        working-directory: ./android-app
+        run: |
+          set -euo pipefail
+          APK_METADATA="app/build/outputs/apk/release/output-metadata.json"
+          if [ ! -f "$APK_METADATA" ]; then
+            echo "::error::output-metadata.json non trovato: impossibile verificare la versione dell'APK"
+            exit 1
+          fi
+          APK_VERSION_NAME=$(node -p "require('./$APK_METADATA').elements[0].versionName")
+          APK_VERSION_CODE=$(node -p "require('./$APK_METADATA').elements[0].versionCode")
+          echo "APK compilato: v$APK_VERSION_NAME (versionCode $APK_VERSION_CODE)"
+          EXPECTED_NAME="${{ steps.app_version.outputs.VERSION_NAME }}"
+          EXPECTED_CODE="${{ steps.app_version.outputs.VERSION_CODE }}"
+          if [ "$APK_VERSION_NAME" != "$EXPECTED_NAME" ]; then
+            echo "::error::L'APK dichiara v$APK_VERSION_NAME ma la configurazione Gradle imposta v$EXPECTED_NAME"
+            exit 1
+          fi
+          if [ "$APK_VERSION_CODE" != "$EXPECTED_CODE" ]; then
+            echo "::error::L'APK dichiara versionCode $APK_VERSION_CODE ma la configurazione Gradle imposta $EXPECTED_CODE"
+            exit 1
+          fi
+          {
+            echo "VERSION_NAME=$APK_VERSION_NAME"
+            echo "VERSION_CODE=$APK_VERSION_CODE"
+            echo "SHA256=$(sha256sum "../${{ steps.app_version.outputs.APK_NAME }}" | awk '{print $1}')"
+            echo "SIZE_BYTES=$(stat -c%s "../${{ steps.app_version.outputs.APK_NAME }}" | awk '{print $1}')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate auto-update manifest from the built APK
+        env:
+          APK_NAME: ${{ steps.app_version.outputs.APK_NAME }}
+          VERSION_NAME: ${{ steps.apk_check.outputs.VERSION_NAME }}
+          VERSION_CODE: ${{ steps.apk_check.outputs.VERSION_CODE }}
+          SHA256: ${{ steps.apk_check.outputs.SHA256 }}
+          SIZE_BYTES: ${{ steps.apk_check.outputs.SIZE_BYTES }}
+          TAG: ${{ steps.release_meta.outputs.TAG }}
+          CHANGELOG: ${{ github.event.inputs.changelog }}
+          FEATURES: ${{ github.event.inputs.features }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const features = (() => {
+              try { return JSON.parse(process.env.FEATURES || "[]"); } catch { return []; }
+            })();
+            const changelog = (process.env.CHANGELOG || "").trim()
+              || `Release ${process.env.VERSION_NAME} (versionCode ${process.env.VERSION_CODE})`;
+            const manifest = {
+              apkFilename: process.env.APK_NAME,
+              apkDownloadUrl: `/release/${process.env.APK_NAME}`,
+              sha256: process.env.SHA256,
+              sizeBytes: Number(process.env.SIZE_BYTES),
+              applicationId: "com.valerio.photocloud",
+              versionName: process.env.VERSION_NAME,
+              versionCode: Number(process.env.VERSION_CODE),
+              changelog,
+              features,
+              githubRelease: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/tag/${process.env.TAG}`,
+              publishedAt: new Date().toISOString(),
+            };
+            fs.mkdirSync("release", { recursive: true });
+            fs.writeFileSync("release/photocloud-release-build.json", JSON.stringify(manifest, null, 2));
+            console.log(JSON.stringify(manifest, null, 2));
+          '
 
       - name: Upload Signed APK as GitHub Actions Artifact
         uses: actions/upload-artifact@v4
         with:
           name: photocloud-release-signed-apk
           path: |
-            photocloud-release-v1.2.5-signed.apk
-            photocloud-release-v1.2.5-signed.apk.sha256
+            ${{ steps.app_version.outputs.APK_NAME }}
+            ${{ steps.app_version.outputs.APK_NAME }}.sha256
             release/photocloud-release-build.json
           if-no-files-found: error
-
-      - name: Determine Release Tag
-        id: release_meta
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.release_tag }}" ]]; then
-            echo "TAG=${{ github.event.inputs.release_tag }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "TAG=v1.2.5" >> $GITHUB_OUTPUT
-          fi
 
       - name: Publish Signed APK to GitHub Releases
         if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release != false && inputs.publish_release != 'false') }}
@@ -109,18 +224,17 @@ jobs:
           name: PhotoCloud Android Release ${{ steps.release_meta.outputs.TAG }}
           body: |
             ### PhotoCloud Android Release (${{ steps.release_meta.outputs.TAG }})
-            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.2.4** per aggiornamento diretto.
+            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.2.5** per aggiornamento diretto.
 
             - **Application ID**: `com.valerio.photocloud`
-            - **Versione**: `1.2.5` (`versionCode 22`)
-            - **Novità v1.2.5 — Security Hardening Completo (OWASP Top 10 & ASVS)**:
-              - **Hardening Web, API & Vault**: protezione Stored/DOM XSS con sandbox CSP, difesa CSRF Origin, blocco dot-file/Path Traversal/Prototype Pollution, verifica chiavi constant-time e rate-limiting anti-brute-force.
-              - **Hardening Client Android & Parser Documenti**: protezione anti-Zip Bomb nella lettura di archivi Office/OpenDocument e sanitizzazione dei percorsi cache in `PhotoCloudApiClient`.
-            - **APK Firmato**: `photocloud-release-v1.2.5-signed.apk`
-            - **Checksum SHA-256**: `photocloud-release-v1.2.5-signed.apk.sha256`
+            - **Versione**: `${{ steps.apk_check.outputs.VERSION_NAME }}` (`versionCode ${{ steps.apk_check.outputs.VERSION_CODE }}`)
+            - **APK Firmato**: `${{ steps.app_version.outputs.APK_NAME }}`
+            - **Checksum SHA-256**: `${{ steps.apk_check.outputs.SHA256 }}`
+
+            La versione dell'APK è verificata automaticamente contro `android-app/app/build.gradle.kts`: la release non viene pubblicata se non coincidono.
           files: |
-            photocloud-release-v1.2.5-signed.apk
-            photocloud-release-v1.2.5-signed.apk.sha256
+            ${{ steps.app_version.outputs.APK_NAME }}
+            ${{ steps.app_version.outputs.APK_NAME }}.sha256
             release/photocloud-release-build.json
           draft: false
           prerelease: false
