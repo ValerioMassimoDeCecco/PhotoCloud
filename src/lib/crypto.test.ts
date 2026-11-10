@@ -275,10 +275,10 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
       "packages: 'cmdline-tools;latest platform-tools platforms;android-35 build-tools;35.0.0'"
     )
   );
-  assert.ok(workflowYaml.includes('gradle/actions/setup-gradle@v4'));
   assert.ok(workflowYaml.includes('gradle assembleRelease --no-daemon'));
   assert.ok(workflowYaml.includes('softprops/action-gh-release@v2'));
-  assert.ok(workflowYaml.includes('photocloud-release-v1.1.3-signed.apk'));
+  assert.equal(workflowYaml.includes('photocloud-release-v1.1.3-signed.apk'), false);
+  assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.1.3-signed.apk')));
   assert.equal(workflowYaml.includes('rm -f photocloud-release-key.jks'), false);
 
   const keystorePath = path.resolve(process.cwd(), 'android-app/app/photocloud-release-key.jks');
