@@ -1383,39 +1383,63 @@ fun NativeAuthScreen(
     }
 }
 
+private fun extractVisibleGridCells(
+    gridState: LazyGridState,
+    filenameToIndex: Map<String, Int>,
+    startPaddingPx: Float
+): List<GridCellBounds> {
+    val layoutInfo = gridState.layoutInfo
+    val topPaddingOffset = layoutInfo.beforeContentPadding.toFloat()
+    val result = ArrayList<GridCellBounds>(layoutInfo.visibleItemsInfo.size)
+    for (info in layoutInfo.visibleItemsInfo) {
+        val keyStr = info.key as? String ?: continue
+        if (!keyStr.startsWith("media_")) continue
+        val fn = keyStr.removePrefix("media_")
+        val idx = filenameToIndex[fn] ?: continue
+        val left = info.offset.x.toFloat() + startPaddingPx
+        val top = info.offset.y.toFloat() + topPaddingOffset
+        val right = left + info.size.width.toFloat()
+        val bottom = top + info.size.height.toFloat()
+        result.add(
+            GridCellBounds(
+                filename = fn,
+                index = idx,
+                left = left,
+                top = top,
+                right = right,
+                bottom = bottom
+            )
+        )
+    }
+    return result
+}
+
 private fun findMediaFilenameAtOffset(gridState: LazyGridState, offset: Offset): String? {
     val visibleMediaItems = gridState.layoutInfo.visibleItemsInfo.filter { info ->
         val keyStr = info.key as? String ?: return@filter false
         keyStr.startsWith("media_")
     }
     if (visibleMediaItems.isEmpty()) return null
-
-    val hitItem = visibleMediaItems.firstOrNull { info ->
+    val topPaddingOffset = gridState.layoutInfo.beforeContentPadding.toFloat()
+    val cells = visibleMediaItems.mapIndexed { idx, info ->
         val left = info.offset.x.toFloat()
-        val top = info.offset.y.toFloat()
-        val right = left + info.size.width
-        val bottom = top + info.size.height
-        offset.x in left..right && offset.y in top..bottom
+        val top = info.offset.y.toFloat() + topPaddingOffset
+        GridCellBounds(
+            filename = (info.key as String).removePrefix("media_"),
+            index = idx,
+            left = left,
+            top = top,
+            right = left + info.size.width.toFloat(),
+            bottom = top + info.size.height.toFloat()
+        )
     }
-    if (hitItem != null) {
-        return (hitItem.key as String).removePrefix("media_")
-    }
-
-    val nearest = visibleMediaItems.minByOrNull { info ->
-        val cx = info.offset.x + info.size.width / 2f
-        val cy = info.offset.y + info.size.height / 2f
-        val dx = offset.x - cx
-        val dy = offset.y - cy
-        dx * dx + dy * dy
-    } ?: return null
-
-    val maxSnapDist = maxOf(nearest.size.width, nearest.size.height) * 0.85f
-    val cx = nearest.offset.x + nearest.size.width / 2f
-    val cy = nearest.offset.y + nearest.size.height / 2f
-    if (hypot(offset.x - cx, offset.y - cy) <= maxSnapDist) {
-        return (nearest.key as String).removePrefix("media_")
-    }
-    return null
+    return GalleryDragSelectionController.findCellAtPoint(
+        cells = cells,
+        x = offset.x,
+        y = offset.y,
+        snapToNearest = true,
+        touchMarginPx = 18f
+    )?.filename
 }
 
 @Composable
@@ -1751,10 +1775,25 @@ fun NativeVaultScreen(
     val galleryGridState = rememberLazyGridState()
     val trashGridState = rememberLazyGridState()
 
+    val galleryDragController = remember { GalleryDragSelectionController() }
     var dragStartIndex by remember { mutableStateOf<Int?>(null) }
     var dragLastIndex by remember { mutableStateOf<Int?>(null) }
-    var dragAddingSelection by remember { mutableStateOf(true) }
-    var selectionSnapshotBeforeDrag by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var lastDragGestureEndAtMs by remember { mutableLongStateOf(0L) }
+
+    val galleryFilenameToIndex = remember(gallerySortedItems) {
+        HashMap<String, Int>(gallerySortedItems.size * 2).apply {
+            gallerySortedItems.forEachIndexed { idx, item -> put(item.filename, idx) }
+        }
+    }
+    val galleryFilenamesList = remember(gallerySortedItems) {
+        gallerySortedItems.map { it.filename }
+    }
+
+    val currentGalleryFilenamesState = rememberUpdatedState(galleryFilenamesList)
+    val currentGalleryIndexMapState = rememberUpdatedState(galleryFilenameToIndex)
+    val currentSelectedFilenamesState = rememberUpdatedState(selectedFilenames)
+    val currentActiveTabState = rememberUpdatedState(currentTab)
+    val currentHapticsEnabledState = rememberUpdatedState(custom.hapticsEnabled)
 
     fun triggerHaptic(longPress: Boolean = false) {
         if (custom.hapticsEnabled) {
@@ -1764,9 +1803,6 @@ fun NativeVaultScreen(
         }
     }
 
-    // Long-press selection on the gallery grid is handled both by the grid-level
-    // pointerInput (drag-to-select) and by each tile's onLongClick: debounce the two
-    // paths so exactly one toggle happens per long-press gesture.
     var gridLongPressToggleAtMs by remember { mutableLongStateOf(0L) }
     val toggleGallerySelectionFromLongPress: (String) -> Unit = { fn ->
         val now = System.currentTimeMillis()
@@ -2287,7 +2323,7 @@ fun NativeVaultScreen(
                             }
                         }
                     } else {
-                        // 120Hz Photo Grid with Drag-to-Select Multi-Selection (Kept alive across tabs)
+                        // 120Hz Photo Grid with Unified Long-Press & Drag-to-Select Controller (Kept alive across tabs)
                         LazyVerticalGrid(
                             state = galleryGridState,
                             columns = GridCells.Fixed(custom.gridColumns.coerceIn(2, 5)),
@@ -2302,114 +2338,208 @@ fun NativeVaultScreen(
                             userScrollEnabled = currentTab == VaultTab.GALLERY && dragStartIndex == null,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .pointerInput(gallerySortedItems, currentTab) {
-                                    if (currentTab != VaultTab.GALLERY) return@pointerInput
+                                .pointerInput(Unit) {
+                                    val touchSlop = viewConfiguration.touchSlop
+                                    val startPaddingPx = 6.dp.toPx()
+                                    val touchMarginPx = 14.dp.toPx()
+                                    val topAutoScrollZonePx = 115.dp.toPx()
+                                    val bottomAutoScrollZonePx = 195.dp.toPx()
+                                    val maxAutoScrollSpeedPx = 28.dp.toPx()
+
                                     awaitEachGesture {
-                                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                        if (currentActiveTabState.value != VaultTab.GALLERY) return@awaitEachGesture
+
+                                        // Phase 0: Detect initial finger touch-down (ACTION_DOWN) without consuming
+                                        // so normal taps and normal vertical scrolling continue to work seamlessly.
+                                        val down = awaitFirstDown(
+                                            requireUnconsumed = false,
+                                            pass = PointerEventPass.Initial
+                                        )
                                         var activePointerId = down.id
-                                        while (true) {
-                                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                                            val pointer = event.changes.firstOrNull { it.id == activePointerId }
-                                                ?: event.changes.firstOrNull()
-                                                ?: break
-                                            activePointerId = pointer.id
-                                            if (!pointer.pressed) {
-                                                if (dragStartIndex != null) {
-                                                    dragStartIndex = null
-                                                    dragLastIndex = null
+                                        val downPos = down.position
+
+                                        val cellsAtDown = extractVisibleGridCells(
+                                            gridState = galleryGridState,
+                                            filenameToIndex = currentGalleryIndexMapState.value,
+                                            startPaddingPx = startPaddingPx
+                                        )
+                                        val anchorCell = GalleryDragSelectionController.findCellAtPoint(
+                                            cells = cellsAtDown,
+                                            x = downPos.x,
+                                            y = downPos.y,
+                                            snapToNearest = false,
+                                            touchMarginPx = touchMarginPx
+                                        ) ?: return@awaitEachGesture
+
+                                        // Phase 1: Wait for long-press threshold while checking for early finger lift or scroll
+                                        var currentFingerPos = downPos
+                                        var abortedBeforeLongPress = false
+                                        val longPressWaitMs = minOf(viewConfiguration.longPressTimeoutMillis, 380L)
+                                            .coerceAtLeast(250L)
+
+                                        val exitedBeforeTimeout = withTimeoutOrNull(longPressWaitMs) {
+                                            while (true) {
+                                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                val change = event.changes.firstOrNull { it.id == activePointerId }
+                                                    ?: event.changes.firstOrNull()
+                                                if (change == null || !change.pressed || change.isConsumed) {
+                                                    abortedBeforeLongPress = true
+                                                    break
                                                 }
-                                                break
+                                                activePointerId = change.id
+                                                currentFingerPos = change.position
+                                                val dx = kotlin.math.abs(currentFingerPos.x - downPos.x)
+                                                val dy = kotlin.math.abs(currentFingerPos.y - downPos.y)
+                                                if (dy > touchSlop || dx > touchSlop * 1.35f) {
+                                                    abortedBeforeLongPress = true
+                                                    break
+                                                }
                                             }
-                                            val startIdx = dragStartIndex
-                                            if (startIdx != null && pointer.positionChanged()) {
-                                                pointer.consume()
+                                            true
+                                        }
+
+                                        if (exitedBeforeTimeout != null || abortedBeforeLongPress) {
+                                            return@awaitEachGesture
+                                        }
+
+                                        // Phase 2: Long-press reached! Activate Drag Selection Mode immediately.
+                                        val filenamesSnapshot = currentGalleryFilenamesState.value
+                                        if (anchorCell.index !in filenamesSnapshot.indices) return@awaitEachGesture
+
+                                        if (currentHapticsEnabledState.value) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        }
+                                        gridLongPressToggleAtMs = System.currentTimeMillis()
+                                        selectedFilenames = galleryDragController.startDragSelection(
+                                            anchorIndex = anchorCell.index,
+                                            allFilenames = filenamesSnapshot,
+                                            existingSelection = currentSelectedFilenamesState.value
+                                        )
+                                        dragStartIndex = anchorCell.index
+                                        dragLastIndex = anchorCell.index
+
+                                        val cellsAtPhase2 = extractVisibleGridCells(
+                                            gridState = galleryGridState,
+                                            filenameToIndex = currentGalleryIndexMapState.value,
+                                            startPaddingPx = startPaddingPx
+                                        )
+                                        val initialTargetCell = GalleryDragSelectionController.findCellAtPoint(
+                                            cells = cellsAtPhase2,
+                                            x = currentFingerPos.x,
+                                            y = currentFingerPos.y,
+                                            snapToNearest = true,
+                                            touchMarginPx = touchMarginPx
+                                        )
+                                        if (initialTargetCell != null && initialTargetCell.index != anchorCell.index) {
+                                            val initRes = galleryDragController.updateDragSelection(
+                                                targetIndex = initialTargetCell.index,
+                                                allFilenames = filenamesSnapshot
+                                            )
+                                            if (initRes.changed) {
+                                                dragLastIndex = initRes.currentIndex
+                                                selectedFilenames = initRes.selectedFilenames
+                                            }
+                                        }
+
+                                        // Phase 3: Launch continuous 60fps auto-scroll loop when finger is near top/bottom edges
+                                        var latestFingerPos = currentFingerPos
+                                        val autoScrollJob = scope.launch {
+                                            while (galleryDragController.isActive) {
                                                 val viewportH = galleryGridState.layoutInfo.viewportSize.height.toFloat()
-                                                val y = pointer.position.y
-                                                if (y < 140f) {
-                                                    scope.launch { galleryGridState.scrollBy(-28f) }
-                                                } else if (y > viewportH - 220f) {
-                                                    scope.launch { galleryGridState.scrollBy(28f) }
+                                                val velocity = GalleryDragSelectionController.computeAutoScrollVelocityPxPerFrame(
+                                                    fingerY = latestFingerPos.y,
+                                                    viewportHeight = viewportH,
+                                                    topZonePx = topAutoScrollZonePx,
+                                                    bottomZonePx = bottomAutoScrollZonePx,
+                                                    maxSpeedPxPerFrame = maxAutoScrollSpeedPx
+                                                )
+                                                if (velocity != 0f) {
+                                                    val scrolled = galleryGridState.scrollBy(velocity)
+                                                    if (scrolled != 0f) {
+                                                        val cellsNow = extractVisibleGridCells(
+                                                            gridState = galleryGridState,
+                                                            filenameToIndex = currentGalleryIndexMapState.value,
+                                                            startPaddingPx = startPaddingPx
+                                                        )
+                                                        val hitDuringScroll = GalleryDragSelectionController.findCellAtPoint(
+                                                            cells = cellsNow,
+                                                            x = latestFingerPos.x,
+                                                            y = latestFingerPos.y,
+                                                            snapToNearest = true,
+                                                            touchMarginPx = touchMarginPx
+                                                        )
+                                                        if (hitDuringScroll != null) {
+                                                            val res = galleryDragController.updateDragSelection(
+                                                                targetIndex = hitDuringScroll.index,
+                                                                allFilenames = currentGalleryFilenamesState.value
+                                                            )
+                                                            if (res.changed) {
+                                                                dragLastIndex = res.currentIndex
+                                                                if (currentHapticsEnabledState.value) {
+                                                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                                }
+                                                                selectedFilenames = res.selectedFilenames
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                delay(16L)
+                                            }
+                                        }
+
+                                        // Phase 4: Track finger movement (ACTION_MOVE) until release (ACTION_UP / ACTION_CANCEL)
+                                        try {
+                                            while (true) {
+                                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                // Consume all pointer events on Initial pass so child tiles and
+                                                // scrollable never react to drag movements or final finger release.
+                                                event.changes.forEach { it.consume() }
+
+                                                val pointer = event.changes.firstOrNull { it.id == activePointerId }
+                                                    ?: event.changes.firstOrNull { it.pressed }
+                                                    ?: event.changes.firstOrNull()
+
+                                                if (pointer == null || !pointer.pressed || event.changes.none { it.pressed }) {
+                                                    break
                                                 }
 
-                                                val hitFn = findMediaFilenameAtOffset(galleryGridState, pointer.position)
-                                                val currentIdx = gallerySortedItems.indexOfFirst { it.filename == hitFn }
-                                                if (currentIdx >= 0 && currentIdx != dragLastIndex) {
-                                                    dragLastIndex = currentIdx
-                                                    triggerHaptic(longPress = false)
-                                                    val rangeStart = minOf(startIdx, currentIdx)
-                                                    val rangeEnd = maxOf(startIdx, currentIdx)
-                                                    val rangeFilenames = gallerySortedItems
-                                                        .subList(rangeStart, rangeEnd + 1)
-                                                        .map { it.filename }
-                                                        .toSet()
+                                                activePointerId = pointer.id
+                                                latestFingerPos = pointer.position
 
-                                                    selectedFilenames = if (dragAddingSelection) {
-                                                        selectionSnapshotBeforeDrag + rangeFilenames
-                                                    } else {
-                                                        selectionSnapshotBeforeDrag - rangeFilenames
+                                                val cellsNow = extractVisibleGridCells(
+                                                    gridState = galleryGridState,
+                                                    filenameToIndex = currentGalleryIndexMapState.value,
+                                                    startPaddingPx = startPaddingPx
+                                                )
+                                                val hitCell = GalleryDragSelectionController.findCellAtPoint(
+                                                    cells = cellsNow,
+                                                    x = pointer.position.x,
+                                                    y = pointer.position.y,
+                                                    snapToNearest = true,
+                                                    touchMarginPx = touchMarginPx
+                                                )
+                                                if (hitCell != null) {
+                                                    val res = galleryDragController.updateDragSelection(
+                                                        targetIndex = hitCell.index,
+                                                        allFilenames = currentGalleryFilenamesState.value
+                                                    )
+                                                    if (res.changed) {
+                                                        dragLastIndex = res.currentIndex
+                                                        if (currentHapticsEnabledState.value) {
+                                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                        }
+                                                        selectedFilenames = res.selectedFilenames
                                                     }
                                                 }
                                             }
+                                        } finally {
+                                            autoScrollJob.cancel()
+                                            galleryDragController.endDragSelection()
+                                            dragStartIndex = null
+                                            dragLastIndex = null
+                                            lastDragGestureEndAtMs = System.currentTimeMillis()
                                         }
                                     }
-                                }
-                                .pointerInput(gallerySortedItems, currentTab) {
-                                    if (currentTab != VaultTab.GALLERY) return@pointerInput
-                                    detectDragGesturesAfterLongPress(
-                                        onDragStart = { startOffset ->
-                                            val hitFn = findMediaFilenameAtOffset(galleryGridState, startOffset)
-                                            val idx = gallerySortedItems.indexOfFirst { it.filename == hitFn }
-                                            if (idx >= 0 && hitFn != null) {
-                                                selectionSnapshotBeforeDrag = selectedFilenames
-                                                toggleGallerySelectionFromLongPress(hitFn)
-                                                dragStartIndex = idx
-                                                dragLastIndex = idx
-                                                dragAddingSelection = selectedFilenames.contains(hitFn)
-                                            } else {
-                                                dragStartIndex = null
-                                                dragLastIndex = null
-                                            }
-                                        },
-                                        onDrag = { change, _ ->
-                                            val startIdx = dragStartIndex ?: return@detectDragGesturesAfterLongPress
-                                            change.consume()
-
-                                            val viewportH = galleryGridState.layoutInfo.viewportSize.height.toFloat()
-                                            val y = change.position.y
-                                            if (y < 140f) {
-                                                scope.launch { galleryGridState.scrollBy(-28f) }
-                                            } else if (y > viewportH - 220f) {
-                                                scope.launch { galleryGridState.scrollBy(28f) }
-                                            }
-
-                                            val hitFn = findMediaFilenameAtOffset(galleryGridState, change.position)
-                                            val currentIdx = gallerySortedItems.indexOfFirst { it.filename == hitFn }
-                                            if (currentIdx >= 0 && currentIdx != dragLastIndex) {
-                                                dragLastIndex = currentIdx
-                                                triggerHaptic(longPress = false)
-                                                val rangeStart = minOf(startIdx, currentIdx)
-                                                val rangeEnd = maxOf(startIdx, currentIdx)
-                                                val rangeFilenames = gallerySortedItems
-                                                    .subList(rangeStart, rangeEnd + 1)
-                                                    .map { it.filename }
-                                                    .toSet()
-
-                                                selectedFilenames = if (dragAddingSelection) {
-                                                    selectionSnapshotBeforeDrag + rangeFilenames
-                                                } else {
-                                                    selectionSnapshotBeforeDrag - rangeFilenames
-                                                }
-                                            }
-                                        },
-                                        onDragEnd = {
-                                            dragStartIndex = null
-                                            dragLastIndex = null
-                                        },
-                                        onDragCancel = {
-                                            dragStartIndex = null
-                                            dragLastIndex = null
-                                        }
-                                    )
                                 }
                         ) {
                             galleryGroupedSections.forEach { (sectionTitle, sectionItems) ->
@@ -2444,6 +2574,9 @@ fun NativeVaultScreen(
                                         showVideoBadge = custom.showVideoBadges,
                                         onClick = {
                                             if (currentTab != VaultTab.GALLERY) return@MediaGridTile
+                                            if (dragStartIndex != null || System.currentTimeMillis() - lastDragGestureEndAtMs < 180L) {
+                                                return@MediaGridTile
+                                            }
                                             if (selectedFilenames.isNotEmpty()) {
                                                 triggerHaptic()
                                                 selectedFilenames = if (isSelected) {
@@ -2452,7 +2585,7 @@ fun NativeVaultScreen(
                                                     selectedFilenames + mediaItem.filename
                                                 }
                                             } else if (mediaItem.isMedia) {
-                                                val globalIndex = gallerySortedItems.indexOfFirst { it.filename == mediaItem.filename }
+                                                val globalIndex = galleryFilenameToIndex[mediaItem.filename] ?: -1
                                                 if (globalIndex >= 0) {
                                                     lightboxInitialIndex = globalIndex
                                                 }
@@ -2460,21 +2593,7 @@ fun NativeVaultScreen(
                                                 handleOpenCloudItem(mediaItem)
                                             }
                                         },
-                                        onLongClick = {
-                                            if (currentTab == VaultTab.GALLERY) {
-                                                // Debounced against the grid-level pointerInput so exactly
-                                                // one toggle happens per long-press gesture, and initialize
-                                                // drag-to-select state immediately so moving the finger selects ranges.
-                                                selectionSnapshotBeforeDrag = selectedFilenames
-                                                toggleGallerySelectionFromLongPress(mediaItem.filename)
-                                                val idx = gallerySortedItems.indexOfFirst { it.filename == mediaItem.filename }
-                                                if (idx >= 0) {
-                                                    dragStartIndex = idx
-                                                    dragLastIndex = idx
-                                                    dragAddingSelection = selectedFilenames.contains(mediaItem.filename)
-                                                }
-                                            }
-                                        },
+                                        onLongClick = null,
                                         onRestore = null,
                                         onDeletePermanent = null
                                     )
@@ -5014,7 +5133,7 @@ fun MediaGridTile(
     aspectRatio: Float,
     showVideoBadge: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     onRestore: (() -> Unit)? = null,
     onDeletePermanent: (() -> Unit)? = null
 ) {
@@ -5053,9 +5172,15 @@ fun MediaGridTile(
             .aspectRatio(aspectRatio)
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceContainer)
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
+            .then(
+                if (onLongClick != null) {
+                    Modifier.combinedClickable(
+                        onClick = onClick,
+                        onLongClick = onLongClick
+                    )
+                } else {
+                    Modifier.clickable(onClick = onClick)
+                }
             )
     ) {
         Box(

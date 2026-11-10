@@ -72,13 +72,13 @@ test('server protects vaults, preserves collisions, and handles real media flows
     assert.equal((await get('/service-worker.js')).status, 200);
     assert.equal((await get('/')).status, 200);
 
-    // Verify v1.2.3 Android update manifest and optional AI model Range streaming endpoints
+    // Verify v1.2.4 Android update manifest and optional AI model Range streaming endpoints
     const updateManifestResp = await get('/api/android/update-manifest');
     assert.equal(updateManifestResp.status, 200);
     const updateManifest = await updateManifestResp.json() as any;
-    assert.equal(updateManifest.versionName, '1.2.3');
-    assert.equal(updateManifest.versionCode, 20);
-    assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.2.3-signed.apk');
+    assert.equal(updateManifest.versionName, '1.2.4');
+    assert.equal(updateManifest.versionCode, 21);
+    assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.2.4-signed.apk');
     assert.equal(updateManifest.sha256.length, 64);
     assert.ok(updateManifest.sizeBytes > 20 * 1024 * 1024);
 

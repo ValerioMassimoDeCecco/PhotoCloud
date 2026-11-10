@@ -38,8 +38,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.2.3';
-const APK_FILENAME = 'photocloud-release-v1.2.3-signed.apk';
+const DEFAULT_TAG = 'v1.2.4';
+const APK_FILENAME = 'photocloud-release-v1.2.4-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
@@ -58,7 +58,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     if (fs.existsSync(fallbackSource)) {
       source = fallbackSource;
     } else {
-      const prevSource = path.join(outputDir, 'photocloud-release-v1.2.2-signed.apk');
+      const prevSource = path.join(outputDir, 'photocloud-release-v1.2.3-signed.apk');
       if (fs.existsSync(prevSource)) source = prevSource;
     }
   }
@@ -74,16 +74,16 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     sha256,
     sizeBytes: apkBuffer.length,
     applicationId: 'com.valerio.photocloud',
-    versionName: '1.2.3',
-    versionCode: 20,
-    changelog: 'Modello AI locale EfficientNet-Lite4 scaricabile su richiesta con supporto HTTP Range/Resume e pulizia spazio + Sistema automatico di aggiornamento app in-app con verifica SHA-256 e firma digitale X.509.',
+    versionName: '1.2.4',
+    versionCode: 21,
+    changelog: 'Correzione strutturale Drag Selection nella Galleria Android (GalleryDragSelectionController unificato su PointerEventPass.Initial, rimozione conflitti pointerInput/combinedClickable e auto-scroll continuo a 60fps).',
     features: [
-      'Modello AI locale EfficientNet-Lite4 facoltativo: download on-demand con barra di progresso, pausa/ripresa HTTP Range e cancellazione per liberare spazio',
-      'Sistema di aggiornamento automatico in-app all\'avvio da GitHub Releases con fallback al server PhotoCloud',
-      'Verifica integrità SHA-256 e compatibilità firma digitale X.509 dell\'APK prima dell\'avvio dell\'installer ufficiale Android',
-      'Selezione multipla Drag-to-Select con pressione prolungata e auto-scroll nella Galleria Android'
+      'Correzione definitiva Drag Selection nella Galleria Android con macchina a stati unificata (GalleryDragSelectionController) su PointerEventPass.Initial',
+      'Eliminazione del conflitto di cancellazione reciproca tra doppio pointerInput e combinedClickable dei singoli tile',
+      'Auto-scroll continuo a 60fps ai bordi superiore e inferiore anche a dito fermo con selezione automatica delle righe in scorrimento',
+      'Modello AI locale EfficientNet-Lite4 facoltativo on-demand e sistema di aggiornamento automatico in-app con verifica SHA-256 e firma X.509'
     ],
-    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.3',
+    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.4',
     publishedAt: new Date().toISOString(),
   }, null, 2));
   return { apkPath, apkBuffer, sha256, metadataPath };
@@ -153,6 +153,7 @@ export async function triggerGitHubActionsBuild(options?: {
     'android-app/app/src/main/res/values/strings.xml',
     'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt',
+    'android-app/app/src/main/java/com/valerio/photocloud/GalleryDragSelectionController.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/AiModelDownloadManager.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/AppAutoUpdater.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/LocalPhotoCategorizer.kt',

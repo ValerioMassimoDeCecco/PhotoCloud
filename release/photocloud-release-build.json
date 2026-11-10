@@ -1,18 +1,18 @@
 {
-  "apkFilename": "photocloud-release-v1.2.3-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.2.3-signed.apk",
-  "sha256": "623d755ec648bf13bc4e638c231b0ae1f80fcdc904fe13ecb0449aa774e1b459",
-  "sizeBytes": 58905655,
+  "apkFilename": "photocloud-release-v1.2.4-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.2.4-signed.apk",
+  "sha256": "b3a4d8699aa43c3a5a438a16fd9e01015cce60aec7565dfef07b001b3dbabfc3",
+  "sizeBytes": 58905670,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.2.3",
-  "versionCode": 20,
-  "changelog": "Modello AI locale EfficientNet-Lite4 scaricabile su richiesta con supporto HTTP Range/Resume e pulizia spazio + Sistema automatico di aggiornamento app in-app con verifica SHA-256 e firma digitale X.509.",
+  "versionName": "1.2.4",
+  "versionCode": 21,
+  "changelog": "Correzione definitiva Drag Selection nella Galleria Android (gestione unificata pointerInput su PointerEventPass.Initial, eliminazione conflitto doppi listener e combinedClickable, auto-scroll continuo a 60fps sui bordi superiore/inferiore, hit-testing multi-riga e benchmark 5.000 foto).",
   "features": [
-    "Modello AI locale EfficientNet-Lite4 facoltativo: download on-demand con barra di progresso, pausa/ripresa HTTP Range e cancellazione per liberare spazio",
-    "Sistema di aggiornamento automatico in-app all'avvio da GitHub Releases con fallback al server PhotoCloud",
-    "Verifica integrità SHA-256 e compatibilità firma digitale X.509 dell'APK prima dell'avvio dell'installer ufficiale Android",
-    "Selezione multipla Drag-to-Select con pressione prolungata e auto-scroll nella Galleria Android"
+    "Correzione critica Drag Selection nella Galleria Android: stato touch unificato (ACTION_DOWN, ACTION_MOVE, ACTION_UP, ACTION_CANCEL) senza cancellazioni premature",
+    "Auto-scroll fluido continuo a 60fps vicino ai bordi superiore e inferiore anche a dito fermo sul bordo",
+    "Hit-testing geometrico row-aware attraverso gap, intestazioni data/album e righe multiple con deselection bidirezionale",
+    "Modello AI locale EfficientNet-Lite4 facoltativo on-demand e sistema di aggiornamento automatico APK in-app"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.3",
-  "publishedAt": "2026-11-10T10:57:10Z"
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.4",
+  "publishedAt": "2026-11-10T11:33:00Z"
 }
