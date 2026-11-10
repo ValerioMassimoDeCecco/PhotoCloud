@@ -238,7 +238,39 @@ Il motore (`src/lib/documentEngine.ts` + `/api/document-preview/:filename` + `st
 
 ---
 
-### 🤖 4. Android (Installazione APK `v1.1.3` & Compilazione da Sorgente)
+### 🔄 4. Come Aggiornare la Web App Localmente (A Seguito di Nuove Release o Aggiornamenti)
+
+Quando vengono rilasciati nuovi aggiornamenti sul repository, esegui i seguenti comandi nel terminale all'interno della cartella del progetto (`PhotoCloud`) per aggiornare l'applicazione locale:
+
+1. **Scarica gli ultimi aggiornamenti dal repository:**
+   ```bash
+   git pull
+   ```
+
+2. **Aggiorna le dipendenze NPM:**
+   ```bash
+   npm install
+   ```
+
+3. **Ricompila la Web App per la produzione (se avviata con `npm start`):**
+   ```bash
+   npm run build
+   ```
+
+4. **Riavvia il server:**
+   - **In modalità Sviluppo (Dev):**
+     ```bash
+     npm run dev
+     ```
+   - **In modalità Produzione:**
+     ```bash
+     npm start
+     ```
+     *(Oppure con porta personalizzata: `PORT=3000 npm start`)*
+
+---
+
+### 🤖 5. Android (Installazione APK & Compilazione da Sorgente)
 
 #### Opzione A: Installare l'APK Firmato Pronto (`v1.1.3`)
 1. Scarica **`photocloud-release-v1.1.3-signed.apk`** dalla sezione **[Releases di GitHub](https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.1.3)** (le Release GitHub sono la sorgente ufficiale dell'APK firmato; `release/photocloud-release-build.json` ne riporta il checksum SHA-256). In alternativa puoi compilarlo localmente con la Opzione B (`/release/photocloud-release-v1.1.3-signed.apk`).
