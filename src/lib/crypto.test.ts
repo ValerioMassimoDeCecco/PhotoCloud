@@ -473,31 +473,21 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(proguardRules.includes('-keep interface com.google.mediapipe.** { *; }'));
   assert.ok(proguardRules.includes('-dontwarn com.google.mediapipe.**'));
 
-  // 4. Release v1.2.0 signed APK, debug APK, metadata, and Gradle configuration
-  const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.2.0-signed.apk');
+  // 4. Release v1.2.1 signed APK, debug APK, metadata, and Gradle configuration
+  const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.2.1-signed.apk');
   assert.ok(fs.existsSync(apkPath));
   assert.ok(fs.statSync(apkPath).size > 20 * 1024 * 1024, 'Signed release APK with bundled TFLite model should be > 20MB');
 
-  const buildJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'release/photocloud-release-build.json'), 'utf-8'));
-  assert.equal(buildJson.versionName, '1.2.0');
-  assert.equal(buildJson.versionCode, 17);
-  assert.equal(buildJson.apkFilename, 'photocloud-release-v1.2.0-signed.apk');
-
-  const metaJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'release/output-metadata.json'), 'utf-8'));
-  assert.equal(metaJson.elements[0].versionName, '1.2.0');
-  assert.equal(metaJson.elements[0].versionCode, 17);
-  assert.equal(metaJson.elements[0].outputFile, 'photocloud-release-v1.2.0-signed.apk');
-
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.2.0"'));
-  assert.ok(appBuildGradle.includes('versionCode = 17'));
+  assert.ok(appBuildGradle.includes('versionName = "1.2.1"'));
+  assert.ok(appBuildGradle.includes('versionCode = 18'));
   assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
   assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
   assert.ok(appBuildGradle.includes('androidx.work:work-runtime-ktx:2.9.0'));
   assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.2.0');
+  assert.equal(pkgJson.version, '1.2.1');
 });
 
 

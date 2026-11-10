@@ -1,6 +1,6 @@
 {
-  "summary":  "Piano di correzione per l'indicizzazione AI on-device in PhotoCloud: limitazione dell'analisi alle sole foto caricate nel cloud PhotoCloud e visualizzazione del progresso limitata al solo lotto di caricamento in corso.",
-  "updatedAt":  "2026-11-10T09:07:01.690880395Z",
+  "summary":  "Piano di implementazione per la release v1.2.1: aggiornamento della versione dell'app a 1.2.1 (versionCode 18), verifica e rifinitura della selezione multipla con pressione prolungata e trascinamento (drag-to-select) nella galleria media per touch e mouse, e aggiornamento dei test.",
+  "updatedAt":  "2026-11-10T10:02:28.355772294Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
