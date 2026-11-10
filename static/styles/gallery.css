@@ -460,6 +460,29 @@
     opacity: 1;
 }
 
+/* Drag-to-select marquee */
+.selection-marquee {
+    position: fixed;
+    pointer-events: none;
+    z-index: 9999;
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
+    border: 1.5px solid var(--primary);
+    border-radius: var(--radius-s);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.gallery-grid.is-drag-selecting,
+.media-group-grid.is-drag-selecting {
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: crosshair;
+}
+
+.gallery-grid.is-drag-selecting .media-card,
+.media-group-grid.is-drag-selecting .media-card {
+    pointer-events: none;
+}
+
 /* Empty State */
 .empty-state {
     grid-column: 1 / -1;

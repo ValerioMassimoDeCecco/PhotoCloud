@@ -278,12 +278,13 @@ data class CustomizationState(
 )
 
 /**
- * PhotoCloud 100% Native Android Client v1.0.6
+ * PhotoCloud 100% Native Android Client v1.1.4
+ * - Drag-to-Select Multiple Media in LazyVerticalGrid & SelectionActionsPanel
+ * - Lightbox Gesture Navigation with HorizontalPager & Coherent Slide Transitions
  * - Cloud File Manager for non-media files (PDF, ZIP, APK, Docs, Audio, Code, etc.)
  * - Top-Right Upload/Download Transfer Center with floating operations menu (real-time speed, size, progress)
  * - Media & File Grouping by Album (create, assign, filter, delete albums)
  * - 0ms Instant Startup (Synchronous cookie/cache hydration, zero loading circle)
- * - Drag-to-Select Multiple Media in LazyVerticalGrid
  * - Full Settings & Customization Menu + Dual App Icon Support (Color & B/W)
  */
 class MainActivity : FragmentActivity() {

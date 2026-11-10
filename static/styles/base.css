@@ -170,6 +170,56 @@ body {
     will-change: transform, opacity;
     user-select: none;
     -webkit-user-drag: none;
+    touch-action: none;
+}
+
+.lightbox-animate-next-in {
+    animation: lightboxSlideInRight 0.28s cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+.lightbox-animate-prev-in {
+    animation: lightboxSlideInLeft 0.28s cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+.lightbox-animate-dismiss {
+    animation: lightboxDismissDown 0.28s cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+.lightbox-spring-reset {
+    transition: transform 0.26s cubic-bezier(0.2, 0, 0, 1), opacity 0.26s cubic-bezier(0.2, 0, 0, 1) !important;
+}
+
+@keyframes lightboxSlideInRight {
+    0% {
+        transform: translate3d(70px, 0, 0) scale(0.92);
+        opacity: 0;
+    }
+    100% {
+        transform: translate3d(0, 0, 0) scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes lightboxSlideInLeft {
+    0% {
+        transform: translate3d(-70px, 0, 0) scale(0.92);
+        opacity: 0;
+    }
+    100% {
+        transform: translate3d(0, 0, 0) scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes lightboxDismissDown {
+    0% {
+        transform: translate3d(0, 0, 0) scale(1);
+        opacity: 1;
+    }
+    100% {
+        transform: translate3d(0, 80vh, 0) scale(0.85);
+        opacity: 0;
+    }
 }
 
 .nav-btn {

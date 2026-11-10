@@ -72,14 +72,18 @@ jobs:
             echo "Errore: nessun file APK trovato in app/build/outputs/apk/release"
             exit 1
           fi
+          cp "$APK_OUT" ../photocloud-release-v1.1.4-signed.apk
           cp "$APK_OUT" ../photocloud-release-v1.1.3-signed.apk
+          sha256sum ../photocloud-release-v1.1.4-signed.apk > ../photocloud-release-v1.1.4-signed.apk.sha256
           sha256sum ../photocloud-release-v1.1.3-signed.apk > ../photocloud-release-v1.1.3-signed.apk.sha256
 
       - name: Upload Signed APK as GitHub Actions Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: photocloud-release-v1.1.3-signed-apk
+          name: photocloud-release-signed-apk
           path: |
+            photocloud-release-v1.1.4-signed.apk
+            photocloud-release-v1.1.4-signed.apk.sha256
             photocloud-release-v1.1.3-signed.apk
             photocloud-release-v1.1.3-signed.apk.sha256
           if-no-files-found: error
@@ -92,7 +96,7 @@ jobs:
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "TAG=v1.1.3" >> $GITHUB_OUTPUT
+            echo "TAG=v1.1.4" >> $GITHUB_OUTPUT
           fi
 
       - name: Publish Signed APK to GitHub Releases
@@ -105,14 +109,16 @@ jobs:
             Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.10** per aggiornamento diretto.
 
             - **Application ID**: `com.valerio.photocloud`
-            - **Versione**: `1.1.3` (`versionCode 14`)
-            - **Novità v1.1.3** (fix APK segnalati):
-              - **Controlli Video nel Lightbox Ripristinati**: toccando un video si vedeva solo l'anteprima statica senza alcun controllo del player. Causa: il ramo `Image(loadedBitmap)` veniva valutato prima del ramo video e, dopo la v1.1.2, i video hanno sempre una miniatura in cache RAM — il `VideoView` + `MediaController` (play/pausa, seek bar, durata) non veniva mai creato. Ora i video passano sempre dalla `VideoView` (ramo video valutato per primo), i controlli compaiono al tap sul video e restano visibili per 3 secondi all'avvio (`controller.show(3000)`); il pinch/pan del lightbox non ruba più i touch al player sulla seek bar. La miniatura resta come anteprima nella griglia e nel Cestino.
-            - **Novità v1.1.2**: anteprime video nella griglia (`MediaMetadataRetriever` + HTTP Range), long-press selezione corretto (debounce del doppio toggle), pannello opzioni `SelectionActionsPanel` (Sposta in album… / Scarica / Cestina / Seleziona tutti).
-            - **Novità v1.1.1**: Passaggio Istantaneo (0.0ms) alla Galleria (`Keep-Alive` grid + `thumbnailCache`), Photo Editor Studio 0ms / 120Hz, Indicatore Discreto dei Trasferimenti & Motore Documenti Integrato.
-            - **APK Firmato**: `photocloud-release-v1.1.3-signed.apk`
-            - **Checksum SHA-256**: `photocloud-release-v1.1.3-signed.apk.sha256`
+            - **Versione**: `1.1.4` (`versionCode 15`)
+            - **Novità v1.1.4**:
+              - **Selezione a trascinamento sui media (Drag-to-select)**: trascina semplicemente il dito o mouse sopra i media per selezionarli con marquee box reattivo Material You.
+              - **Navigazione gestuale fluida nel Lightbox**: swipe orizzontale reattivo con animazioni coerenti di scorrimento laterale.
+              - **Swipe in basso per chiudere (Dismiss)**: trascina la foto verso il basso per chiudere il visualizzatore con sfumatura d'uscita.
+            - **APK Firmato**: `photocloud-release-v1.1.4-signed.apk`
+            - **Checksum SHA-256**: `photocloud-release-v1.1.4-signed.apk.sha256`
           files: |
+            photocloud-release-v1.1.4-signed.apk
+            photocloud-release-v1.1.4-signed.apk.sha256
             photocloud-release-v1.1.3-signed.apk
             photocloud-release-v1.1.3-signed.apk.sha256
           draft: false

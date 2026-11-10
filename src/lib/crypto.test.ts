@@ -386,3 +386,57 @@ test('album names are escaped in HTML attributes', () => {
   assert.ok(!html.includes("data-albums='[\"x'"));
 });
 
+test('Drag-to-select, Lightbox gesture transitions and signed APK release v1.1.4 are configured', () => {
+  // 1. Drag-to-select in GalleryView and static selection script
+  const galleryViewTsx = fs.readFileSync(path.resolve(process.cwd(), 'src/components/GalleryView.tsx'), 'utf-8');
+  assert.ok(galleryViewTsx.includes('isDragSelecting'));
+  assert.ok(galleryViewTsx.includes('selection-marquee'));
+  assert.ok(galleryViewTsx.includes('handlePointerDown'));
+  assert.ok(galleryViewTsx.includes('handlePointerMove'));
+  assert.ok(galleryViewTsx.includes('didDragRef'));
+
+  const selectionJs = fs.readFileSync(path.resolve(process.cwd(), 'static/scripts/selection.js'), 'utf-8');
+  assert.ok(selectionJs.includes('selection-marquee'));
+  assert.ok(selectionJs.includes('isDragSelecting'));
+  assert.ok(selectionJs.includes('pointermove'));
+  assert.ok(selectionJs.includes('pointerdown'));
+
+  // 2. Lightbox Gestures and Coherent Animation
+  const lightboxModalTsx = fs.readFileSync(path.resolve(process.cwd(), 'src/components/LightboxModal.tsx'), 'utf-8');
+  assert.ok(lightboxModalTsx.includes('lightbox-animate-next-in'));
+  assert.ok(lightboxModalTsx.includes('lightbox-animate-prev-in'));
+  assert.ok(lightboxModalTsx.includes('lightbox-animate-dismiss'));
+  assert.ok(lightboxModalTsx.includes('lightbox-spring-reset'));
+  assert.ok(lightboxModalTsx.includes('handlePointerMove'));
+  assert.ok(lightboxModalTsx.includes('navigateWithAnimation'));
+
+  const lightboxJs = fs.readFileSync(path.resolve(process.cwd(), 'static/scripts/lightbox.js'), 'utf-8');
+  assert.ok(lightboxJs.includes('lightbox-animate-next-in'));
+  assert.ok(lightboxJs.includes('lightbox-animate-prev-in'));
+  assert.ok(lightboxJs.includes('lightbox-animate-dismiss'));
+  assert.ok(lightboxJs.includes('pointermove'));
+
+  // 3. Release v1.1.4 signed APK, metadata, and Android Studio Project
+  const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.1.4-signed.apk');
+  assert.ok(fs.existsSync(apkPath));
+  assert.ok(fs.statSync(apkPath).size > 1000000, 'APK file should be a complete binary (> 1MB)');
+
+  const buildJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'release/photocloud-release-build.json'), 'utf-8'));
+  assert.equal(buildJson.versionName, '1.1.4');
+  assert.equal(buildJson.versionCode, 15);
+  assert.equal(buildJson.apkFilename, 'photocloud-release-v1.1.4-signed.apk');
+
+  const metaJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'release/output-metadata.json'), 'utf-8'));
+  assert.equal(metaJson.elements[0].versionName, '1.1.4');
+  assert.equal(metaJson.elements[0].versionCode, 15);
+  assert.equal(metaJson.elements[0].outputFile, 'photocloud-release-v1.1.4-signed.apk');
+
+  const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
+  assert.ok(appBuildGradle.includes('versionName = "1.1.4"'));
+  assert.ok(appBuildGradle.includes('versionCode = 15'));
+
+  const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
+  assert.equal(pkgJson.version, '1.1.4');
+});
+
+

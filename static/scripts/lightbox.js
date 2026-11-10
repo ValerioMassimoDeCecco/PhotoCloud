@@ -80,6 +80,7 @@ window.openPhotoEditorFromLightbox = function(event) {
 };
 
 window.openLightbox = function(url, isVideo, index, allMedia) {
+    if (window.__photoCloudDidDragSelection) return;
     const { lightbox } = getElements();
     if (!lightbox) return;
 
@@ -109,7 +110,7 @@ window.openLightbox = function(url, isVideo, index, allMedia) {
     lightbox.style.display = 'flex';
     lightbox.classList.add('active');
 
-    showMediaAtIndex(currentIndex);
+    showMediaAtIndex(currentIndex, 0);
     document.addEventListener('keydown', handleKeydown);
 };
 
@@ -123,10 +124,12 @@ window.closeLightbox = function() {
         lightboxVideo.pause();
         if (lightboxVideoSource) lightboxVideoSource.setAttribute('src', '');
         lightboxVideo.style.display = 'none';
+        lightboxVideo.style.transform = '';
     }
     if (lightboxImg) {
         lightboxImg.removeAttribute('src');
         lightboxImg.style.display = 'none';
+        lightboxImg.style.transform = '';
     }
 
     document.removeEventListener('keydown', handleKeydown);
@@ -143,7 +146,7 @@ window.navigateMedia = function(direction, event) {
         currentIndex = mediaList.length - 1;
     }
 
-    showMediaAtIndex(currentIndex);
+    showMediaAtIndex(currentIndex, direction);
 };
 
 function preloadAdjacentMedia(index) {
@@ -161,7 +164,7 @@ function preloadAdjacentMedia(index) {
     });
 }
 
-function showMediaAtIndex(index) {
+function showMediaAtIndex(index, direction = 0) {
     const {
         lightboxImg,
         lightboxVideo,
@@ -196,6 +199,21 @@ function showMediaAtIndex(index) {
         lightboxVideo.pause();
     }
 
+    const activeEl = isVideo ? lightboxVideo : lightboxImg;
+    if (activeEl) {
+        activeEl.classList.remove('lightbox-animate-next-in', 'lightbox-animate-prev-in', 'lightbox-spring-reset');
+        activeEl.style.transform = '';
+        activeEl.style.opacity = '';
+
+        if (direction > 0) {
+            void activeEl.offsetWidth; // trigger reflow
+            activeEl.classList.add('lightbox-animate-next-in');
+        } else if (direction < 0) {
+            void activeEl.offsetWidth; // trigger reflow
+            activeEl.classList.add('lightbox-animate-prev-in');
+        }
+    }
+
     if (isVideo && lightboxVideo) {
         if (lightboxImg) lightboxImg.style.display = 'none';
         lightboxVideo.style.display = 'block';
@@ -228,27 +246,112 @@ function handleKeydown(e) {
     }
 }
 
+// --- INTERACTIVE TOUCH & POINTER GESTURES CON ANIMAZIONE COERENTE ---
 document.addEventListener('DOMContentLoaded', () => {
     const { lightbox } = getElements();
     if (!lightbox) return;
 
-    lightbox.addEventListener('touchstart', (e) => {
-        if (e.changedTouches && e.changedTouches.length > 0) {
-            touchStartX = e.changedTouches[0].screenX;
-        }
-    }, { passive: true });
+    let gestureStartX = 0;
+    let gestureStartY = 0;
+    let isTrackingGesture = false;
+    let hasMoved = false;
 
-    lightbox.addEventListener('touchend', (e) => {
-        if (e.changedTouches && e.changedTouches.length > 0) {
-            touchEndX = e.changedTouches[0].screenX;
-            const deltaX = touchEndX - touchStartX;
-            if (Math.abs(deltaX) > 48) {
-                if (deltaX < 0) {
-                    window.navigateMedia(1);
-                } else {
-                    window.navigateMedia(-1);
-                }
-            }
+    function getActiveMediaElement() {
+        const { lightboxImg, lightboxVideo } = getElements();
+        if (lightboxVideo && lightboxVideo.style.display !== 'none') return lightboxVideo;
+        if (lightboxImg && lightboxImg.style.display !== 'none') return lightboxImg;
+        return null;
+    }
+
+    lightbox.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.nav-btn, .close-btn, .lightbox-action-pill, .lightbox-counter')) return;
+        gestureStartX = e.clientX;
+        gestureStartY = e.clientY;
+        isTrackingGesture = true;
+        hasMoved = false;
+
+        const el = getActiveMediaElement();
+        if (el) {
+            el.classList.remove('lightbox-animate-next-in', 'lightbox-animate-prev-in', 'lightbox-spring-reset');
         }
-    }, { passive: true });
+    });
+
+    window.addEventListener('pointermove', (e) => {
+        if (!isTrackingGesture) return;
+        const deltaX = e.clientX - gestureStartX;
+        const deltaY = e.clientY - gestureStartY;
+
+        if (!hasMoved && Math.hypot(deltaX, deltaY) > 8) {
+            hasMoved = true;
+        }
+
+        if (!hasMoved) return;
+
+        const el = getActiveMediaElement();
+        if (!el) return;
+
+        // If dragging primarily downward, support swipe-to-dismiss
+        if (deltaY > 30 && deltaY > Math.abs(deltaX) * 1.2) {
+            const dragFactor = Math.min(deltaY, 300);
+            el.style.transform = `translate3d(0, ${dragFactor}px, 0) scale(${1 - dragFactor / 1200})`;
+            lightbox.style.backgroundColor = `rgba(8, 8, 10, ${Math.max(0.3, 0.96 - dragFactor / 400)})`;
+        } else {
+            // Horizontal swipe gesture with subtle scale response
+            const scale = 1 - Math.min(Math.abs(deltaX) / 1500, 0.08);
+            el.style.transform = `translate3d(${deltaX}px, 0, 0) scale(${scale})`;
+        }
+    });
+
+    const finishGesture = (e) => {
+        if (!isTrackingGesture) return;
+        isTrackingGesture = false;
+
+        const deltaX = e.clientX - gestureStartX;
+        const deltaY = e.clientY - gestureStartY;
+        const el = getActiveMediaElement();
+
+        lightbox.style.backgroundColor = '';
+
+        if (!hasMoved) {
+            if (el) el.style.transform = '';
+            return;
+        }
+
+        // 1. Swipe down to dismiss
+        if (deltaY > 80 && deltaY > Math.abs(deltaX) * 1.1) {
+            if (el) {
+                el.classList.add('lightbox-animate-dismiss');
+                setTimeout(() => {
+                    window.closeLightbox();
+                }, 220);
+            } else {
+                window.closeLightbox();
+            }
+            return;
+        }
+
+        // 2. Horizontal navigation threshold crossed
+        if (Math.abs(deltaX) > 48) {
+            if (deltaX < 0) {
+                window.navigateMedia(1);
+            } else {
+                window.navigateMedia(-1);
+            }
+            return;
+        }
+
+        // 3. Below threshold: snap back spring reset
+        if (el) {
+            el.classList.add('lightbox-spring-reset');
+            el.style.transform = 'translate3d(0, 0, 0) scale(1)';
+            setTimeout(() => {
+                el.classList.remove('lightbox-spring-reset');
+                el.style.transform = '';
+            }, 280);
+        }
+    };
+
+    window.addEventListener('pointerup', finishGesture);
+    window.addEventListener('pointercancel', finishGesture);
 });
+

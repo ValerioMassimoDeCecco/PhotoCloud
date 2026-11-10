@@ -265,6 +265,121 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             updateUI();
         });
+
+        // --- DRAG-TO-SELECT (SELEZIONE A TRASCINAMENTO SUI MEDIA) ---
+        let isPointerDown = false;
+        let isDragSelecting = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let initialSelectedSnapshot = new Set();
+        let dragMode = 'add';
+        let marqueeEl = null;
+
+        function getOrCreateMarquee() {
+            if (!marqueeEl) {
+                marqueeEl = document.createElement('div');
+                marqueeEl.className = 'selection-marquee';
+                marqueeEl.style.display = 'none';
+                document.body.appendChild(marqueeEl);
+            }
+            return marqueeEl;
+        }
+
+        galleryGrid.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0 && e.pointerType === 'mouse') return;
+            const target = e.target;
+            if (target.closest('button, input, select, a, .media-actions, .video-overlay')) return;
+
+            isPointerDown = true;
+            isDragSelecting = false;
+            dragStartX = e.clientX;
+            dragStartY = e.clientY;
+            initialSelectedSnapshot = new Set(selectedFiles);
+
+            const cardWrapper = target.closest('.media-card-wrapper');
+            const startFilename = cardWrapper?.dataset.filename || cardWrapper?.querySelector('.media-checkbox')?.dataset.filename;
+            if (startFilename && selectedFiles.has(startFilename)) {
+                dragMode = 'toggle';
+            } else {
+                dragMode = 'add';
+            }
+        });
+
+        window.addEventListener('pointermove', (e) => {
+            if (!isPointerDown) return;
+
+            const dist = Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY);
+            if (!isDragSelecting && dist > 7) {
+                isDragSelecting = true;
+                window.__photoCloudDidDragSelection = true;
+                galleryGrid.classList.add('is-drag-selecting');
+            }
+
+            if (!isDragSelecting) return;
+
+            const left = Math.min(dragStartX, e.clientX);
+            const top = Math.min(dragStartY, e.clientY);
+            const width = Math.abs(e.clientX - dragStartX);
+            const height = Math.abs(e.clientY - dragStartY);
+            const right = left + width;
+            const bottom = top + height;
+
+            const m = getOrCreateMarquee();
+            m.style.display = 'block';
+            m.style.left = `${left}px`;
+            m.style.top = `${top}px`;
+            m.style.width = `${width}px`;
+            m.style.height = `${height}px`;
+
+            if (e.clientY < 90) {
+                window.scrollBy({ top: -14, behavior: 'instant' });
+            } else if (e.clientY > window.innerHeight - 90) {
+                window.scrollBy({ top: 14, behavior: 'instant' });
+            }
+
+            const wrappers = Array.from(galleryGrid.querySelectorAll('.media-card-wrapper'));
+            const intersected = new Set();
+
+            wrappers.forEach(card => {
+                const fn = card.dataset.filename || card.querySelector('.media-checkbox')?.dataset.filename;
+                if (!fn) return;
+                const rect = card.getBoundingClientRect();
+                const hitsMarquee = (rect.left < right && rect.right > left && rect.top < bottom && rect.bottom > top);
+                const hitsPointer = (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom);
+
+                if (hitsMarquee || hitsPointer) {
+                    intersected.add(fn);
+                }
+            });
+
+            const next = new Set(initialSelectedSnapshot);
+            if (dragMode === 'add') {
+                intersected.forEach(fn => next.add(fn));
+            } else {
+                intersected.forEach(fn => next.delete(fn));
+            }
+            selectedFiles = next;
+            updateUI();
+        });
+
+        const stopDragSelection = () => {
+            if (!isPointerDown) return;
+            isPointerDown = false;
+            if (marqueeEl) {
+                marqueeEl.style.display = 'none';
+            }
+            galleryGrid.classList.remove('is-drag-selecting');
+
+            if (isDragSelecting) {
+                isDragSelecting = false;
+                setTimeout(() => {
+                    window.__photoCloudDidDragSelection = false;
+                }, 160);
+            }
+        };
+
+        window.addEventListener('pointerup', stopDragSelection);
+        window.addEventListener('pointercancel', stopDragSelection);
     }
 
     if (downloadSelectedBtn) {

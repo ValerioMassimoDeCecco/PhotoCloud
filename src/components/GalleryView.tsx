@@ -51,7 +51,21 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     files: [],
   });
 
+  const [isDragSelecting, setIsDragSelecting] = useState(false);
+  const [marqueeBox, setMarqueeBox] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const galleryGridRef = useRef<HTMLDivElement | null>(null);
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const didDragRef = useRef(false);
+  const initialSelectionRef = useRef<Set<string>>(new Set());
+  const dragModeRef = useRef<'add' | 'toggle'>('add');
+  const autoScrollTimerRef = useRef<number | null>(null);
 
   const groupedMedia = groupMediaItems(mediaFiles, groupBy);
   const allFilenames = mediaFiles.map((m) => m.filename);
@@ -75,6 +89,130 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
       setSelectedFiles(new Set());
     } else {
       setSelectedFiles(new Set(allFilenames));
+    }
+  };
+
+  // --- DRAG-TO-SELECT HANDLERS ---
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    // Only primary button (left mouse click or touch)
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+
+    // Ignore interactive elements
+    const target = e.target as HTMLElement;
+    if (
+      target.closest('button') ||
+      target.closest('input') ||
+      target.closest('select') ||
+      target.closest('a') ||
+      target.closest('.media-actions')
+    ) {
+      return;
+    }
+
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    initialSelectionRef.current = new Set(selectedFiles);
+    didDragRef.current = false;
+
+    // Check if pointer is starting on a media card
+    const cardWrapper = target.closest('.media-card-wrapper') as HTMLElement | null;
+    const startFilename = cardWrapper?.dataset.filename;
+
+    if (startFilename && selectedFiles.has(startFilename)) {
+      dragModeRef.current = 'toggle';
+    } else {
+      dragModeRef.current = 'add';
+    }
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current) return;
+
+    const startX = dragStartRef.current.x;
+    const startY = dragStartRef.current.y;
+    const currentX = e.clientX;
+    const currentY = e.clientY;
+
+    const dist = Math.hypot(currentX - startX, currentY - startY);
+    if (!didDragRef.current && dist > 7) {
+      didDragRef.current = true;
+      setIsDragSelecting(true);
+    }
+
+    if (!didDragRef.current) return;
+
+    const left = Math.min(startX, currentX);
+    const top = Math.min(startY, currentY);
+    const width = Math.abs(currentX - startX);
+    const height = Math.abs(currentY - startY);
+    const right = left + width;
+    const bottom = top + height;
+
+    setMarqueeBox({ left, top, width, height });
+
+    // Auto-scroll when dragging near viewport edges
+    if (currentY < 90) {
+      window.scrollBy({ top: -14, behavior: 'instant' });
+    } else if (currentY > window.innerHeight - 90) {
+      window.scrollBy({ top: 14, behavior: 'instant' });
+    }
+
+    // Intersect marquee box with all rendered media card wrappers
+    const container = galleryGridRef.current;
+    if (!container) return;
+
+    const cardElements = container.querySelectorAll<HTMLElement>('.media-card-wrapper');
+    const intersectedFilenames = new Set<string>();
+
+    cardElements.forEach((card) => {
+      const filename = card.dataset.filename;
+      if (!filename) return;
+
+      const rect = card.getBoundingClientRect();
+      const intersects =
+        rect.left < right &&
+        rect.right > left &&
+        rect.top < bottom &&
+        rect.bottom > top;
+
+      // Also brush-drag: if pointer is directly inside this card
+      const pointerInside =
+        currentX >= rect.left &&
+        currentX <= rect.right &&
+        currentY >= rect.top &&
+        currentY <= rect.bottom;
+
+      if (intersects || pointerInside) {
+        intersectedFilenames.add(filename);
+      }
+    });
+
+    setSelectedFiles(() => {
+      const updated = new Set(initialSelectionRef.current);
+      if (dragModeRef.current === 'add') {
+        intersectedFilenames.forEach((fn) => updated.add(fn));
+      } else {
+        intersectedFilenames.forEach((fn) => {
+          if (updated.has(fn)) updated.delete(fn);
+        });
+      }
+      return updated;
+    });
+  };
+
+  const handlePointerUpOrCancel = () => {
+    if (autoScrollTimerRef.current) {
+      clearInterval(autoScrollTimerRef.current);
+      autoScrollTimerRef.current = null;
+    }
+    dragStartRef.current = null;
+    setMarqueeBox(null);
+    setIsDragSelecting(false);
+
+    // Keep didDragRef = true for 160ms so subsequent click event on card is swallowed
+    if (didDragRef.current) {
+      setTimeout(() => {
+        didDragRef.current = false;
+      }, 160);
     }
   };
 
@@ -453,7 +591,26 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         )}
       </header>
 
-      <div className="gallery-grid" data-testid="gallery-grid">
+      <div
+        ref={galleryGridRef}
+        className={`gallery-grid ${isDragSelecting ? 'is-drag-selecting' : ''}`}
+        data-testid="gallery-grid"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUpOrCancel}
+        onPointerCancel={handlePointerUpOrCancel}
+      >
+        {marqueeBox && (
+          <div
+            className="selection-marquee"
+            style={{
+              left: `${marqueeBox.left}px`,
+              top: `${marqueeBox.top}px`,
+              width: `${marqueeBox.width}px`,
+              height: `${marqueeBox.height}px`,
+            }}
+          />
+        )}
         {mediaFiles.length === 0 ? (
           <div className="empty-state">
             <span className="material-icons">photo_library</span>
@@ -475,11 +632,16 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                       key={media.filename}
                       className={`media-card-wrapper ${isSelected ? 'selected' : ''}`}
                       data-timestamp={media.timestamp}
+                      data-filename={media.filename}
                       style={{ opacity: 1 }}
                     >
                       <div
                         className="media-card clickable-media"
-                        onClick={() => onOpenLightbox(globalIdx, allFilenames)}
+                        onClick={() => {
+                          if (!didDragRef.current) {
+                            onOpenLightbox(globalIdx, allFilenames);
+                          }
+                        }}
                       >
                         {isVid ? (
                           <>

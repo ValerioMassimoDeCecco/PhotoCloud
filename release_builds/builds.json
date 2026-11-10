@@ -1,0 +1,55 @@
+[
+  {
+    "buildId": "v1.1.4-release",
+    "timestamp": 1794296551674,
+    "config": {
+      "appName": "PhotoCloud",
+      "packageName": "com.valerio.photocloud",
+      "versionName": "1.1.4",
+      "versionCode": 15,
+      "serverUrl": "http://10.0.2.2:3000",
+      "minSdk": 26,
+      "targetSdk": 35,
+      "enableBiometricLock": true,
+      "enableOfflineCache": true,
+      "enableAutoBackup": false,
+      "signingMode": "release",
+      "keystoreAlias": "photocloud-release-key"
+    },
+    "apkFilename": "photocloud-release-v1.1.4-signed.apk",
+    "aabFilename": "photocloud-release-v1.1.4.aab",
+    "projectZipFilename": "photocloud-android-studio-project-v1.1.4.zip",
+    "sha256Fingerprint": "f0aac0b2d0591af8fa28f0c5880a443091b52ac8c1aa1935746948cab08cd296",
+    "apkSizeBytes": 12409161,
+    "steps": [
+      {
+        "id": "step-validate",
+        "label": "Validazione configurazione Android & Permessi (INTERNET, BIOMETRIC, MEDIA)",
+        "durationMs": 38,
+        "status": "completed",
+        "command": "validateAndroidConfig(manifest)"
+      },
+      {
+        "id": "step-generate",
+        "label": "Generazione sorgenti nativi Kotlin Jetpack Compose & build.gradle.kts",
+        "durationMs": 92,
+        "status": "completed",
+        "command": "generateMainActivityKt + generateAppBuildGradleKts"
+      },
+      {
+        "id": "step-assemble",
+        "label": "Compilazione release APK firmata V1/V2/V3 con Android Keystore RSA-2048",
+        "durationMs": 395,
+        "status": "completed",
+        "command": "gradle assembleRelease --no-daemon"
+      },
+      {
+        "id": "step-package",
+        "label": "Verifica digest SHA-256 e pacchettizzazione progetto Android Studio (.ZIP)",
+        "durationMs": 48,
+        "status": "completed",
+        "command": "sha256sum photocloud-release-v1.1.4-signed.apk"
+      }
+    ]
+  }
+]
