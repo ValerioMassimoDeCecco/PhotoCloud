@@ -38,6 +38,11 @@ class PhotoAiIndexingWorker(
     )
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        if (!AiModelDownloadManager.isModelInstalled(applicationContext)) {
+            setProgress(workDataOf(KEY_ANALYZED to 0, KEY_TOTAL to 0))
+            return@withContext Result.success(workDataOf(KEY_ANALYZED to 0, KEY_TOTAL to 0))
+        }
+
         val db = PhotoAiDatabase.getInstance(applicationContext)
         val dao = db.photoAiDao()
         val forceReindex = inputData.getBoolean(KEY_FORCE_REINDEX, false)
@@ -201,6 +206,9 @@ class PhotoAiIndexingWorker(
         }
 
         fun enqueueIndexing(context: Context, forceReindex: Boolean = false) {
+            if (!AiModelDownloadManager.isModelInstalled(context)) {
+                return
+            }
             val workRequest = OneTimeWorkRequestBuilder<PhotoAiIndexingWorker>()
                 .setInputData(workDataOf(KEY_FORCE_REINDEX to forceReindex))
                 .addTag(UNIQUE_WORK_NAME)

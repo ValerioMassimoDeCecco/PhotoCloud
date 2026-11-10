@@ -42,15 +42,6 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Ensure On-Device AI TFLite Model in Assets
-        run: |
-          mkdir -p android-app/app/src/main/assets
-          if [ ! -s android-app/app/src/main/assets/efficientnet_lite4.tflite ]; then
-            curl -fL "https://storage.googleapis.com/mediapipe-models/image_classifier/efficientnet_lite2/float32/latest/efficientnet_lite2.tflite" \
-              -o android-app/app/src/main/assets/efficientnet_lite4.tflite
-          fi
-          ls -lh android-app/app/src/main/assets/efficientnet_lite4.tflite
-
       - name: Verify Persistent Release Keystore (RSA-2048 from v1.0.4)
         working-directory: ./android-app/app
         env:
@@ -81,16 +72,17 @@ jobs:
             echo "Errore: nessun file APK trovato in app/build/outputs/apk/release"
             exit 1
           fi
-          cp "$APK_OUT" ../photocloud-release-v1.2.2-signed.apk
-          sha256sum ../photocloud-release-v1.2.2-signed.apk > ../photocloud-release-v1.2.2-signed.apk.sha256
+          cp "$APK_OUT" ../photocloud-release-v1.2.3-signed.apk
+          sha256sum ../photocloud-release-v1.2.3-signed.apk > ../photocloud-release-v1.2.3-signed.apk.sha256
 
       - name: Upload Signed APK as GitHub Actions Artifact
         uses: actions/upload-artifact@v4
         with:
           name: photocloud-release-signed-apk
           path: |
-            photocloud-release-v1.2.2-signed.apk
-            photocloud-release-v1.2.2-signed.apk.sha256
+            photocloud-release-v1.2.3-signed.apk
+            photocloud-release-v1.2.3-signed.apk.sha256
+            release/photocloud-release-build.json
           if-no-files-found: error
 
       - name: Determine Release Tag
@@ -101,7 +93,7 @@ jobs:
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "TAG=v1.2.2" >> $GITHUB_OUTPUT
+            echo "TAG=v1.2.3" >> $GITHUB_OUTPUT
           fi
 
       - name: Publish Signed APK to GitHub Releases
@@ -111,19 +103,19 @@ jobs:
           name: PhotoCloud Android Release ${{ steps.release_meta.outputs.TAG }}
           body: |
             ### PhotoCloud Android Release (${{ steps.release_meta.outputs.TAG }})
-            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.2.1** per aggiornamento diretto.
+            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.2.2** per aggiornamento diretto.
 
             - **Application ID**: `com.valerio.photocloud`
-            - **Versione**: `1.2.2` (`versionCode 19`)
-            - **Novità v1.2.2 — Selezione Multipla Drag-to-Select con Pressione Prolungata e Auto-Scroll**:
-              - **Gesto Fluido di Selezione Continua**: tenendo premuto su un elemento della griglia e trascinando il dito senza rilasciarlo, tutti i media attraversati su più righe e colonne vengono selezionati o deselezionati in sequenza con feedback aptico immediato.
-              - **Auto-Scroll Intelligente**: se il dito raggiunge la zona superiore o inferiore della schermata, la griglia scorre automaticamente consentendo di estendere la selezione all'intera galleria.
-              - **Rilascio e Modalità Selezione Persistente**: al rilascio del dito la modalità di selezione resta attiva con il pannello delle azioni (sposta in album, scarica, cestina) e il conteggio in tempo reale, permettendo di proseguire con singoli tocchi.
-            - **APK Firmato**: `photocloud-release-v1.2.2-signed.apk`
-            - **Checksum SHA-256**: `photocloud-release-v1.2.2-signed.apk.sha256`
+            - **Versione**: `1.2.3` (`versionCode 20`)
+            - **Novità v1.2.3 — Modello AI Locale Facoltativo (Download su Richiesta) & Aggiornamento Automatico In-App**:
+              - **Modello AI Locale (`EfficientNet-Lite4`) Facoltativo**: rimosso dagli asset preinstallati per alleggerire l'APK e scaricabile su richiesta dalle Impostazioni con barra di avanzamento, pausa/ripresa (`HTTP Range`) e pulsante per eliminare il modello e liberare spazio.
+              - **Sistema di Aggiornamento Automatico In-App (`AppAutoUpdater`)**: controllo silenzioso all'avvio su GitHub Releases (con fallback al server PhotoCloud), download automatico dell'APK all'interno dell'app con velocità e progresso in tempo reale, verifica crittografica **SHA-256** e verifica della **firma digitale X.509** prima dell'avvio dell'installer ufficiale di sistema Android.
+            - **APK Firmato**: `photocloud-release-v1.2.3-signed.apk`
+            - **Checksum SHA-256**: `photocloud-release-v1.2.3-signed.apk.sha256`
           files: |
-            photocloud-release-v1.2.2-signed.apk
-            photocloud-release-v1.2.2-signed.apk.sha256
+            photocloud-release-v1.2.3-signed.apk
+            photocloud-release-v1.2.3-signed.apk.sha256
+            release/photocloud-release-build.json
           draft: false
           prerelease: false
         env:

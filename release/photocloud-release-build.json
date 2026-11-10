@@ -1,17 +1,18 @@
 {
-  "apkFilename": "photocloud-release-v1.2.0-signed.apk",
-  "sha256": "7824967ec4a13a536d59dca0f1702a123a4f73c7aaf1b6beb1c21775a612e779",
-  "sizeBytes": 83198897,
+  "apkFilename": "photocloud-release-v1.2.3-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.2.3-signed.apk",
+  "sha256": "623d755ec648bf13bc4e638c231b0ae1f80fcdc904fe13ecb0449aa774e1b459",
+  "sizeBytes": 58905655,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.2.0",
-  "versionCode": 17,
+  "versionName": "1.2.3",
+  "versionCode": 20,
+  "changelog": "Modello AI locale EfficientNet-Lite4 scaricabile su richiesta con supporto HTTP Range/Resume e pulizia spazio + Sistema automatico di aggiornamento app in-app con verifica SHA-256 e firma digitale X.509.",
   "features": [
-    "Categorizzazione automatica delle foto 100% offline con AI locale (MediaPipe Tasks Vision + EfficientNet-Lite4)",
-    "Accelerazione hardware GPU con fallback resiliente su CPU, pre-processing anti-OOM 380x380 ARGB_8888 e rotazione EXIF",
-    "Database reattivo Room (PhotoAiDatabase) e indicizzazione in background non bloccante (WorkManager PhotoAiIndexingWorker)",
-    "Filtri rapidi per categoria AI nella Galleria, barra di progresso in tempo reale e badge tag AI nel Lightbox"
+    "Modello AI locale EfficientNet-Lite4 facoltativo: download on-demand con barra di progresso, pausa/ripresa HTTP Range e cancellazione per liberare spazio",
+    "Sistema di aggiornamento automatico in-app all'avvio da GitHub Releases con fallback al server PhotoCloud",
+    "Verifica integrità SHA-256 e compatibilità firma digitale X.509 dell'APK prima dell'avvio dell'installer ufficiale Android",
+    "Selezione multipla Drag-to-Select con pressione prolungata e auto-scroll nella Galleria Android"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.0",
-  "publishedAt": "2026-11-10T08:38:00Z"
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.3",
+  "publishedAt": "2026-11-10T10:57:10Z"
 }
-

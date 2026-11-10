@@ -38,8 +38,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.2.0';
-const APK_FILENAME = 'photocloud-release-v1.2.0-signed.apk';
+const DEFAULT_TAG = 'v1.2.3';
+const APK_FILENAME = 'photocloud-release-v1.2.3-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
@@ -58,7 +58,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     if (fs.existsSync(fallbackSource)) {
       source = fallbackSource;
     } else {
-      const prevSource = path.join(outputDir, 'photocloud-release-v1.1.5-signed.apk');
+      const prevSource = path.join(outputDir, 'photocloud-release-v1.2.2-signed.apk');
       if (fs.existsSync(prevSource)) source = prevSource;
     }
   }
@@ -70,9 +70,21 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
   const metadataPath = path.join(outputDir, 'photocloud-release-build.json');
   fs.writeFileSync(metadataPath, JSON.stringify({
     apkFilename: APK_FILENAME,
+    apkDownloadUrl: `/release/${APK_FILENAME}`,
     sha256,
-    versionName: '1.2.0',
-    versionCode: 17,
+    sizeBytes: apkBuffer.length,
+    applicationId: 'com.valerio.photocloud',
+    versionName: '1.2.3',
+    versionCode: 20,
+    changelog: 'Modello AI locale EfficientNet-Lite4 scaricabile su richiesta con supporto HTTP Range/Resume e pulizia spazio + Sistema automatico di aggiornamento app in-app con verifica SHA-256 e firma digitale X.509.',
+    features: [
+      'Modello AI locale EfficientNet-Lite4 facoltativo: download on-demand con barra di progresso, pausa/ripresa HTTP Range e cancellazione per liberare spazio',
+      'Sistema di aggiornamento automatico in-app all\'avvio da GitHub Releases con fallback al server PhotoCloud',
+      'Verifica integrità SHA-256 e compatibilità firma digitale X.509 dell\'APK prima dell\'avvio dell\'installer ufficiale Android',
+      'Selezione multipla Drag-to-Select con pressione prolungata e auto-scroll nella Galleria Android'
+    ],
+    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.3',
+    publishedAt: new Date().toISOString(),
   }, null, 2));
   return { apkPath, apkBuffer, sha256, metadataPath };
 }
@@ -141,6 +153,8 @@ export async function triggerGitHubActionsBuild(options?: {
     'android-app/app/src/main/res/values/strings.xml',
     'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt',
+    'android-app/app/src/main/java/com/valerio/photocloud/AiModelDownloadManager.kt',
+    'android-app/app/src/main/java/com/valerio/photocloud/AppAutoUpdater.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/LocalPhotoCategorizer.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/PhotoAiDatabase.kt',
     'android-app/app/src/main/java/com/valerio/photocloud/PhotoAiIndexingWorker.kt',

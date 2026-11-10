@@ -1013,6 +1013,92 @@ async function startServer() {
     res.send(zipBytes);
   });
 
+  // --- ANDROID AUTO-UPDATER MANIFEST & OPTIONAL AI MODEL ENDPOINTS (v1.2.3) ---
+  app.get('/api/android/update-manifest', (_req: Request, res: Response) => {
+    try {
+      const manifestPath = path.join(RELEASE_DIR, 'photocloud-release-build.json');
+      let manifestData: Record<string, unknown> = {};
+      if (fs.existsSync(manifestPath)) {
+        manifestData = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      }
+      const apkFilename = String(manifestData.apkFilename || 'photocloud-release-v1.2.3-signed.apk');
+      const apkPath = path.join(RELEASE_DIR, apkFilename);
+      let sizeBytes = Number(manifestData.sizeBytes || 0);
+      let sha256 = String(manifestData.sha256 || '');
+      if (fs.existsSync(apkPath)) {
+        const stat = fs.statSync(apkPath);
+        sizeBytes = stat.size;
+        if (!sha256) {
+          sha256 = crypto.createHash('sha256').update(fs.readFileSync(apkPath)).digest('hex');
+        }
+      }
+
+      const features = Array.isArray(manifestData.features) ? manifestData.features : [];
+      const changelog =
+        typeof manifestData.changelog === 'string' && manifestData.changelog.trim().length > 0
+          ? manifestData.changelog
+          : features.map((f) => `• ${String(f)}`).join('\n');
+
+      res.json({
+        applicationId: 'com.valerio.photocloud',
+        versionName: String(manifestData.versionName || '1.2.3'),
+        versionCode: Number(manifestData.versionCode || 20),
+        apkFilename,
+        apkDownloadUrl: `/release/${apkFilename}`,
+        sizeBytes,
+        sha256,
+        changelog,
+        features,
+        publishedAt: String(manifestData.publishedAt || new Date().toISOString()),
+      });
+    } catch (e: unknown) {
+      res.status(500).json({
+        error: e instanceof Error ? e.message : 'Impossibile leggere il manifest di aggiornamento',
+      });
+    }
+  });
+
+  app.get('/api/ai-model/efficientnet_lite4.tflite', (req: Request, res: Response) => {
+    const modelPath = path.join(RELEASE_DIR, 'efficientnet_lite4.tflite');
+    if (!fs.existsSync(modelPath)) {
+      res.status(404).json({ error: 'Modello AI non presente sul server' });
+      return;
+    }
+
+    try {
+      const stat = fs.statSync(modelPath);
+      const totalSize = stat.size;
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Disposition', 'attachment; filename="efficientnet_lite4.tflite"');
+
+      const rangeHeader = req.headers.range;
+      if (rangeHeader && rangeHeader.startsWith('bytes=')) {
+        const parts = rangeHeader.replace(/bytes=/, '').split('-');
+        const start = Math.max(0, parseInt(parts[0], 10) || 0);
+        const end = parts[1] ? Math.min(totalSize - 1, parseInt(parts[1], 10)) : totalSize - 1;
+        if (start <= end && start < totalSize) {
+          const chunkLength = end - start + 1;
+          res.status(206);
+          res.setHeader('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+          res.setHeader('Content-Length', String(chunkLength));
+          const stream = fs.createReadStream(modelPath, { start, end });
+          stream.pipe(res);
+          return;
+        }
+      }
+
+      res.status(200);
+      res.setHeader('Content-Length', String(totalSize));
+      const stream = fs.createReadStream(modelPath);
+      stream.pipe(res);
+    } catch (e: unknown) {
+      res.status(500).json({
+        error: e instanceof Error ? e.message : 'Errore durante lo streaming del modello AI',
+      });
+    }
+  });
+
   // --- ANDROID RELEASE BUILDER API (APK & Android Studio Project ZIP) ---
   const BUILDS_INDEX_PATH = path.join(RELEASE_BUILDS_DIR, 'builds.json');
 
@@ -1024,18 +1110,18 @@ async function startServer() {
     } catch {
       // ignore
     }
-    const defaultApkFile = 'photocloud-release-v1.2.0-signed.apk';
+    const defaultApkFile = 'photocloud-release-v1.2.3-signed.apk';
     const defaultApkPath = path.join(RELEASE_DIR, defaultApkFile);
-    const defaultSize = fs.existsSync(defaultApkPath) ? fs.statSync(defaultApkPath).size : 83198897;
+    const defaultSize = fs.existsSync(defaultApkPath) ? fs.statSync(defaultApkPath).size : 58905655;
 
     const initialBuild: AndroidReleaseArtifact = {
-      buildId: 'v1.2.0-release',
+      buildId: 'v1.2.3-release',
       timestamp: Date.now(),
       config: {
         appName: 'PhotoCloud',
         packageName: 'com.valerio.photocloud',
-        versionName: '1.2.0',
-        versionCode: 17,
+        versionName: '1.2.3',
+        versionCode: 20,
         serverUrl: 'http://10.0.2.2:3000',
         minSdk: 26,
         targetSdk: 35,
@@ -1046,21 +1132,21 @@ async function startServer() {
         keystoreAlias: 'photocloud-release-key',
       },
       apkFilename: defaultApkFile,
-      aabFilename: 'photocloud-release-v1.2.0.aab',
-      projectZipFilename: 'photocloud-android-studio-project-v1.2.0.zip',
-      sha256Fingerprint: '7824967ec4a13a536d59dca0f1702a123a4f73c7aaf1b6beb1c21775a612e779',
+      aabFilename: 'photocloud-release-v1.2.3.aab',
+      projectZipFilename: 'photocloud-android-studio-project-v1.2.3.zip',
+      sha256Fingerprint: '623d755ec648bf13bc4e638c231b0ae1f80fcdc904fe13ecb0449aa774e1b459',
       apkSizeBytes: defaultSize,
       steps: [
         {
           id: 'step-validate',
-          label: 'Validazione configurazione Android & Permessi (INTERNET, BIOMETRIC, MEDIA)',
+          label: 'Validazione configurazione Android & Permessi (INTERNET, BIOMETRIC, REQUEST_INSTALL_PACKAGES)',
           durationMs: 38,
           status: 'completed',
           command: 'validateAndroidConfig(manifest)',
         },
         {
           id: 'step-generate',
-          label: 'Generazione sorgenti nativi Kotlin Jetpack Compose, Room KSP & MediaPipe AI',
+          label: 'Generazione sorgenti nativi Kotlin Jetpack Compose, Room KSP, AiModelDownloadManager & AppAutoUpdater',
           durationMs: 92,
           status: 'completed',
           command: 'kspReleaseKotlin + compileReleaseKotlin',
@@ -1077,7 +1163,7 @@ async function startServer() {
           label: 'Verifica digest SHA-256 e pacchettizzazione progetto Android Studio (.ZIP)',
           durationMs: 48,
           status: 'completed',
-          command: 'sha256sum photocloud-release-v1.2.0-signed.apk',
+          command: 'sha256sum photocloud-release-v1.2.3-signed.apk',
         },
       ],
     };
@@ -1109,7 +1195,7 @@ async function startServer() {
       const projectZipFilename = `photocloud-android-studio-project-v${config.versionName}.zip`;
 
       // 1. Prepare signed APK artifact
-      const sourceApk = path.join(RELEASE_DIR, 'photocloud-release-v1.2.0-signed.apk');
+      const sourceApk = path.join(RELEASE_DIR, 'photocloud-release-v1.2.3-signed.apk');
       const targetApkRelease = path.join(RELEASE_DIR, apkFilename);
       const targetApkBuild = path.join(RELEASE_BUILDS_DIR, `${buildId}_${apkFilename}`);
 
@@ -1117,7 +1203,7 @@ async function startServer() {
       if (fs.existsSync(sourceApk)) {
         apkBuffer = fs.readFileSync(sourceApk);
       } else {
-        const alt = path.join(RELEASE_DIR, 'photocloud-release-v1.1.5-signed.apk');
+        const alt = path.join(RELEASE_DIR, 'photocloud-release-v1.2.2-signed.apk');
         apkBuffer = fs.readFileSync(alt);
       }
 
@@ -1205,7 +1291,7 @@ async function startServer() {
     if (type === 'apk') {
       const specificPath = path.join(RELEASE_BUILDS_DIR, `${buildId}_${found.apkFilename}`);
       const directPath = path.join(RELEASE_DIR, found.apkFilename);
-      const fallbackPath = path.join(RELEASE_DIR, 'photocloud-release-v1.2.0-signed.apk');
+      const fallbackPath = path.join(RELEASE_DIR, 'photocloud-release-v1.2.3-signed.apk');
 
       const targetPath = fs.existsSync(specificPath)
         ? specificPath

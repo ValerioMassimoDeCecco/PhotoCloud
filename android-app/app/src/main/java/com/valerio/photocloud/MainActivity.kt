@@ -757,10 +757,13 @@ fun PhotoCloudNativeApp(
         }
     }
 
+    val appUpdateState by AppAutoUpdater.state.collectAsState()
+
     LaunchedEffect(serverUrl) {
         if (apiClient.hasActiveSessionCookie()) {
             refreshVaultSilently()
         }
+        AppAutoUpdater.checkForUpdatesOnLaunch(context, serverUrl)
     }
 
     if (isAuthenticated && isBiometricLocked) {
@@ -889,6 +892,16 @@ fun PhotoCloudNativeApp(
                     Text("OK")
                 }
             }
+        )
+    }
+
+    if (appUpdateState.showModal && appUpdateState.manifest != null) {
+        AppUpdateModal(
+            updateState = appUpdateState,
+            onCancel = { AppAutoUpdater.cancelUpdateDownload() },
+            onRetry = { AppAutoUpdater.retryDownload(context) },
+            onInstall = { AppAutoUpdater.promptInstallApk(context) },
+            onDismiss = { AppAutoUpdater.dismissModal() }
         )
     }
 }
@@ -1484,6 +1497,8 @@ fun NativeVaultScreen(
         map
     }
 
+    val aiModelState by AiModelDownloadManager.state.collectAsState()
+
     val galleryCloudPhotoKey = remember(galleryItems) {
         galleryItems.asSequence()
             .filter { it.isMedia && !it.isVideo }
@@ -1492,8 +1507,14 @@ fun NativeVaultScreen(
             .joinToString("|")
     }
 
-    LaunchedEffect(galleryCloudPhotoKey) {
-        PhotoAiIndexingWorker.enqueueIndexing(appCtx, forceReindex = false)
+    LaunchedEffect(Unit) {
+        AiModelDownloadManager.refreshState(appCtx)
+    }
+
+    LaunchedEffect(galleryCloudPhotoKey, aiModelState.status) {
+        if (aiModelState.status == AiModelStatus.INSTALLED) {
+            PhotoAiIndexingWorker.enqueueIndexing(appCtx, forceReindex = false)
+        }
     }
 
     // Top-Right Discreet Transfer Operations State (Uploads & Downloads with live speed & size)
@@ -2007,38 +2028,63 @@ fun NativeVaultScreen(
                         },
                         label = { Text("Tutte (${mediaOnlyItems.size})") }
                     )
-                    aiCategoryChips.forEach { chip ->
-                        FilterChip(
-                            selected = selectedAiCategoryFilter == chip.category,
+                    if (aiModelState.status == AiModelStatus.INSTALLED) {
+                        aiCategoryChips.forEach { chip ->
+                            FilterChip(
+                                selected = selectedAiCategoryFilter == chip.category,
+                                onClick = {
+                                    selectedAiCategoryFilter =
+                                        if (selectedAiCategoryFilter == chip.category) null else chip.category
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                },
+                                label = { Text("${chip.category} (${chip.count})") }
+                            )
+                        }
+                        AssistChip(
                             onClick = {
-                                selectedAiCategoryFilter =
-                                    if (selectedAiCategoryFilter == chip.category) null else chip.category
+                                triggerHaptic()
+                                PhotoAiIndexingWorker.enqueueIndexing(appCtx, forceReindex = true)
+                                onShowInfo("Indicizzazione AI delle foto cloud avviata")
                             },
                             leadingIcon = {
                                 Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(15.dp)
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "Rianalizza foto cloud con AI locale",
+                                    modifier = Modifier.size(16.dp)
                                 )
                             },
-                            label = { Text("${chip.category} (${chip.count})") }
+                            label = { Text("Rianalizza AI") }
+                        )
+                    } else {
+                        AssistChip(
+                            onClick = {
+                                triggerHaptic()
+                                currentTab = VaultTab.SETTINGS
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.CloudDownload,
+                                    contentDescription = "Gestisci modello AI facoltativo nelle Impostazioni",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    when (aiModelState.status) {
+                                        AiModelStatus.DOWNLOADING -> "Download AI (${aiModelState.progressPercent}%)"
+                                        AiModelStatus.PAUSED -> "AI in pausa (${aiModelState.progressPercent}%)"
+                                        else -> "Modello AI (Facoltativo)"
+                                    }
+                                )
+                            }
                         )
                     }
-                    AssistChip(
-                        onClick = {
-                            triggerHaptic()
-                            PhotoAiIndexingWorker.enqueueIndexing(appCtx, forceReindex = true)
-                            onShowInfo("Indicizzazione AI delle foto cloud avviata")
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Rianalizza foto cloud con AI locale",
-                                modifier = Modifier.size(16.dp)
-                            )
-                        },
-                        label = { Text("Rianalizza AI") }
-                    )
                 }
             }
 
@@ -4444,7 +4490,446 @@ fun NativeSettingsScreen(
                 Text("Disconnetti Sessione (Logout)", fontWeight = FontWeight.SemiBold)
             }
         }
+
+        // 7. MODELLO AI LOCALE ON-DEVICE (DOWNLOAD FACOLTATIVO)
+        val aiModelState by AiModelDownloadManager.state.collectAsState()
+        LaunchedEffect(Unit) {
+            AiModelDownloadManager.refreshState(activity)
+        }
+
+        SettingsSectionCard(
+            title = "Modello AI Locale (Facoltativo)",
+            icon = Icons.Default.AutoAwesome
+        ) {
+            val statusText = when (aiModelState.status) {
+                AiModelStatus.INSTALLED -> "Installato e attivo (${PhotoCloudApiClient.formatBytesHuman(aiModelState.installedSizeBytes)})"
+                AiModelStatus.DOWNLOADING -> "Download in corso (${aiModelState.progressPercent}%)"
+                AiModelStatus.PAUSED -> "Download in pausa (${aiModelState.progressPercent}%)"
+                AiModelStatus.ERROR -> "Download interrotto"
+                AiModelStatus.NOT_INSTALLED -> "Non installato (App funzionante senza AI)"
+            }
+            val freeSpaceText = PhotoCloudApiClient.formatBytesHuman(aiModelState.availableStorageBytes)
+            val modelSizeText = PhotoCloudApiClient.formatBytesHuman(aiModelState.totalBytes)
+            val requiredSpaceText = PhotoCloudApiClient.formatBytesHuman(aiModelState.requiredStorageBytes)
+
+            Text(
+                text = "Categorizzazione automatica delle foto 100% offline sul dispositivo (EfficientNet-Lite). Il download è facoltativo e puoi rimuovere il modello in qualsiasi momento per liberare spazio.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Stato: $statusText",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (aiModelState.status == AiModelStatus.INSTALLED) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        }
+                    )
+                    Text(
+                        text = "Dimensione download: $modelSizeText • Spazio richiesto: $requiredSpaceText",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Spazio disponibile sul dispositivo: $freeSpaceText",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            if (aiModelState.status == AiModelStatus.DOWNLOADING || aiModelState.status == AiModelStatus.PAUSED) {
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${PhotoCloudApiClient.formatBytesHuman(aiModelState.downloadedBytes)} / ${PhotoCloudApiClient.formatBytesHuman(aiModelState.totalBytes)} (${aiModelState.progressPercent}%)",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (aiModelState.speedBytesPerSec > 0L) {
+                        Text(
+                            text = PhotoCloudApiClient.formatSpeedHuman(aiModelState.speedBytesPerSec),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                LinearProgressIndicator(
+                    progress = { aiModelState.progressFraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(CircleShape)
+                )
+            }
+
+            if (!aiModelState.errorMessage.isNullOrBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = aiModelState.errorMessage ?: "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            when (aiModelState.status) {
+                AiModelStatus.NOT_INSTALLED -> {
+                    Button(
+                        onClick = {
+                            AiModelDownloadManager.startOrResumeDownload(activity, serverUrl)
+                        },
+                        shape = CircleShape,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Scarica Modello AI ($modelSizeText)", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+
+                AiModelStatus.DOWNLOADING -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = { AiModelDownloadManager.pauseDownload(activity) },
+                            shape = CircleShape,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Pausa")
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                AiModelDownloadManager.cancelDownload(activity)
+                                onShowInfo("Download modello AI annullato")
+                            },
+                            shape = CircleShape,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Annulla")
+                        }
+                    }
+                }
+
+                AiModelStatus.PAUSED, AiModelStatus.ERROR -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                AiModelDownloadManager.startOrResumeDownload(activity, serverUrl)
+                            },
+                            shape = CircleShape,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (aiModelState.downloadedBytes > 0L) "Riprendi" else "Riprova")
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                AiModelDownloadManager.cancelDownload(activity)
+                                onShowInfo("File parziale del modello AI rimosso")
+                            },
+                            shape = CircleShape,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Annulla")
+                        }
+                    }
+                }
+
+                AiModelStatus.INSTALLED -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                PhotoAiIndexingWorker.enqueueIndexing(activity, forceReindex = true)
+                                onShowInfo("Indicizzazione AI delle foto cloud avviata")
+                            },
+                            shape = CircleShape,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Rianalizza Foto")
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                AiModelDownloadManager.deleteInstalledModel(activity) {
+                                    activity.runOnUiThread {
+                                        onShowInfo("Modello AI eliminato e spazio liberato")
+                                    }
+                                }
+                            },
+                            shape = CircleShape,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Elimina Modello")
+                        }
+                    }
+                }
+            }
+        }
+
+        // 8. SISTEMA DI AGGIORNAMENTO AUTOMATICO APP
+        val updateState by AppAutoUpdater.state.collectAsState()
+        SettingsSectionCard(
+            title = "Versione & Aggiornamenti App",
+            icon = Icons.Default.CloudDone
+        ) {
+            Text(
+                text = "Versione installata: v${BuildConfig.VERSION_NAME} (versionCode ${BuildConfig.VERSION_CODE})",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Controllo automatico all'apertura su GitHub Releases e server PhotoCloud con verifica integrità SHA-256 e firma digitale X.509 prima dell'installazione.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(12.dp))
+            FilledTonalButton(
+                onClick = {
+                    AppAutoUpdater.checkForUpdates(
+                        context = activity,
+                        serverUrl = serverUrl,
+                        silentIfUpToDate = false,
+                        onManualResult = { msg ->
+                            activity.runOnUiThread {
+                                onShowInfo(msg)
+                            }
+                        }
+                    )
+                },
+                enabled = updateState.status != AppUpdateStatus.CHECKING && updateState.status != AppUpdateStatus.DOWNLOADING,
+                shape = CircleShape,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (updateState.status == AppUpdateStatus.CHECKING) {
+                        "Verifica aggiornamenti in corso..."
+                    } else {
+                        "Controlla Aggiornamenti Ora"
+                    },
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
     }
+}
+
+@Composable
+fun AppUpdateModal(
+    updateState: AppUpdateState,
+    onCancel: () -> Unit,
+    onRetry: () -> Unit,
+    onInstall: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val manifest = updateState.manifest ?: return
+    AlertDialog(
+        onDismissRequest = {
+            if (updateState.status != AppUpdateStatus.DOWNLOADING && updateState.status != AppUpdateStatus.VERIFYING) {
+                onDismiss()
+            }
+        },
+        shape = RoundedCornerShape(28.dp),
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CloudDownload,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column {
+                    Text(
+                        text = "Aggiornamento v${manifest.versionName}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (manifest.fileSizeBytes > 0L) {
+                        Text(
+                            text = "Dimensione: ${PhotoCloudApiClient.formatBytesHuman(manifest.fileSizeBytes)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                when (updateState.status) {
+                    AppUpdateStatus.DOWNLOADING, AppUpdateStatus.VERIFYING -> {
+                        Text(
+                            text = if (updateState.status == AppUpdateStatus.VERIFYING) {
+                                "Verifica integrità SHA-256 e firma digitale APK in corso..."
+                            } else {
+                                "Download automatico dell'aggiornamento in corso..."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (updateState.totalBytes > 0L) {
+                                    "${PhotoCloudApiClient.formatBytesHuman(updateState.downloadedBytes)} / ${PhotoCloudApiClient.formatBytesHuman(updateState.totalBytes)} (${updateState.progressPercent}%)"
+                                } else {
+                                    PhotoCloudApiClient.formatBytesHuman(updateState.downloadedBytes)
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            if (updateState.speedBytesPerSec > 0L) {
+                                Text(
+                                    text = PhotoCloudApiClient.formatSpeedHuman(updateState.speedBytesPerSec),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        if (updateState.totalBytes > 0L) {
+                            LinearProgressIndicator(
+                                progress = { updateState.progressFraction },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(7.dp)
+                                    .clip(CircleShape)
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(7.dp)
+                                    .clip(CircleShape)
+                            )
+                        }
+                    }
+
+                    AppUpdateStatus.READY_TO_INSTALL, AppUpdateStatus.PERMISSION_REQUIRED -> {
+                        Text(
+                            text = "Integrità SHA-256 e firma digitale verificate con successo. Tocca Installa per aprire il programma di installazione ufficiale di Android.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        if (!updateState.errorMessage.isNullOrBlank()) {
+                            Text(
+                                text = updateState.errorMessage,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    AppUpdateStatus.ERROR -> {
+                        Text(
+                            text = updateState.errorMessage ?: "Errore durante l'aggiornamento.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    else -> Unit
+                }
+
+                if (manifest.changelog.isNotEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "Novità della versione v${manifest.versionName}:",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            manifest.changelog.take(4).forEach { line ->
+                                Text(
+                                    text = "• $line",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            when (updateState.status) {
+                AppUpdateStatus.READY_TO_INSTALL, AppUpdateStatus.PERMISSION_REQUIRED -> {
+                    Button(onClick = onInstall) {
+                        Text("Installa Aggiornamento")
+                    }
+                }
+                AppUpdateStatus.ERROR -> {
+                    Button(onClick = onRetry) {
+                        Text("Riprova Download")
+                    }
+                }
+                else -> {}
+            }
+        },
+        dismissButton = {
+            if (updateState.status == AppUpdateStatus.DOWNLOADING) {
+                TextButton(onClick = onCancel) {
+                    Text("Annulla Download")
+                }
+            } else {
+                TextButton(onClick = onDismiss) {
+                    Text("Chiudi")
+                }
+            }
+        }
+    )
 }
 
 @Composable
@@ -4793,7 +5278,7 @@ fun NativeLightboxModal(
         val existing = aiCategoriesByFilename[currentItem.filename].orEmpty()
         if (existing.isNotEmpty()) {
             onDemandAiTags = existing
-        } else if (!currentItem.isVideo && !fromTrash) {
+        } else if (!currentItem.isVideo && !fromTrash && AiModelDownloadManager.isModelInstalled(localCtx)) {
             val bmp = apiClient.getCachedBitmap(currentItem.filename, fromTrash)
                 ?: apiClient.getRamThumbnailBitmap(currentItem.filename, fromTrash)
                 ?: apiClient.loadThumbnailBitmap(currentItem.filename, fromTrash)

@@ -11,7 +11,11 @@ const root = process.cwd();
 
 test('server protects vaults, preserves collisions, and handles real media flows', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'photocloud-test-'));
-  for (const name of ['templates', 'static', 'public']) fs.symlinkSync(path.join(root, name), path.join(dir, name), 'dir');
+  for (const name of ['templates', 'static', 'public', 'release']) {
+    if (fs.existsSync(path.join(root, name))) {
+      fs.symlinkSync(path.join(root, name), path.join(dir, name), 'dir');
+    }
+  }
   const socket = net.createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening');
   const port = (socket.address() as net.AddressInfo).port; await new Promise<void>(resolve => socket.close(() => resolve()));
   const child = spawn(process.execPath, ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')], {
@@ -67,6 +71,23 @@ test('server protects vaults, preserves collisions, and handles real media flows
     assert.equal((await get('/manifest.webmanifest')).status, 200);
     assert.equal((await get('/service-worker.js')).status, 200);
     assert.equal((await get('/')).status, 200);
+
+    // Verify v1.2.3 Android update manifest and optional AI model Range streaming endpoints
+    const updateManifestResp = await get('/api/android/update-manifest');
+    assert.equal(updateManifestResp.status, 200);
+    const updateManifest = await updateManifestResp.json() as any;
+    assert.equal(updateManifest.versionName, '1.2.3');
+    assert.equal(updateManifest.versionCode, 20);
+    assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.2.3-signed.apk');
+    assert.equal(updateManifest.sha256.length, 64);
+    assert.ok(updateManifest.sizeBytes > 20 * 1024 * 1024);
+
+    const modelRangeResp = await fetch(base + '/api/ai-model/efficientnet_lite4.tflite', {
+      headers: { Range: 'bytes=0-1023' },
+    });
+    assert.equal(modelRangeResp.status, 206);
+    const modelChunk = await modelRangeResp.arrayBuffer();
+    assert.equal(modelChunk.byteLength, 1024);
   } finally {
     child.kill(); await once(child, 'exit').catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });

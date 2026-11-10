@@ -56,17 +56,61 @@ class LocalPhotoCategorizer(context: Context) : Closeable {
     @Volatile
     private var isClosed: Boolean = false
 
+    @Volatile
+    var isModelReady: Boolean = false
+        private set
+
     init {
         initializeClassifierWithFallback()
     }
 
+    private fun loadModelByteBuffer(): java.nio.ByteBuffer? {
+        val installedFile = AiModelDownloadManager.getInstalledModelFile(appContext)
+        if (!installedFile.exists() || installedFile.length() < AiModelDownloadManager.MIN_VALID_MODEL_BYTES) {
+            return null
+        }
+        return try {
+            java.io.RandomAccessFile(installedFile, "r").use { raf ->
+                raf.channel.map(java.nio.channels.FileChannel.MapMode.READ_ONLY, 0L, raf.length())
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Unable to memory-map installed AI model: ${t.message}")
+            null
+        }
+    }
+
+    private fun buildBaseOptions(delegate: Delegate): BaseOptions? {
+        val modelBuffer = loadModelByteBuffer()
+        if (modelBuffer != null) {
+            return BaseOptions.builder()
+                .setDelegate(delegate)
+                .setModelAssetBuffer(modelBuffer)
+                .build()
+        }
+        // Fallback only if bundled asset is present
+        val hasAsset = try {
+            appContext.assets.openFd(MODEL_ASSET_PATH).use { it.length > 0 }
+        } catch (_: Throwable) {
+            false
+        }
+        if (!hasAsset) return null
+        return BaseOptions.builder()
+            .setDelegate(delegate)
+            .setModelAssetPath(MODEL_ASSET_PATH)
+            .build()
+    }
+
     private fun initializeClassifierWithFallback() {
+        if (!AiModelDownloadManager.isModelInstalled(appContext)) {
+            primaryClassifier = null
+            isUsingGpuDelegate = false
+            isModelReady = false
+            return
+        }
+
         // 1. Try GPU Delegate first inside try-catch (Throwable) to catch any JNI / OpenGL / OpenCL / Vulkan errors
         try {
-            val gpuBaseOptions = BaseOptions.builder()
-                .setDelegate(Delegate.GPU)
-                .setModelAssetPath(MODEL_ASSET_PATH)
-                .build()
+            val gpuBaseOptions = buildBaseOptions(Delegate.GPU) ?: return
             val gpuOptions = ImageClassifier.ImageClassifierOptions.builder()
                 .setBaseOptions(gpuBaseOptions)
                 .setScoreThreshold(SCORE_THRESHOLD)
@@ -74,7 +118,8 @@ class LocalPhotoCategorizer(context: Context) : Closeable {
                 .build()
             primaryClassifier = ImageClassifier.createFromOptions(appContext, gpuOptions)
             isUsingGpuDelegate = true
-            Log.i(TAG, "ImageClassifier initialized successfully with Delegate.GPU ($MODEL_ASSET_PATH)")
+            isModelReady = true
+            Log.i(TAG, "ImageClassifier initialized successfully with Delegate.GPU")
             return
         } catch (gpuError: Throwable) {
             Log.w(
@@ -86,10 +131,7 @@ class LocalPhotoCategorizer(context: Context) : Closeable {
 
         // 2. Resilient fallback to Delegate.CPU
         try {
-            val cpuBaseOptions = BaseOptions.builder()
-                .setDelegate(Delegate.CPU)
-                .setModelAssetPath(MODEL_ASSET_PATH)
-                .build()
+            val cpuBaseOptions = buildBaseOptions(Delegate.CPU) ?: return
             val cpuOptions = ImageClassifier.ImageClassifierOptions.builder()
                 .setBaseOptions(cpuBaseOptions)
                 .setScoreThreshold(SCORE_THRESHOLD)
@@ -97,21 +139,20 @@ class LocalPhotoCategorizer(context: Context) : Closeable {
                 .build()
             primaryClassifier = ImageClassifier.createFromOptions(appContext, cpuOptions)
             isUsingGpuDelegate = false
-            Log.i(TAG, "ImageClassifier initialized successfully with Delegate.CPU fallback ($MODEL_ASSET_PATH)")
+            isModelReady = true
+            Log.i(TAG, "ImageClassifier initialized successfully with Delegate.CPU fallback")
         } catch (cpuError: Throwable) {
             Log.e(TAG, "CPU delegate initialization failed: ${cpuError.message}", cpuError)
             primaryClassifier = null
             isUsingGpuDelegate = false
+            isModelReady = false
         }
     }
 
     private fun getOrCreateSecondaryClassifier(): ImageClassifier? {
         fallbackLowThresholdClassifier?.let { return it }
         return try {
-            val cpuBase = BaseOptions.builder()
-                .setDelegate(Delegate.CPU)
-                .setModelAssetPath(MODEL_ASSET_PATH)
-                .build()
+            val cpuBase = buildBaseOptions(Delegate.CPU) ?: return null
             val opts = ImageClassifier.ImageClassifierOptions.builder()
                 .setBaseOptions(cpuBase)
                 .setScoreThreshold(0.18f)
@@ -257,10 +298,11 @@ class LocalPhotoCategorizer(context: Context) : Closeable {
         } catch (_: Throwable) {
         }
         try {
-            val cpuBase = BaseOptions.builder()
-                .setDelegate(Delegate.CPU)
-                .setModelAssetPath(MODEL_ASSET_PATH)
-                .build()
+            val cpuBase = buildBaseOptions(Delegate.CPU) ?: run {
+                primaryClassifier = null
+                isModelReady = false
+                return
+            }
             val cpuOpts = ImageClassifier.ImageClassifierOptions.builder()
                 .setBaseOptions(cpuBase)
                 .setScoreThreshold(SCORE_THRESHOLD)
@@ -268,9 +310,11 @@ class LocalPhotoCategorizer(context: Context) : Closeable {
                 .build()
             primaryClassifier = ImageClassifier.createFromOptions(appContext, cpuOpts)
             isUsingGpuDelegate = false
+            isModelReady = true
         } catch (t: Throwable) {
             Log.e(TAG, "Failed switching to CPU classifier: ${t.message}", t)
             primaryClassifier = null
+            isModelReady = false
         }
     }
 
