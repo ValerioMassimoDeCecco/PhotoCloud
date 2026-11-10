@@ -1,12 +1,21 @@
 @echo off
-chcp 65001 >nul
-setlocal enabledelayedexpansion
+setlocal DisableDelayedExpansion
+chcp 65001 >nul 2>&1
 title PhotoCloud - Gestione App (Windows)
 
-:: Posizionati nella cartella dello script
+:: Posizionati sempre nella cartella in cui si trova questo script
 cd /d "%~dp0"
 
-set REPO_URL=https://github.com/ValerioMassimoDeCecco/PhotoCloud.git
+set "REPO_URL=https://github.com/ValerioMassimoDeCecco/PhotoCloud.git"
+set "DEFAULT_PORT=3000"
+
+:: Aggiungi i percorsi standard di Git e Node.js al PATH della sessione corrente
+if exist "%ProgramFiles%\nodejs" set "PATH=%PATH%;%ProgramFiles%\nodejs"
+if exist "%ProgramFiles(x86)%\nodejs" set "PATH=%PATH%;%ProgramFiles(x86)%\nodejs"
+if exist "%AppData%\npm" set "PATH=%PATH%;%AppData%\npm"
+if exist "%LocalAppData%\Programs\Git\cmd" set "PATH=%PATH%;%LocalAppData%\Programs\Git\cmd"
+if exist "%ProgramFiles%\Git\cmd" set "PATH=%PATH%;%ProgramFiles%\Git\cmd"
+if exist "%ProgramFiles(x86)%\Git\cmd" set "PATH=%PATH%;%ProgramFiles(x86)%\Git\cmd"
 
 :MENU
 cls
@@ -14,221 +23,402 @@ echo ======================================================================
 echo           PhotoCloud -- Gestione App (Windows)
 echo ======================================================================
 echo.
-echo Seleziona un'operazione:
+echo   Cartella corrente: %CD%
 echo.
-echo   [1] Avvia PhotoCloud (Modalita Sviluppo -- npm run dev)
-echo   [2] Avvia PhotoCloud (Modalita Produzione -- npm start)
-echo   [3] Aggiorna la Web App (git pull + npm install + build)
-echo   [4] Clona Repository Git (in un'altra cartella)
-echo   [5] Verifica e Installa Dipendenze Mancanti (Git, Node.js)
+echo   Seleziona un'operazione:
+echo.
+echo   [1] Avvia PhotoCloud - Modalita Sviluppo (npm run dev)
+echo   [2] Avvia PhotoCloud - Modalita Produzione (npm start)
+echo   [3] Aggiorna la Web App (git pull + npm install + npm run build)
+echo   [4] Clona Repository Git (in una nuova sottocartella)
+echo   [5] Verifica e Installa Dipendenze Mancanti (Git, Node.js, npm)
 echo   [6] Compila APK Release Android (v1.2.4)
 echo   [7] Esci
 echo.
 echo ======================================================================
-set /p CHOICE="Scelta [1-7]: "
+set "CHOICE="
+set /p "CHOICE=Inserisci il numero dell'operazione [1-7]: "
 
 if "%CHOICE%"=="1" goto START_DEV
 if "%CHOICE%"=="2" goto START_PROD
 if "%CHOICE%"=="3" goto UPDATE_APP
 if "%CHOICE%"=="4" goto CLONE_REPO
-if "%CHOICE%"=="5" goto CHECK_DEPS_MENU
+if "%CHOICE%"=="5" goto CHECK_DEPS_STANDALONE
 if "%CHOICE%"=="6" goto BUILD_APK
 if "%CHOICE%"=="7" goto EXIT_APP
 
 echo.
-echo [!] Scelta non valida. Riprova.
+echo [ERRORE] Scelta non valida: "%CHOICE%". Inserisci un numero da 1 a 7.
 timeout /t 2 >nul
 goto MENU
 
-:CHECK_DEPS
+
+:: ======================================================================
+:: SUBROUTINE: Verifica Git, Node.js e npm (senza blocchi parentesi annidati)
+:: ======================================================================
+:ENSURE_TOOLS
 echo.
-echo === Verifica Dipendenze di Sistema ===
-set MISSING_GIT=0
-set MISSING_NODE=0
+echo --- Verifica Dipendenze di Sistema ---
+set "TOOLS_OK=1"
 
-git --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [!] Git NON risulta installato.
-    set MISSING_GIT=1
-) else (
-    for /f "tokens=*" %%g in ('git --version') do echo [V] Git e installato: %%g
-)
+:: 1. Controllo Git
+where git >nul 2>&1
+if not errorlevel 1 goto GIT_FOUND
+echo [MANCANTE] Git non trovato nel sistema.
+call :INSTALL_GIT
+where git >nul 2>&1
+if not errorlevel 1 goto GIT_FOUND
+echo [ERRORE] Impossibile trovare Git. Installalo da https://git-scm.com/download/win e riavvia lo script.
+set "TOOLS_OK=0"
+goto CHECK_NODE
 
-node -v >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [!] Node.js NON risulta installato.
-    set MISSING_NODE=1
-) else (
-    for /f "tokens=*" %%n in ('node -v') do echo [V] Node.js e installato: %%n
-)
+:GIT_FOUND
+for /f "delims=" %%G in ('git --version 2^>nul') do echo [OK] %%G
 
-npm -v >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [!] npm NON risulta installato.
-) else (
-    for /f "tokens=*" %%m in ('npm -v') do echo [V] npm e installato: v%%m
-)
+:CHECK_NODE
+:: 2. Controllo Node.js
+where node >nul 2>&1
+if not errorlevel 1 goto NODE_FOUND
+echo [MANCANTE] Node.js non trovato nel sistema.
+call :INSTALL_NODE
+where node >nul 2>&1
+if not errorlevel 1 goto NODE_FOUND
+echo [ERRORE] Impossibile trovare Node.js. Installalo da https://nodejs.org/ e riavvia lo script.
+set "TOOLS_OK=0"
+goto CHECK_NPM
 
-if %MISSING_GIT%==1 (
-    echo.
-    echo Tentativo di installazione di Git tramite Windows Package Manager (winget)...
-    where winget >nul 2>&1
-    if !errorlevel! equ 0 (
-        winget install -e --id Git.Git
-    ) else (
-        echo Winget non trovato. Apertura pagina di download ufficiale di Git...
-        start https://git-scm.com/download/win
-    )
-)
+:NODE_FOUND
+for /f "delims=" %%N in ('node -v 2^>nul') do echo [OK] Node.js versione %%N
 
-if %MISSING_NODE%==1 (
-    echo.
-    echo Tentativo di installazione di Node.js tramite Windows Package Manager (winget)...
-    where winget >nul 2>&1
-    if !errorlevel! equ 0 (
-        winget install -e --id OpenJS.NodeJS
-    ) else (
-        echo Winget non trovato. Apertura pagina di download ufficiale di Node.js...
-        start https://nodejs.org/
-    )
-)
+:CHECK_NPM
+:: 3. Controllo npm
+where npm.cmd >nul 2>&1
+if not errorlevel 1 goto NPM_FOUND
+where npm >nul 2>&1
+if not errorlevel 1 goto NPM_FOUND
+echo [ERRORE] npm non trovato nel sistema. Reinstalla Node.js da https://nodejs.org/
+set "TOOLS_OK=0"
+goto TOOLS_DONE
 
-if exist "%~dp0package.json" (
-    if not exist "%~dp0node_modules" (
-        echo.
-        echo [i] La cartella node_modules non esiste. Esecuzione di 'npm install'...
-        call npm install
-        echo [V] Dipendenze NPM installate con successo.
-    ) else (
-        echo [V] Dipendenze NPM in node_modules presenti.
-    )
-)
-goto :eof
+:NPM_FOUND
+for /f "delims=" %%M in ('call npm -v 2^>nul') do echo [OK] npm versione v%%M
 
-:CHECK_DEPS_MENU
-cls
-call :CHECK_DEPS
+:TOOLS_DONE
+exit /b 0
+
+
+:: ======================================================================
+:: SUBROUTINE: Installa Git tramite winget
+:: ======================================================================
+:INSTALL_GIT
+where winget >nul 2>&1
+if errorlevel 1 goto GIT_MANUAL
+echo [INFO] Installazione automatica di Git tramite winget in corso...
+call winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements
+if exist "%LocalAppData%\Programs\Git\cmd" set "PATH=%PATH%;%LocalAppData%\Programs\Git\cmd"
+if exist "%ProgramFiles%\Git\cmd" set "PATH=%PATH%;%ProgramFiles%\Git\cmd"
+exit /b 0
+
+:GIT_MANUAL
+echo [INFO] Winget non disponibile. Apertura pagina download di Git...
+start "" "https://git-scm.com/download/win"
+exit /b 0
+
+
+:: ======================================================================
+:: SUBROUTINE: Installa Node.js tramite winget
+:: ======================================================================
+:INSTALL_NODE
+where winget >nul 2>&1
+if errorlevel 1 goto NODE_MANUAL
+echo [INFO] Installazione automatica di Node.js LTS tramite winget in corso...
+call winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements
+if exist "%ProgramFiles%\nodejs" set "PATH=%PATH%;%ProgramFiles%\nodejs"
+if exist "%ProgramFiles(x86)%\nodejs" set "PATH=%PATH%;%ProgramFiles(x86)%\nodejs"
+if exist "%AppData%\npm" set "PATH=%PATH%;%AppData%\npm"
+exit /b 0
+
+:NODE_MANUAL
+echo [INFO] Winget non disponibile. Apertura pagina download di Node.js...
+start "" "https://nodejs.org/"
+exit /b 0
+
+
+:: ======================================================================
+:: SUBROUTINE: Assicura che node_modules sia installato
+:: ======================================================================
+:ENSURE_NODE_MODULES
+if not exist "%~dp0package.json" goto NO_PKG_JSON
+if exist "%~dp0node_modules" goto NODE_MODULES_OK
 echo.
-echo Premere un tasto per tornare al menu principale...
-pause >nul
-goto MENU
+echo [INFO] Cartella node_modules mancante. Installazione pacchetti NPM in corso...
+call npm install
+if errorlevel 1 goto NPM_INSTALL_ERR
+echo [OK] Dipendenze NPM installate correttamente.
+exit /b 0
 
+:NODE_MODULES_OK
+echo [OK] Cartella node_modules presente.
+exit /b 0
+
+:NO_PKG_JSON
+echo [ERRORE] File package.json non trovato in "%~dp0".
+echo Assicurati di aver posizionato questo script nella radice del progetto PhotoCloud,
+echo oppure usa l'opzione [4] per clonare la repository.
+exit /b 1
+
+:NPM_INSTALL_ERR
+echo [ERRORE] "npm install" ha restituito un errore. Controlla la connessione internet.
+exit /b 1
+
+
+:: ======================================================================
+:: OPZIONE 1: Avvia in Modalita Sviluppo (npm run dev)
+:: ======================================================================
 :START_DEV
 cls
-echo === Avvio PhotoCloud (Modalita Sviluppo - Dev) ===
-echo.
-call :CHECK_DEPS
-echo.
-echo [i] Avvio del server Express + Vite sulla porta 3000...
-call npm run dev
-pause
-goto MENU
+echo ======================================================================
+echo   Avvio PhotoCloud -- Modalita Sviluppo
+echo ======================================================================
+call :ENSURE_TOOLS
+if "%TOOLS_OK%"=="0" goto PAUSE_RETURN
+call :ENSURE_NODE_MODULES
+if errorlevel 1 goto PAUSE_RETURN
 
+echo.
+echo [INFO] Avvio del server Express + Vite su http://localhost:3000 ...
+echo [INFO] Premi CTRL+C per arrestare il server.
+echo.
+call npm run dev
+goto PAUSE_RETURN
+
+
+:: ======================================================================
+:: OPZIONE 2: Avvia in Modalita Produzione (npm start)
+:: ======================================================================
 :START_PROD
 cls
-echo === Avvio PhotoCloud (Modalita Produzione - Prod) ===
-echo.
-call :CHECK_DEPS
-echo.
-if not exist "%~dp0dist" (
-    echo [i] Compilazione bundle produzione (npm run build)...
-    call npm run build
-)
-set PORT=3000
-set /p CUSTOM_PORT="Inserisci la porta del server (default: 3000): "
-if not "!CUSTOM_PORT!"=="" set PORT=!CUSTOM_PORT!
+echo ======================================================================
+echo   Avvio PhotoCloud -- Modalita Produzione
+echo ======================================================================
+call :ENSURE_TOOLS
+if "%TOOLS_OK%"=="0" goto PAUSE_RETURN
+call :ENSURE_NODE_MODULES
+if errorlevel 1 goto PAUSE_RETURN
 
-echo [i] Avvio del server Node.js sulla porta !PORT!...
+if exist "%~dp0dist" goto ASK_PORT
+echo.
+echo [INFO] Cartella dist non trovata. Compilazione bundle di produzione in corso...
+call npm run build
+if errorlevel 1 goto BUILD_ERR
+
+:ASK_PORT
+echo.
+set "CUSTOM_PORT="
+set /p "CUSTOM_PORT=Inserisci la porta del server [invio per usare %DEFAULT_PORT%]: "
+if "%CUSTOM_PORT%"=="" set "CUSTOM_PORT=%DEFAULT_PORT%"
+set "PORT=%CUSTOM_PORT%"
+
+echo.
+echo [INFO] Avvio del server PhotoCloud in produzione su http://localhost:%PORT% ...
+echo [INFO] Premi CTRL+C per arrestare il server.
+echo.
 call npm start
-pause
-goto MENU
+goto PAUSE_RETURN
 
+:BUILD_ERR
+echo.
+echo [ERRORE] Compilazione fallita durante "npm run build".
+goto PAUSE_RETURN
+
+
+:: ======================================================================
+:: OPZIONE 3: Aggiorna la Web App Localmente
+:: ======================================================================
 :UPDATE_APP
 cls
-echo === Aggiornamento Web App Localmente ===
-echo.
-call :CHECK_DEPS
-echo.
-echo 1/4. Download ultimi aggiornamenti dal repository git (git pull)...
-call git pull
-if %errorlevel% neq 0 (
-    echo [!] Errore durante git pull.
-    pause
-    goto MENU
-)
+echo ======================================================================
+echo   Aggiornamento Web App PhotoCloud
+echo ======================================================================
+call :ENSURE_TOOLS
+if "%TOOLS_OK%"=="0" goto PAUSE_RETURN
 
+if not exist "%~dp0package.json" goto UPDATE_NO_REPO
+
+:: Se la cartella e stata scaricata come ZIP (senza .git), inizializza il collegamento Git
+if exist "%~dp0.git" goto DO_GIT_PULL
 echo.
-echo 2/4. Sincronizzazione dipendenze NPM (npm install)...
+echo [AVVISO] Cartella .git non trovata (progetto scaricato probabilmente come archivio ZIP).
+set "INIT_GIT_CHOICE="
+set /p "INIT_GIT_CHOICE=Vuoi collegare questa cartella al repository GitHub per ricevere gli aggiornamenti? (S/N): "
+if /i not "%INIT_GIT_CHOICE%"=="S" goto UPDATE_NPM_STEP
+echo [INFO] Collegamento al repository %REPO_URL% ...
+call git init
+call git remote remove origin >nul 2>&1
+call git remote add origin "%REPO_URL%"
+call git fetch origin main
+if errorlevel 1 goto GIT_PULL_ERR
+call git checkout -f -B main origin/main
+if errorlevel 1 goto GIT_PULL_ERR
+goto UPDATE_NPM_STEP
+
+:DO_GIT_PULL
+echo.
+echo [1/3] Scaricamento ultimi aggiornamenti da GitHub (git pull)...
+call git pull --rebase --autostash
+if not errorlevel 1 goto UPDATE_NPM_STEP
+echo [INFO] Tentativo di allineamento dal branch principale (origin/main)...
+call git pull origin main
+if errorlevel 1 goto GIT_PULL_ERR
+
+:UPDATE_NPM_STEP
+echo.
+echo [2/3] Aggiornamento pacchetti e dipendenze (npm install)...
 call npm install
-if %errorlevel% neq 0 (
-    echo [!] Errore durante npm install.
-    pause
-    goto MENU
-)
+if errorlevel 1 goto NPM_INSTALL_ERR
 
 echo.
-echo 3/4. Compilazione bundle Web App (npm run build)...
+echo [3/3] Ricompilazione della Web App (npm run build)...
 call npm run build
-if %errorlevel% neq 0 (
-    echo [!] Errore durante npm run build.
-    pause
-    goto MENU
-)
+if errorlevel 1 goto BUILD_ERR
 
 echo.
-echo 4/4. Aggiornamento completato con successo!
+echo ======================================================================
+echo [OK] Aggiornamento completato con successo!
+echo ======================================================================
 echo.
-echo Premere un tasto per tornare al menu principale...
-pause >nul
+set "RUN_AFTER_UPDATE="
+set /p "RUN_AFTER_UPDATE=Vuoi avviare subito la Web App? [1=Sviluppo, 2=Produzione, N=Torna al menu]: "
+if "%RUN_AFTER_UPDATE%"=="1" goto START_DEV
+if "%RUN_AFTER_UPDATE%"=="2" goto START_PROD
 goto MENU
 
+:UPDATE_NO_REPO
+echo.
+echo [ERRORE] Non ti trovi dentro una cartella valida di PhotoCloud (package.json assente).
+echo Usa l'opzione [4] per clonare la repository.
+goto PAUSE_RETURN
+
+:GIT_PULL_ERR
+echo.
+echo [ERRORE] Impossibile completare "git pull". Verifica la connessione internet o eventuali conflitti locali.
+goto PAUSE_RETURN
+
+
+:: ======================================================================
+:: OPZIONE 4: Clona Repository Git
+:: ======================================================================
 :CLONE_REPO
 cls
-echo === Clonazione Repository PhotoCloud ===
-echo.
-set TARGET_DIR=PhotoCloud
-set /p TARGET_INPUT="Inserisci il nome della cartella dove clonare (default: PhotoCloud): "
-if not "!TARGET_INPUT!"=="" set TARGET_DIR=!TARGET_INPUT!
+echo ======================================================================
+echo   Clonazione Repository PhotoCloud
+echo ======================================================================
+call :ENSURE_TOOLS
+if "%TOOLS_OK%"=="0" goto PAUSE_RETURN
 
-if exist "!TARGET_DIR!" (
-    echo [!] La cartella '!TARGET_DIR!' esiste gia.
-    set /p PULL_CONFIRM="Vuoi aggiornarla con 'git pull'? (S/N): "
-    if /i "!PULL_CONFIRM!"=="S" (
-        cd /d "!TARGET_DIR!"
-        call git pull
-        call npm install
-        echo [V] Repository aggiornata in '!TARGET_DIR!'.
-        cd /d "%~dp0"
-    )
-) else (
-    echo [i] Clonazione da %REPO_URL% in '!TARGET_DIR!'...
-    call git clone %REPO_URL% "!TARGET_DIR!"
-    cd /d "!TARGET_DIR!"
-    echo [i] Installazione dipendenze NPM...
-    call npm install
-    echo [V] Clonazione e installazione completate in '!TARGET_DIR!'!
-    cd /d "%~dp0"
-)
 echo.
-echo Premere un tasto per tornare al menu principale...
-pause >nul
-goto MENU
+set "TARGET_DIR=PhotoCloud"
+set /p "TARGET_DIR=Inserisci il nome o percorso della cartella di destinazione [default: PhotoCloud]: "
+if "%TARGET_DIR%"=="" set "TARGET_DIR=PhotoCloud"
 
+if exist "%TARGET_DIR%\.git" goto CLONE_EXISTS_GIT
+if exist "%TARGET_DIR%" goto CLONE_EXISTS_FOLDER
+
+echo.
+echo [INFO] Clonazione di %REPO_URL% in "%TARGET_DIR%"...
+call git clone "%REPO_URL%" "%TARGET_DIR%"
+if errorlevel 1 goto CLONE_ERR
+
+cd /d "%TARGET_DIR%"
+echo.
+echo [INFO] Installazione dipendenze NPM nella nuova cartella...
+call npm install
+if errorlevel 1 goto CLONE_NPM_ERR
+echo.
+echo [OK] Repository clonata e configurata con successo in "%CD%"
+cd /d "%~dp0"
+goto PAUSE_RETURN
+
+:CLONE_EXISTS_GIT
+echo.
+echo [AVVISO] La cartella "%TARGET_DIR%" contiene gia un repository Git.
+set "PULL_EXISTING="
+set /p "PULL_EXISTING=Vuoi aggiornarla con git pull e npm install? (S/N): "
+if /i not "%PULL_EXISTING%"=="S" goto PAUSE_RETURN
+cd /d "%TARGET_DIR%"
+call git pull --rebase --autostash
+call npm install
+echo [OK] Cartella "%TARGET_DIR%" aggiornata.
+cd /d "%~dp0"
+goto PAUSE_RETURN
+
+:CLONE_EXISTS_FOLDER
+echo.
+echo [ERRORE] La cartella "%TARGET_DIR%" esiste gia ma non e un repository Git.
+echo Specifica un nome di cartella diverso.
+goto PAUSE_RETURN
+
+:CLONE_ERR
+echo.
+echo [ERRORE] Clonazione fallita. Verifica la connessione internet.
+cd /d "%~dp0"
+goto PAUSE_RETURN
+
+:CLONE_NPM_ERR
+echo.
+echo [ERRORE] Installazione dipendenze NPM fallita nella cartella clonata.
+cd /d "%~dp0"
+goto PAUSE_RETURN
+
+
+:: ======================================================================
+:: OPZIONE 5: Verifica e Installa Dipendenze Mancanti
+:: ======================================================================
+:CHECK_DEPS_STANDALONE
+cls
+echo ======================================================================
+echo   Verifica e Installazione Dipendenze
+echo ======================================================================
+call :ENSURE_TOOLS
+if "%TOOLS_OK%"=="0" goto PAUSE_RETURN
+if exist "%~dp0package.json" call :ENSURE_NODE_MODULES
+echo.
+echo [OK] Controllo dipendenze terminato.
+goto PAUSE_RETURN
+
+
+:: ======================================================================
+:: OPZIONE 6: Compila APK Release Android
+:: ======================================================================
 :BUILD_APK
 cls
-echo === Compilazione APK Release Android (v1.2.4) ===
+echo ======================================================================
+echo   Compilazione APK Release Android (v1.2.4)
+echo ======================================================================
+call :ENSURE_TOOLS
+if "%TOOLS_OK%"=="0" goto PAUSE_RETURN
+call :ENSURE_NODE_MODULES
+if errorlevel 1 goto PAUSE_RETURN
+
 echo.
-call :CHECK_DEPS
-echo.
-echo [i] Avvio compilazione APK tramite script NPM...
+echo [INFO] Avvio compilazione APK Release tramite "npm run release:apk"...
 call npm run release:apk
+goto PAUSE_RETURN
+
+
+:: ======================================================================
+:: Ritorno al menu e uscita
+:: ======================================================================
+:PAUSE_RETURN
 echo.
-echo Premere un tasto per tornare al menu principale...
+echo ----------------------------------------------------------------------
+echo Premi un tasto qualsiasi per tornare al menu principale...
 pause >nul
+cd /d "%~dp0"
 goto MENU
 
 :EXIT_APP
 echo.
-echo Arrivederci!
-timeout /t 1 >nul
+echo Uscita da PhotoCloud. Arrivederci!
+endlocal
 exit /b 0

@@ -1,0 +1,6 @@
+# Ensure Windows batch scripts always use CRLF so cmd.exe goto/labels never corrupt
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Ensure shell scripts always use LF
+*.sh text eol=lf

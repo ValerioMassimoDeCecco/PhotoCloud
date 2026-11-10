@@ -543,14 +543,19 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   const batPath = path.resolve(process.cwd(), 'photocloud.bat');
   assert.ok(fs.existsSync(batPath), 'photocloud.bat must exist');
   const batContent = fs.readFileSync(batPath, 'utf-8');
+  assert.ok(batContent.includes('\r\n'), 'photocloud.bat must use CRLF line endings for Windows cmd.exe label offsets');
+  assert.ok(batContent.includes('setlocal DisableDelayedExpansion'), 'photocloud.bat must disable delayed expansion to avoid ! mangling');
+  assert.equal(/if\s+[^\r\n]+\(\s*\r?\n/i.test(batContent), false, 'photocloud.bat must not use multi-line parenthesized if (...) blocks that crash cmd.exe when echoing parentheses');
   assert.ok(batContent.includes('git pull'), 'photocloud.bat must support updating');
   assert.ok(batContent.includes('git clone'), 'photocloud.bat must support cloning');
-  assert.ok(batContent.includes('npm run dev'), 'photocloud.bat must support launching dev mode');
+  assert.ok(batContent.includes('call npm run dev'), 'photocloud.bat must support launching dev mode via call npm');
   assert.ok(batContent.includes('winget'), 'photocloud.bat must detect and install missing dependencies');
 
   const shPath = path.resolve(process.cwd(), 'photocloud.sh');
   assert.ok(fs.existsSync(shPath), 'photocloud.sh must exist');
   const shContent = fs.readFileSync(shPath, 'utf-8');
+  assert.equal(shContent.includes('\r\n'), false, 'photocloud.sh must use LF line endings');
+  assert.equal(/^set -e$/m.test(shContent), false, 'photocloud.sh must not use global set -e which crashes the interactive menu');
   assert.ok(shContent.includes('git pull'), 'photocloud.sh must support updating');
   assert.ok(shContent.includes('git clone'), 'photocloud.sh must support cloning');
   assert.ok(shContent.includes('npm run dev'), 'photocloud.sh must support launching dev mode');
