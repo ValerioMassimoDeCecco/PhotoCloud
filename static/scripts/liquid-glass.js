@@ -539,6 +539,9 @@
     function openSettingsModal() {
         const modal = document.getElementById('lg-settings-modal-backdrop');
         if (!modal) return;
+        if (typeof window.updateCloudStorageIndicators === 'function') {
+            window.updateCloudStorageIndicators();
+        }
         modal.classList.add('open');
         syncSettingsDialogControls();
         renderSavedPresetsList();

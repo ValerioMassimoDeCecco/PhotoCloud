@@ -1,17 +1,19 @@
 {
-  "apkFilename": "photocloud-release-v1.2.6-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.2.6-signed.apk",
-  "sha256": "c4c5978c2fa1ef94b2b9ee21613711f8e06abd8088385ba5bde552a681e50045",
-  "sizeBytes": 58954822,
+  "apkFilename": "photocloud-release-v1.2.7-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.2.7-signed.apk",
+  "sha256": "1ec3cc2e2602d3ab4318cd9b23e297e2e795b91d05eceb6944d1ac1df860c90f",
+  "sizeBytes": 26214400,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.2.6",
-  "versionCode": 23,
-  "changelog": "Release 1.2.6 — Fix aggiornamento automatico: la versione dell'APK pubblicato è ora verificata contro android-app/app/build.gradle.kts (versionName/versionCode) sia in CI sia nell'app, con blocco degli aggiornamenti \"fantasma\" che riproponevano la stessa versione ad ogni avvio.",
+  "versionName": "1.2.7",
+  "versionCode": 24,
+  "changelog": "Release 1.2.7 — Indicatore Memoria Usata Totale del Cloud (badge compatto nell'header con riepilogo al tocco, card analitica con barra percentuale per categorie in Impostazioni e banner spazio recuperabile nel Cestino) su Web App e App Android nativa.",
   "features": [
-    "Auto-update: l'app verifica che l'APK scaricato abbia davvero un versionCode maggiore di quello installato, evitando il ciclo infinito di aggiornamenti",
-    "Pipeline GitHub Actions: tag di release, nome dell'APK e manifest di update derivano ora da un'unica fonte (versionName/versionCode in build.gradle.kts) con verifica bloccante",
-    "Endpoint /api/android/update-manifest allineato alla versione reale del progetto e all'APK effettivamente presente in /release"
+    "Indicatore Memoria Usata Totale del Cloud nell'Header superiore con apertura al tocco del dettaglio Foto/Video, File Cloud e Cestino",
+    "Card analitica in Impostazioni con barra di stato segmentata e ripartizione percentuale tra Foto/Video, File Cloud e Cestino",
+    "Banner nel Cestino con calcolo in tempo reale dello spazio recuperabile e percentuale sul totale Cloud",
+    "Fix aggiornamento automatico anti-loop: verifica del versionCode reale dell'APK scaricato contro build.gradle.kts",
+    "Compatibilità completa con Tema Originale e Tema Liquid Glass (Web & Android)"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.6",
-  "publishedAt": "2026-11-10T21:06:00.982Z"
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.7",
+  "publishedAt": "2026-11-11T14:45:24.258Z"
 }

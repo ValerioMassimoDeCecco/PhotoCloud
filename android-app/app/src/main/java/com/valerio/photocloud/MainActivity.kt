@@ -1655,6 +1655,19 @@ fun NativeVaultScreen(
         visibleGalleryItems.filter { !it.isMedia }
     }
 
+    val mediaCloudBytes = remember(mediaOnlyItems) {
+        mediaOnlyItems.sumOf { it.size.coerceAtLeast(0L) }
+    }
+    val filesCloudBytes = remember(nonMediaCloudFiles) {
+        nonMediaCloudFiles.sumOf { it.size.coerceAtLeast(0L) }
+    }
+    val activeCloudBytes = mediaCloudBytes + filesCloudBytes
+    val trashCloudBytes = remember(visibleTrashItems) {
+        visibleTrashItems.sumOf { it.size.coerceAtLeast(0L) }
+    }
+    val grandTotalCloudBytes = activeCloudBytes + trashCloudBytes
+    var showCloudStorageDialog by remember { mutableStateOf(false) }
+
     // Compute AI category chips strictly from active PhotoCloud gallery photos
     val aiCategoryChips = remember(mediaOnlyItems, aiCategoriesByFilename) {
         val counts = LinkedHashMap<String, Int>()
@@ -1944,6 +1957,43 @@ fun NativeVaultScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
+                        // Compact Cloud Total Used Storage Badge (always visible in header)
+                        Surface(
+                            onClick = {
+                                triggerHaptic()
+                                showCloudStorageDialog = true
+                            },
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudDone,
+                                    contentDescription = "Memoria Usata Cloud",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = PhotoCloudApiClient.formatBytesHuman(activeCloudBytes),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                if (trashCloudBytes > 0L) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFF59E0B))
+                                    )
+                                }
+                            }
+                        }
+
                         if (currentTab == VaultTab.GALLERY) {
                             Box {
                                 Surface(
@@ -2691,7 +2741,13 @@ fun NativeVaultScreen(
                                 serverUrl = serverUrl,
                                 galleryCount = mediaOnlyItems.size,
                                 cloudFilesCount = nonMediaCloudFiles.size,
-                                trashCount = trashItems.size,
+                                trashCount = visibleTrashItems.size,
+                                mediaBytes = mediaCloudBytes,
+                                cloudFilesBytes = filesCloudBytes,
+                                trashBytes = trashCloudBytes,
+                                onOpenTrashTab = {
+                                    currentTab = VaultTab.TRASH
+                                },
                                 custom = custom,
                                 onUpdateCustom = onUpdateCustom,
                                 onOpenServerConfig = onOpenServerConfig,
@@ -2818,6 +2874,19 @@ fun NativeVaultScreen(
                                     verticalArrangement = Arrangement.spacedBy(custom.gridSpacingDp.dp),
                                     modifier = Modifier.fillMaxSize()
                                 ) {
+                                    item(
+                                        key = "trash_recoverable_storage_banner",
+                                        span = { GridItemSpan(maxLineSpan) }
+                                    ) {
+                                        TrashRecoverableStorageBanner(
+                                            trashBytes = trashCloudBytes,
+                                            trashCount = trashSortedItems.size,
+                                            mediaBytes = mediaCloudBytes,
+                                            filesBytes = filesCloudBytes,
+                                            grandTotalBytes = grandTotalCloudBytes,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+                                        )
+                                    }
                                     items(
                                         items = trashSortedItems,
                                         key = { "trash_${it.filename}" }
@@ -3435,6 +3504,26 @@ fun NativeVaultScreen(
                         Text("Annulla")
                     }
                 }
+            )
+        }
+
+        if (showCloudStorageDialog) {
+            CloudStorageBreakdownDialog(
+                mediaBytes = mediaCloudBytes,
+                mediaCount = mediaOnlyItems.size,
+                filesBytes = filesCloudBytes,
+                filesCount = nonMediaCloudFiles.size,
+                trashBytes = trashCloudBytes,
+                trashCount = visibleTrashItems.size,
+                onOpenTrash = {
+                    showCloudStorageDialog = false
+                    currentTab = VaultTab.TRASH
+                },
+                onOpenSettings = {
+                    showCloudStorageDialog = false
+                    currentTab = VaultTab.SETTINGS
+                },
+                onDismiss = { showCloudStorageDialog = false }
             )
         }
     }
@@ -4217,6 +4306,272 @@ fun AlbumManagerDialog(
 }
 
 @Composable
+fun CloudStorageSegmentedProgressBar(
+    mediaBytes: Long,
+    filesBytes: Long,
+    trashBytes: Long,
+    modifier: Modifier = Modifier
+) {
+    val grandTotal = (mediaBytes + filesBytes + trashBytes).coerceAtLeast(0L)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(10.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        if (grandTotal > 0L) {
+            val mediaWeight = (mediaBytes.toFloat() / grandTotal.toFloat()).coerceAtLeast(0f)
+            val filesWeight = (filesBytes.toFloat() / grandTotal.toFloat()).coerceAtLeast(0f)
+            val trashWeight = (trashBytes.toFloat() / grandTotal.toFloat()).coerceAtLeast(0f)
+            if (mediaWeight > 0f) {
+                Box(
+                    modifier = Modifier
+                        .weight(mediaWeight)
+                        .fillMaxHeight()
+                        .background(Color(0xFF38BDF8))
+                )
+            }
+            if (filesWeight > 0f) {
+                Box(
+                    modifier = Modifier
+                        .weight(filesWeight)
+                        .fillMaxHeight()
+                        .background(Color(0xFF10B981))
+                )
+            }
+            if (trashWeight > 0f) {
+                Box(
+                    modifier = Modifier
+                        .weight(trashWeight)
+                        .fillMaxHeight()
+                        .background(Color(0xFFF59E0B))
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TrashRecoverableStorageBanner(
+    trashBytes: Long,
+    trashCount: Int,
+    mediaBytes: Long,
+    filesBytes: Long,
+    grandTotalBytes: Long,
+    modifier: Modifier = Modifier
+) {
+    val trashPct = if (grandTotalBytes > 0L) {
+        String.format(Locale.ITALIAN, "%.1f", (trashBytes.toDouble() / grandTotalBytes.toDouble()) * 100.0)
+    } else {
+        "0,0"
+    }
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 4.dp,
+        modifier = modifier
+            .fillMaxWidth()
+            .border(
+                width = 1.dp,
+                color = Color(0xFFF59E0B).copy(alpha = 0.4f),
+                shape = RoundedCornerShape(20.dp)
+            )
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFFF59E0B).copy(alpha = 0.18f),
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteSweep,
+                            contentDescription = null,
+                            tint = Color(0xFFF59E0B),
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Spazio recuperabile nel Cestino: ${PhotoCloudApiClient.formatBytesHuman(trashBytes)}",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "$trashCount elementi ($trashPct% della memoria totale Cloud: ${PhotoCloudApiClient.formatBytesHuman(grandTotalBytes)})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            CloudStorageSegmentedProgressBar(
+                mediaBytes = mediaBytes,
+                filesBytes = filesBytes,
+                trashBytes = trashBytes
+            )
+        }
+    }
+}
+
+@Composable
+fun CloudStorageBreakdownDialog(
+    mediaBytes: Long,
+    mediaCount: Int,
+    filesBytes: Long,
+    filesCount: Int,
+    trashBytes: Long,
+    trashCount: Int,
+    onOpenTrash: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val activeBytes = mediaBytes + filesBytes
+    val grandTotalBytes = (activeBytes + trashBytes).coerceAtLeast(0L)
+    val denom = if (grandTotalBytes > 0L) grandTotalBytes.toDouble() else 1.0
+    val mediaPct = if (grandTotalBytes > 0L) String.format(Locale.ITALIAN, "%.1f%%", (mediaBytes / denom) * 100.0) else "0%"
+    val filesPct = if (grandTotalBytes > 0L) String.format(Locale.ITALIAN, "%.1f%%", (filesBytes / denom) * 100.0) else "0%"
+    val trashPct = if (grandTotalBytes > 0L) String.format(Locale.ITALIAN, "%.1f%%", (trashBytes / denom) * 100.0) else "0%"
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CloudDone,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Memoria Cloud Usata",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                text = "Attivo (Foto + File)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                text = PhotoCloudApiClient.formatBytesHuman(activeBytes),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                text = "Totale Complessivo",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = PhotoCloudApiClient.formatBytesHuman(grandTotalBytes),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                    }
+                }
+
+                CloudStorageSegmentedProgressBar(
+                    mediaBytes = mediaBytes,
+                    filesBytes = filesBytes,
+                    trashBytes = trashBytes
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Color(0xFF38BDF8)))
+                            Text("Foto e Video ($mediaCount)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                        }
+                        Text("${PhotoCloudApiClient.formatBytesHuman(mediaBytes)} ($mediaPct)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Color(0xFF10B981)))
+                            Text("File Cloud ($filesCount)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                        }
+                        Text("${PhotoCloudApiClient.formatBytesHuman(filesBytes)} ($filesPct)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Color(0xFFF59E0B)))
+                            Text("Cestino ($trashCount)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                        }
+                        Text("${PhotoCloudApiClient.formatBytesHuman(trashBytes)} ($trashPct)", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (trashBytes > 0L) {
+                    FilledTonalButton(onClick = onOpenTrash) {
+                        Text("Cestino")
+                    }
+                }
+                Button(onClick = onOpenSettings) {
+                    Text("Dettagli")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Chiudi")
+            }
+        }
+    )
+}
+
+@Composable
 fun NativeSettingsScreen(
     activity: MainActivity,
     apiClient: PhotoCloudApiClient,
@@ -4224,6 +4579,10 @@ fun NativeSettingsScreen(
     galleryCount: Int,
     cloudFilesCount: Int,
     trashCount: Int,
+    mediaBytes: Long = 0L,
+    cloudFilesBytes: Long = 0L,
+    trashBytes: Long = 0L,
+    onOpenTrashTab: () -> Unit = {},
     custom: CustomizationState,
     onUpdateCustom: (CustomizationState) -> Unit,
     onOpenServerConfig: () -> Unit,
@@ -4237,6 +4596,13 @@ fun NativeSettingsScreen(
     var savedLgPresets by remember { mutableStateOf(LiquidGlassConfigStore.loadSavedPresets(prefs)) }
     val scrollState = rememberScrollState()
 
+    val activeCloudBytes = mediaBytes + cloudFilesBytes
+    val grandTotalCloudBytes = (activeCloudBytes + trashBytes).coerceAtLeast(0L)
+    val denom = if (grandTotalCloudBytes > 0L) grandTotalCloudBytes.toDouble() else 1.0
+    val mediaPctText = if (grandTotalCloudBytes > 0L) String.format(Locale.ITALIAN, "%.1f%%", (mediaBytes / denom) * 100.0) else "0%"
+    val filesPctText = if (grandTotalCloudBytes > 0L) String.format(Locale.ITALIAN, "%.1f%%", (cloudFilesBytes / denom) * 100.0) else "0%"
+    val trashPctText = if (grandTotalCloudBytes > 0L) String.format(Locale.ITALIAN, "%.1f%%", (trashBytes / denom) * 100.0) else "0%"
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -4245,6 +4611,148 @@ fun NativeSettingsScreen(
             .padding(top = 6.dp, bottom = 140.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // 0A. DEDICATED CLOUD TOTAL USED STORAGE CARD WITH CATEGORY BREAKDOWN
+        SettingsSectionCard(
+            title = "Memoria Usata Totale del Cloud",
+            icon = Icons.Default.CloudDone
+        ) {
+            Text(
+                text = "Ripartizione in tempo reale dello spazio cifrato occupato sul server tra Foto/Video, File Cloud e Cestino:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Spazio Attivo Usato",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = PhotoCloudApiClient.formatBytesHuman(activeCloudBytes),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Totale Complessivo",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = PhotoCloudApiClient.formatBytesHuman(grandTotalCloudBytes),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            CloudStorageSegmentedProgressBar(
+                mediaBytes = mediaBytes,
+                filesBytes = cloudFilesBytes,
+                trashBytes = trashBytes
+            )
+            Spacer(Modifier.height(12.dp))
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(Color(0xFF38BDF8)))
+                            Column {
+                                Text("Foto e Video", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                                Text("$galleryCount elementi • $mediaPctText", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Text(
+                            text = PhotoCloudApiClient.formatBytesHuman(mediaBytes),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(Color(0xFF10B981)))
+                            Column {
+                                Text("File Cloud", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                                Text("$cloudFilesCount elementi • $filesPctText", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Text(
+                            text = PhotoCloudApiClient.formatBytesHuman(cloudFilesBytes),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+
+                Surface(
+                    onClick = { if (trashCount > 0) onOpenTrashTab() },
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(Color(0xFFF59E0B)))
+                            Column {
+                                Text("Cestino (Spazio Recuperabile)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                                Text("$trashCount elementi • $trashPctText", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Text(
+                            text = PhotoCloudApiClient.formatBytesHuman(trashBytes),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (trashBytes > 0L) Color(0xFFF59E0B) else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
+
         // 0. DUAL-THEME SELECTOR & LIQUID GLASS CUSTOMIZATION STUDIO
         LiquidGlassStudioSection(
             context = activity,

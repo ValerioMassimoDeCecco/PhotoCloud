@@ -41,7 +41,7 @@ const RELEASE_DIR = path.resolve(process.cwd(), 'release');
  * così non si può più annunciare una versione diversa da quella realmente compilata.
  */
 function readAndroidAppVersion(): { versionName: string; versionCode: number } {
-  const fallback = { versionName: '1.2.6', versionCode: 23 };
+  const fallback = { versionName: '1.2.7', versionCode: 24 };
   try {
     const gradlePath = path.resolve(APP_ROOT, 'android-app/app/build.gradle.kts');
     if (!fs.existsSync(gradlePath)) return fallback;
@@ -373,11 +373,14 @@ async function startServer() {
       return;
     }
     const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const trashFolder = path.join(userFolder, 'trash');
     fs.mkdirSync(userFolder, { recursive: true });
+    fs.mkdirSync(trashFolder, { recursive: true });
     const allFiles = listMediaFiles(userFolder, sess.username);
+    const trashedFiles = listMediaFiles(trashFolder, sess.username);
     const albumsData = loadUserAlbums(sess.username);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderGalleryTemplate(allFiles, albumsData.albums));
+    res.send(renderGalleryTemplate(allFiles, albumsData.albums, trashedFiles));
   });
 
   app.get('/trash', (req: Request, res: Response) => {
@@ -386,11 +389,14 @@ async function startServer() {
       res.redirect('/');
       return;
     }
-    const trashFolder = path.join(UPLOAD_FOLDER, sess.username, 'trash');
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const trashFolder = path.join(userFolder, 'trash');
+    fs.mkdirSync(userFolder, { recursive: true });
     fs.mkdirSync(trashFolder, { recursive: true });
+    const activeFiles = listMediaFiles(userFolder, sess.username);
     const trashedFiles = listMediaFiles(trashFolder, sess.username);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderTrashTemplate(trashedFiles));
+    res.send(renderTrashTemplate(trashedFiles, activeFiles));
   });
 
   // --- SESSION & ALBUMS API (Used by Web & Native Android APK Client) ---

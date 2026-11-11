@@ -239,6 +239,55 @@
             </header>
 
             <div class="lg-settings-body">
+                <!-- 0. Cloud Total Used Storage Analytics Card -->
+                <div class="lg-section-block cloud-storage-settings-card" id="settings-cloud-storage-card">
+                    <div class="cloud-storage-settings-header">
+                        <h3><span class="material-icons">cloud_queue</span> Memoria Usata Totale del Cloud</h3>
+                        <span id="settings-storage-total-badge" class="cloud-storage-total-pill">Totale Cloud: 0 B</span>
+                    </div>
+                    <div class="cloud-storage-hero-row">
+                        <div>
+                            <span class="cloud-storage-hero-label">Spazio Attivo Utilizzato</span>
+                            <div class="cloud-storage-hero-value" id="settings-storage-active-val">0 B</div>
+                            <span class="cloud-storage-hero-sub" id="settings-storage-active-sub">0 elementi attivi • 0 B nel cestino</span>
+                        </div>
+                    </div>
+                    <div class="cloud-storage-segmented-bar" role="img" aria-label="Ripartizione percentuale memoria Cloud tra Foto/Video, File Cloud e Cestino">
+                        <div id="settings-storage-bar-media" class="storage-segment segment-media" style="width: 0%;" title="Foto e Video"></div>
+                        <div id="settings-storage-bar-files" class="storage-segment segment-files" style="width: 0%;" title="File Cloud"></div>
+                        <div id="settings-storage-bar-trash" class="storage-segment segment-trash" style="width: 0%;" title="Cestino"></div>
+                    </div>
+                    <div class="cloud-storage-categories-grid">
+                        <div class="cloud-storage-cat-card">
+                            <div class="cat-card-top">
+                                <span class="storage-dot dot-media"></span>
+                                <span class="cat-card-name">Foto e Video</span>
+                                <strong id="settings-storage-media-pct" class="cat-card-pct">0%</strong>
+                            </div>
+                            <div id="settings-storage-media-bytes" class="cat-card-bytes">0 B</div>
+                            <div id="settings-storage-media-count" class="cat-card-count">0 elementi</div>
+                        </div>
+                        <div class="cloud-storage-cat-card">
+                            <div class="cat-card-top">
+                                <span class="storage-dot dot-files"></span>
+                                <span class="cat-card-name">File Cloud</span>
+                                <strong id="settings-storage-files-pct" class="cat-card-pct">0%</strong>
+                            </div>
+                            <div id="settings-storage-files-bytes" class="cat-card-bytes">0 B</div>
+                            <div id="settings-storage-files-count" class="cat-card-count">0 file</div>
+                        </div>
+                        <div class="cloud-storage-cat-card">
+                            <div class="cat-card-top">
+                                <span class="storage-dot dot-trash"></span>
+                                <span class="cat-card-name">Cestino</span>
+                                <strong id="settings-storage-trash-pct" class="cat-card-pct">0%</strong>
+                            </div>
+                            <div id="settings-storage-trash-bytes" class="cat-card-bytes">0 B</div>
+                            <div id="settings-storage-trash-count" class="cat-card-count">0 eliminati</div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 1. Theme Selector -->
                 <div class="lg-section-block">
                     <h3><span class="material-icons">palette</span> Selezione Tema Applicazione</h3>

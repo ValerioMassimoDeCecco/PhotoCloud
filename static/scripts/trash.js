@@ -105,6 +105,28 @@ async function handleEmptyTrash() {
     }
 }
 
+function formatBytesHumanTrash(bytes) {
+    if (!bytes || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+    return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function syncStandaloneTrashBanner() {
+    const banner = document.getElementById('trash-recoverable-storage-banner');
+    if (!banner) return;
+    const wrappers = Array.from(document.querySelectorAll('.media-card-wrapper'));
+    if (wrappers.length === 0) {
+        banner.remove();
+        return;
+    }
+    const trashBytes = wrappers.reduce((acc, el) => acc + (Number(el.dataset.size) || 0), 0);
+    const sizeSpan = document.getElementById('trash-banner-size');
+    const countSpan = document.getElementById('trash-banner-count');
+    if (sizeSpan) sizeSpan.textContent = formatBytesHumanTrash(trashBytes);
+    if (countSpan) countSpan.textContent = String(wrappers.length);
+}
+
 function updateCount(change, absolute = false) {
     const countElement = document.getElementById('media-count');
     if (countElement) {
@@ -112,4 +134,6 @@ function updateCount(change, absolute = false) {
         let newCount = absolute ? change : currentCount + change;
         countElement.textContent = `${newCount} elementi`;
     }
+    syncStandaloneTrashBanner();
 }
+

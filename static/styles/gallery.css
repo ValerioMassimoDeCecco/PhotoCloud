@@ -959,4 +959,242 @@
         display: inline;
         font-size: 13px;
     }
+
+    .cloud-storage-badge-label {
+        font-size: 11px;
+    }
+
+    .trash-storage-banner {
+        flex-direction: column;
+        align-items: stretch;
+    }
 }
+
+/* ========================================================================== */
+/* === CLOUD STORAGE INDICATOR (HEADER BADGE, POPOVER, TRASH BANNER)      === */
+/* ========================================================================== */
+
+.cloud-storage-badge-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+.cloud-storage-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid var(--outline-variant);
+    background: var(--surface-container-high);
+    color: var(--on-surface);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s var(--ease-m3);
+    white-space: nowrap;
+}
+
+.cloud-storage-badge:hover {
+    background: var(--secondary-container);
+    color: var(--on-secondary-container);
+    border-color: var(--primary);
+}
+
+.cloud-storage-badge .cloud-storage-icon {
+    font-size: 17px;
+    color: var(--primary);
+}
+
+.cloud-storage-badge-label strong {
+    font-weight: 800;
+}
+
+.cloud-storage-trash-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #F59E0B;
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25);
+    flex-shrink: 0;
+}
+
+.cloud-storage-popover {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    width: min(340px, calc(100vw - 24px));
+    background: var(--surface-container-high);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    border-radius: 22px;
+    border: 1px solid var(--floating-bar-border);
+    box-shadow: var(--floating-bar-shadow);
+    padding: 16px;
+    z-index: 1250;
+    color: var(--on-surface);
+    animation: groupFadeIn 0.18s var(--ease-m3-decel);
+}
+
+.cloud-storage-popover-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.cloud-storage-popover-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+}
+
+.cloud-storage-popover-totals {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: var(--surface-container);
+    margin-bottom: 12px;
+    font-size: 11px;
+}
+
+.cloud-storage-popover-totals span {
+    display: block;
+    color: var(--on-surface-variant);
+    margin-bottom: 2px;
+}
+
+.cloud-storage-popover-totals strong {
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--on-surface);
+}
+
+.cloud-storage-segmented-bar {
+    width: 100%;
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(148, 163, 184, 0.22);
+    overflow: hidden;
+    display: flex;
+    gap: 2px;
+}
+
+.storage-segment {
+    height: 100%;
+    transition: width 0.35s var(--ease-m3-decel);
+    min-width: 0;
+}
+
+.storage-segment.segment-media {
+    background: linear-gradient(90deg, #38BDF8, #6366F1);
+}
+
+.storage-segment.segment-files {
+    background: linear-gradient(90deg, #10B981, #14B8A6);
+}
+
+.storage-segment.segment-trash {
+    background: linear-gradient(90deg, #F59E0B, #EF4444);
+}
+
+.cloud-storage-popover-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 12px 0;
+}
+
+.cloud-storage-popover-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+}
+
+.storage-cat-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--on-surface-variant);
+    font-weight: 600;
+}
+
+.storage-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.storage-dot.dot-media { background: #38BDF8; }
+.storage-dot.dot-files { background: #10B981; }
+.storage-dot.dot-trash { background: #F59E0B; }
+
+.cloud-storage-popover-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 10px;
+    border-top: 1px solid var(--outline-variant);
+}
+
+/* --- Trash Recoverable Storage Banner --- */
+.trash-storage-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 18px;
+    margin: 6px 0 18px;
+    border-radius: 20px;
+    background: var(--surface-container-high);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.trash-storage-banner-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.trash-storage-banner-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 14px;
+    background: rgba(245, 158, 11, 0.16);
+    color: #F59E0B;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.trash-storage-banner-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 12px;
+    color: var(--on-surface-variant);
+}
+
+.trash-storage-banner-text strong {
+    font-size: 14px;
+    color: var(--on-surface);
+}
+
+.trash-storage-banner-bar-wrap {
+    width: min(220px, 100%);
+    flex-shrink: 0;
+}
+

@@ -530,15 +530,15 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.1.3-signed.apk')));
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.2.6"'));
-  assert.ok(appBuildGradle.includes('versionCode = 23'));
+  assert.ok(appBuildGradle.includes('versionName = "1.2.7"'));
+  assert.ok(appBuildGradle.includes('versionCode = 24'));
   assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
   assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
   assert.ok(appBuildGradle.includes('androidx.work:work-runtime-ktx:2.9.0'));
   assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.2.6');
+  assert.equal(pkgJson.version, '1.2.7');
 
   // 6. Multi-platform interactive CLI scripts (photocloud.bat & photocloud.sh)
   const batPath = path.resolve(process.cwd(), 'photocloud.bat');
@@ -581,8 +581,8 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   const baseConfig = {
     appName: 'PhotoCloud "Vault" <Test>',
     packageName: 'com.valerio.photocloud',
-    versionName: '1.2.6',
-    versionCode: 23,
+    versionName: '1.2.7',
+    versionCode: 24,
     serverUrl: 'http://10.0.2.2:3000',
     minSdk: 26,
     targetSdk: 35,
@@ -608,7 +608,7 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   assert.ok(!manifestXml.includes('android:label="PhotoCloud "Vault"'));
 
   const gradleKts = generateAppBuildGradleKts(baseConfig);
-  assert.ok(gradleKts.includes('versionName = "1.2.6"'));
+  assert.ok(gradleKts.includes('versionName = "1.2.7"'));
 
   const mainKt = generateMainActivityKt(baseConfig);
   assert.ok(mainKt.includes('settings.allowFileAccess = false'));
@@ -752,5 +752,53 @@ test('Auto-update anti-loop: APK version must be newer than installed and match 
   assert.equal(pkgJson.version, gradleVersion);
   assert.equal(manifestJson.versionName, gradleVersion);
   assert.equal(manifestJson.versionCode, gradleCode);
-  assert.ok(gradleCode > 22, 'versionCode must be greater than the previous release (22)');
+  assert.ok(gradleCode > 23, 'versionCode must be greater than the previous release (23)');
 });
+
+test('Cloud Total Used Storage Indicator (Header Badge, Popover, Settings Card & Trash Recoverable Banner)', async () => {
+  const { computeCloudStorageStats, renderGalleryTemplate, renderTrashTemplate } = await import('./templateRenderer');
+
+  const activeItems = [
+    { filename: 'vacanza.jpg', timestamp: 1700000000, size: 2 * 1024 * 1024, isMedia: true, category: 'media' as const },
+    { filename: 'clip.mp4', timestamp: 1700000100, size: 3 * 1024 * 1024, isMedia: true, category: 'media' as const },
+    { filename: 'contratto.pdf', timestamp: 1700000200, size: 1 * 1024 * 1024, isMedia: false, category: 'document' as const },
+  ];
+  const trashedItems = [
+    { filename: 'vecchio.zip', timestamp: 1700000300, size: 4 * 1024 * 1024, isMedia: false, category: 'archive' as const },
+  ];
+
+  const stats = computeCloudStorageStats(activeItems, trashedItems);
+  assert.equal(stats.mediaBytes, 5 * 1024 * 1024);
+  assert.equal(stats.filesBytes, 1 * 1024 * 1024);
+  assert.equal(stats.activeTotalBytes, 6 * 1024 * 1024);
+  assert.equal(stats.trashBytes, 4 * 1024 * 1024);
+  assert.equal(stats.grandTotalBytes, 10 * 1024 * 1024);
+  assert.equal(stats.mediaCount, 2);
+  assert.equal(stats.filesCount, 1);
+  assert.equal(stats.trashCount, 1);
+  assert.equal(stats.mediaPercent, 50);
+  assert.equal(stats.filesPercent, 10);
+  assert.equal(stats.trashPercent, 40);
+  assert.equal(stats.activeTotalFormatted, '6.0 MB');
+  assert.equal(stats.grandTotalFormatted, '10.0 MB');
+
+  const galleryHtml = renderGalleryTemplate(activeItems, ['Estate'], trashedItems);
+  assert.ok(galleryHtml.includes('id="cloud-storage-header-badge"'));
+  assert.ok(galleryHtml.includes('id="cloud-storage-popover"'));
+  assert.ok(galleryHtml.includes('id="settings-cloud-storage-card"'));
+  assert.ok(galleryHtml.includes('6.0 MB'));
+
+  const trashHtml = renderTrashTemplate(trashedItems, activeItems);
+  assert.ok(trashHtml.includes('id="trash-recoverable-storage-banner"'));
+  assert.ok(trashHtml.includes('4.0 MB'));
+
+  const mainActivityKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
+    'utf-8'
+  );
+  assert.ok(mainActivityKt.includes('fun CloudStorageSegmentedProgressBar('));
+  assert.ok(mainActivityKt.includes('fun TrashRecoverableStorageBanner('));
+  assert.ok(mainActivityKt.includes('fun CloudStorageBreakdownDialog('));
+  assert.ok(mainActivityKt.includes('Memoria Usata Totale del Cloud'));
+});
+

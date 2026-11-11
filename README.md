@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.6)
+# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.7)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -7,6 +7,23 @@
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
+
+---
+
+## ⚡ Novità Principali della Release `v1.2.7` (`versionCode 24`) — Indicatore della Memoria Usata Totale del Cloud (Web & Android)
+
+### 1. Indicatore Memoria Cloud Sempre Visibile in 3 Posizioni Chiave
+- **Badge Compatto nell'Header Superiore (`Cloud: X MB/GB`) + Popover / Dialog di Dettaglio al Tocco**:
+  - Sia nella Web App (`#cloud-storage-header-badge`) sia nell'App Android (`NativeVaultScreen`), l'header superiore mostra in tempo reale il totale dello spazio attivo occupato (`Foto/Video` + `File Cloud`) con un indicatore ambra se sono presenti file nel Cestino.
+  - Toccando il badge si apre il pannello/dialog di riepilogo (`#cloud-storage-popover` / `CloudStorageBreakdownDialog`) con la barra di stato segmentata a 3 colori, il dettaglio di `Foto e Video`, `File Cloud`, `Cestino` e `Totale Complessivo Cloud`, oltre ai pulsanti rapidi per aprire le **Impostazioni** o il **Cestino**.
+- **Card Dettagliata in Impostazioni con Grafico Categorie (`Memoria Usata Totale del Cloud`)**:
+  - In cima al pannello **Impostazioni & Temi** su Web (`#settings-cloud-storage-card`) e alla scheda **Impostazioni** su Android (`NativeSettingsScreen`), una card dedicata espone:
+    - **Spazio Attivo Usato** e **Totale Complessivo Cloud**.
+    - **Barra di stato segmentata proporzionale** (`Foto e Video` in azzurro `#38BDF8`, `File Cloud` in smeraldo `#10B981`, `Cestino` in ambra `#F59E0B`).
+    - **3 Card di Categoria** con byte formattati (`B`, `KB`, `MB`, `GB`), incidenza percentuale sul totale (`%`) e numero di elementi.
+- **Banner Spazio Recuperabile nel Cestino (`#trash-recoverable-storage-banner` / `TrashRecoverableStorageBanner`)**:
+  - Nella vista **Cestino** (sia nella scheda Keep-Alive `#pane-trash` e `/trash` su Web, sia in `VaultTab.TRASH` su Android) compare in alto un banner che evidenzia lo **spazio immediatamente recuperabile** svuotando il cestino, la percentuale rispetto alla memoria totale del Cloud e la barra di ripartizione.
+- **Sincronizzazione Reattiva a 0ms**: tutti gli indicatori si aggiornano istantaneamente dopo upload, spostamento nel cestino, ripristino, eliminazione definitiva o svuotamento del cestino, con pieno supporto per entrambi i temi **Originale (Material You)** e **Liquid Glass**.
 
 ---
 

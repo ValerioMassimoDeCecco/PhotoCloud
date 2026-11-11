@@ -11,9 +11,9 @@
       "type": "SINGLE",
       "filters": [],
       "attributes": [],
-      "versionCode": 23,
-      "versionName": "1.2.6",
-      "outputFile": "photocloud-release-v1.2.6-signed.apk",
+      "versionCode": 24,
+      "versionName": "1.2.7",
+      "outputFile": "photocloud-release-v1.2.7-signed.apk",
       "sha256": "1ec3cc2e2602d3ab4318cd9b23e297e2e795b91d05eceb6944d1ac1df860c90f"
     }
   ],

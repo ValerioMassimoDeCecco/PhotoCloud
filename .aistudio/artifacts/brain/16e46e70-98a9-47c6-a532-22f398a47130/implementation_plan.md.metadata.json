@@ -1,6 +1,0 @@
-{
-  "summary":  "Piano di implementazione per PhotoCloud v1.2.3 (versionCode 20): modello AI locale scaricabile facoltativamente dalle Impostazioni (rimosso dagli asset dell'APK), sistema automatico di controllo, download, verifica SHA-256/firma e installazione aggiornamenti in-app (GitHub Releases con fallback al server PhotoCloud), e rilascio APK v1.2.3.",
-  "updatedAt":  "2026-11-10T10:43:25.165803334Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

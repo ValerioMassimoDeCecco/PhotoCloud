@@ -314,13 +314,13 @@ start_prod() {
 # Opzione 6: Compilare APK Android Release
 build_android_apk() {
     print_header
-    echo -e "${BOLD}=== Compilazione APK Release Android (v1.2.6) ===${NC}\n"
+    echo -e "${BOLD}=== Compilazione APK Release Android (v1.2.7) ===${NC}\n"
     check_and_install_dependencies || return 1
 
     if command -v gradle &>/dev/null || [ -f "$SCRIPT_DIR/android-app/gradlew" ]; then
         print_info "Compilazione APK tramite script di release (npm run release:apk)..."
         npm run release:apk &&
-            print_success "APK compilato in release/photocloud-release-v1.2.6-signed.apk"
+            print_success "APK compilato in release/photocloud-release-v1.2.7-signed.apk"
     else
         print_error "Gradle / Android SDK non trovati nel sistema."
         print_info "Per compilare l'APK Android occorrono JDK 17 e Android SDK 35."
@@ -338,7 +338,7 @@ main_menu() {
         echo -e "  ${BOLD}3)${NC} ${CYAN}Aggiorna la Web App${NC} (git pull + npm install + build)"
         echo -e "  ${BOLD}4)${NC} ${CYAN}Clona Repository Git${NC} (in un'altra cartella)"
         echo -e "  ${BOLD}5)${NC} ${YELLOW}Verifica e Installa Dipendenze Mancanti${NC} (Git, Node.js, npm)"
-        echo -e "  ${BOLD}6)${NC} ${BLUE}Compila APK Release Android${NC} (v1.2.6)"
+        echo -e "  ${BOLD}6)${NC} ${BLUE}Compila APK Release Android${NC} (v1.2.7)"
         echo -e "  ${BOLD}7)${NC} ${RED}Esci${NC}"
         echo -e ""
         read -rp "Scelta [1-7]: " menu_choice

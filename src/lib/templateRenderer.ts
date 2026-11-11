@@ -15,11 +15,102 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function formatFileSize(bytes?: number): string {
+export interface CloudStorageStats {
+  mediaBytes: number;
+  mediaCount: number;
+  filesBytes: number;
+  filesCount: number;
+  activeBytes: number;
+  activeTotalBytes: number;
+  activeCount: number;
+  trashBytes: number;
+  trashCount: number;
+  grandTotalBytes: number;
+  grandTotalCount: number;
+  mediaPct: number;
+  filesPct: number;
+  trashPct: number;
+  mediaPercent: number;
+  filesPercent: number;
+  trashPercent: number;
+  mediaFormatted: string;
+  filesFormatted: string;
+  activeTotalFormatted: string;
+  trashFormatted: string;
+  grandTotalFormatted: string;
+}
+
+export function formatFileSize(bytes?: number): string {
   if (!bytes || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : (i >= 3 ? 2 : 1))} ${units[i]}`;
+}
+
+export function computeCloudStorageStats(
+  activeFiles: MediaItem[] = [],
+  trashedFiles: MediaItem[] = []
+): CloudStorageStats {
+  let mediaBytes = 0;
+  let mediaCount = 0;
+  let filesBytes = 0;
+  let filesCount = 0;
+
+  for (const item of activeFiles) {
+    const ext = (item.filename || '').split('.').pop()?.toLowerCase() || '';
+    const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic', 'avif'].includes(ext);
+    const isVid = ['mp4', 'mov', 'webm', 'mkv'].includes(ext);
+    const isMedia = item.isMedia !== undefined ? Boolean(item.isMedia) : isImg || isVid;
+    const sz = Math.max(0, Number(item.size) || 0);
+    if (isMedia) {
+      mediaBytes += sz;
+      mediaCount += 1;
+    } else {
+      filesBytes += sz;
+      filesCount += 1;
+    }
+  }
+
+  let trashBytes = 0;
+  let trashCount = 0;
+  for (const item of trashedFiles) {
+    trashBytes += Math.max(0, Number(item.size) || 0);
+    trashCount += 1;
+  }
+
+  const activeBytes = mediaBytes + filesBytes;
+  const activeCount = mediaCount + filesCount;
+  const grandTotalBytes = activeBytes + trashBytes;
+  const grandTotalCount = activeCount + trashCount;
+
+  const mediaPct = grandTotalBytes > 0 ? Number(((mediaBytes / grandTotalBytes) * 100).toFixed(1)) : 0;
+  const filesPct = grandTotalBytes > 0 ? Number(((filesBytes / grandTotalBytes) * 100).toFixed(1)) : 0;
+  const trashPct = grandTotalBytes > 0 ? Number(((trashBytes / grandTotalBytes) * 100).toFixed(1)) : 0;
+
+  return {
+    mediaBytes,
+    mediaCount,
+    filesBytes,
+    filesCount,
+    activeBytes,
+    activeTotalBytes: activeBytes,
+    activeCount,
+    trashBytes,
+    trashCount,
+    grandTotalBytes,
+    grandTotalCount,
+    mediaPct,
+    filesPct,
+    trashPct,
+    mediaPercent: mediaPct,
+    filesPercent: filesPct,
+    trashPercent: trashPct,
+    mediaFormatted: formatFileSize(mediaBytes),
+    filesFormatted: formatFileSize(filesBytes),
+    activeTotalFormatted: formatFileSize(activeBytes),
+    trashFormatted: formatFileSize(trashBytes),
+    grandTotalFormatted: formatFileSize(grandTotalBytes),
+  };
 }
 
 function getCategoryIcon(category?: string, ext?: string): string {
@@ -58,10 +149,15 @@ export function renderLoginTemplate(): string {
   return renderWithBase(styles, content, scripts);
 }
 
-export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = []): string {
+export function renderGalleryTemplate(
+  allFiles: MediaItem[],
+  albums: string[] = [],
+  trashedFiles: MediaItem[] = []
+): string {
   const filenames = allFiles.map((m) => m.filename);
   const filenamesJson = JSON.stringify(filenames);
   const albumsJson = JSON.stringify(albums);
+  const stats = computeCloudStorageStats(allFiles, trashedFiles);
 
   const emptyHtml =
     allFiles.length === 0
@@ -159,6 +255,11 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
             <div class="header-title-group">
                 <h1 id="main-view-title">Il tuo archivio</h1>
                 <p id="media-count">${allFiles.length} elementi</p>
+                <button type="button" id="cloud-storage-header-badge" class="cloud-storage-badge" title="Memoria usata totale del Cloud (tocca per dettaglio Foto, File e Cestino)" aria-expanded="false">
+                    <span class="material-icons">cloud_done</span>
+                    <span id="cloud-storage-badge-text">Cloud: ${formatFileSize(stats.activeBytes)}</span>
+                    <span id="cloud-storage-trash-dot" class="cloud-storage-trash-dot" style="display: ${stats.trashBytes > 0 ? 'inline-block' : 'none'};" title="Spazio presente anche nel Cestino"></span>
+                </button>
             </div>
             <div class="header-top-controls">
                 <div class="grouping-controls" id="grouping-controls-wrap">
@@ -219,6 +320,51 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
                         </footer>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- CLOUD TOTAL STORAGE BREAKDOWN POPOVER (Opened by tapping the header badge) -->
+        <div id="cloud-storage-popover" class="cloud-storage-popover" style="display: none;" role="region" aria-label="Ripartizione memoria usata del Cloud">
+            <div class="cloud-storage-popover-header">
+                <div>
+                    <span class="cloud-storage-popover-kicker">Memoria Usata Totale del Cloud</span>
+                    <div class="cloud-storage-popover-title-row">
+                        <strong id="popover-storage-active-bytes">${formatFileSize(stats.activeBytes)}</strong>
+                        <span class="cloud-storage-popover-sub" id="popover-storage-grand-total-bytes">(${formatFileSize(stats.grandTotalBytes)} incluso cestino)</span>
+                    </div>
+                </div>
+                <button type="button" class="btn icon" id="close-cloud-storage-popover-btn" title="Chiudi dettaglio memoria" aria-label="Chiudi dettaglio memoria">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+            <div class="cloud-storage-segmented-bar">
+                <div id="popover-bar-media" class="storage-segment segment-media" style="width: ${stats.mediaPct}%;"></div>
+                <div id="popover-bar-files" class="storage-segment segment-files" style="width: ${stats.filesPct}%;"></div>
+                <div id="popover-bar-trash" class="storage-segment segment-trash" style="width: ${stats.trashPct}%;"></div>
+            </div>
+            <div class="cloud-storage-popover-list">
+                <div class="cloud-storage-popover-item">
+                    <span class="storage-item-left"><span class="storage-dot dot-media"></span>Foto e Video (<span id="popover-cat-media-count">${stats.mediaCount}</span>)</span>
+                    <span class="storage-item-right"><strong id="popover-cat-media-bytes">${formatFileSize(stats.mediaBytes)}</strong> • <span id="popover-cat-media-pct">${stats.mediaPct}%</span></span>
+                </div>
+                <div class="cloud-storage-popover-item">
+                    <span class="storage-item-left"><span class="storage-dot dot-files"></span>File Cloud (<span id="popover-cat-files-count">${stats.filesCount}</span>)</span>
+                    <span class="storage-item-right"><strong id="popover-cat-files-bytes">${formatFileSize(stats.filesBytes)}</strong> • <span id="popover-cat-files-pct">${stats.filesPct}%</span></span>
+                </div>
+                <div class="cloud-storage-popover-item">
+                    <span class="storage-item-left"><span class="storage-dot dot-trash"></span>Cestino (<span id="popover-cat-trash-count">${stats.trashCount}</span>)</span>
+                    <span class="storage-item-right"><strong id="popover-cat-trash-bytes">${formatFileSize(stats.trashBytes)}</strong> • <span id="popover-cat-trash-pct">${stats.trashPct}%</span></span>
+                </div>
+            </div>
+            <div class="cloud-storage-popover-actions">
+                <button type="button" class="btn outlined" id="popover-open-settings-btn">
+                    <span class="material-icons">pie_chart</span>
+                    <span>Grafico in Impostazioni</span>
+                </button>
+                <button type="button" class="btn outlined" id="popover-open-trash-btn">
+                    <span class="material-icons">delete_outline</span>
+                    <span>Cestino</span>
+                </button>
             </div>
         </div>
 
@@ -484,8 +630,9 @@ export function renderGalleryTemplate(allFiles: MediaItem[], albums: string[] = 
   return renderWithBase(styles, content, scripts);
 }
 
-export function renderTrashTemplate(trashedFiles: MediaItem[]): string {
+export function renderTrashTemplate(trashedFiles: MediaItem[], activeFiles: MediaItem[] = []): string {
   const styles = `<link rel="stylesheet" href="/static/styles/gallery.css">`;
+  const storageStats = computeCloudStorageStats(activeFiles, trashedFiles);
 
   const emptyBtnHtml =
     trashedFiles.length > 0
@@ -493,6 +640,28 @@ export function renderTrashTemplate(trashedFiles: MediaItem[]): string {
                     <span class="material-icons">delete_sweep</span>
                     Svuota Cestino
                 </button>`
+      : '';
+
+  const trashBannerHtml =
+    trashedFiles.length > 0
+      ? `<div class="trash-storage-banner" id="trash-recoverable-storage-banner" data-trash-bytes="${storageStats.trashBytes}" data-active-bytes="${storageStats.activeTotalBytes}">
+            <div class="trash-storage-banner-info">
+                <div class="trash-storage-banner-icon">
+                    <span class="material-icons">restore_from_trash</span>
+                </div>
+                <div class="trash-storage-banner-text">
+                    <strong>Spazio recuperabile nel Cestino: <span id="trash-banner-size">${storageStats.trashFormatted}</span></strong>
+                    <span><span id="trash-banner-count">${storageStats.trashCount}</span> elementi (${storageStats.trashPercent}% della memoria totale Cloud: ${storageStats.grandTotalFormatted})</span>
+                </div>
+            </div>
+            <div class="trash-storage-banner-bar-wrap">
+                <div class="cloud-storage-segmented-bar">
+                    <div class="storage-segment segment-media" style="width: ${storageStats.mediaPercent}%"></div>
+                    <div class="storage-segment segment-files" style="width: ${storageStats.filesPercent}%"></div>
+                    <div class="storage-segment segment-trash" style="width: ${storageStats.trashPercent}%"></div>
+                </div>
+            </div>
+        </div>`
       : '';
 
   const itemsHtml =
@@ -533,7 +702,7 @@ export function renderTrashTemplate(trashedFiles: MediaItem[]): string {
             }
 
             return `
-                <div class="media-card-wrapper">
+                <div class="media-card-wrapper" data-size="${Number(item.size) || 0}" data-category="${escapeHtml(category)}">
                     <div class="media-card clickable-media" data-filename="${file}">
                         ${mediaTag}
                         <div class="media-actions">
@@ -558,12 +727,17 @@ export function renderTrashTemplate(trashedFiles: MediaItem[]): string {
                 <p id="media-count">${trashedFiles.length} elementi</p>
             </div>
             <div class="header-top-controls">
+                <div class="cloud-storage-badge" id="cloud-storage-header-badge" title="Memoria usata totale del Cloud">
+                    <span class="material-icons cloud-storage-icon">cloud_done</span>
+                    <span class="cloud-storage-badge-label">Cloud: <strong id="cloud-storage-badge-text">${storageStats.activeTotalFormatted}</strong></span>
+                </div>
                 ${emptyBtnHtml}
             </div>
         </div>
     </header>
 
     <div class="gallery-grid">
+        ${trashBannerHtml}
         <div class="media-group">
              <div class="media-group-grid">
                 ${itemsHtml}
@@ -594,3 +768,4 @@ export function renderTrashTemplate(trashedFiles: MediaItem[]): string {
 
   return renderWithBase(styles, content, scripts);
 }
+
