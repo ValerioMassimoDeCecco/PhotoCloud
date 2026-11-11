@@ -245,12 +245,18 @@ update_webapp() {
         esac
     else
         print_info "1/3. Download ultimi aggiornamenti dal repository git (git pull)..."
-        if ! git pull --rebase --autostash; then
-            print_info "Tentativo di allineamento dal branch origin/main..."
-            git pull origin main || {
-                print_error "Errore durante git pull."
-                return 1
-            }
+        # Ripristina file generati o temporanei che potrebbero bloccare il merge su Linux
+        git checkout -- package-lock.json photocloud.bat 2>/dev/null || true
+
+        if ! git pull origin main; then
+            print_warning "git pull ha riscontrato conflitti o modifiche locali. Tentativo con autostash..."
+            if ! git pull --rebase --autostash origin main; then
+                print_warning "Allineamento pulito dal branch origin/main..."
+                git fetch origin main && git reset --hard origin/main || {
+                    print_error "Errore durante git pull."
+                    return 1
+                }
+            fi
         fi
     fi
 
@@ -268,12 +274,26 @@ update_webapp() {
 
     print_success "Aggiornamento completato con successo!"
     echo ""
-    read -rp "Vuoi avviare subito la Web App? [1=Sviluppo, 2=Produzione, Invio=Torna al menu]: " run_now
-    case "${run_now:-}" in
-        1) start_dev ;;
-        2) start_prod ;;
-        *) ;;
-    esac
+    # Se il servizio systemd 'photocloud' è attivo (es. Raspberry Pi), offri di riavviarlo
+    if command -v systemctl &>/dev/null && systemctl is-active --quiet photocloud.service 2>/dev/null; then
+        read -rp "Il servizio di sistema PhotoCloud è in esecuzione. Vuoi riavviarlo per rendere effettive le modifiche? (S/n): " restart_svc
+        case "${restart_svc:-s}" in
+            [sS]*|[yY]*|"")
+                print_info "Riavvio di photocloud.service..."
+                sudo systemctl restart photocloud.service && print_success "Servizio PhotoCloud riavviato con successo!"
+                ;;
+            *)
+                print_info "Servizio non riavviato. Puoi riavviarlo manualmente con: sudo systemctl restart photocloud"
+                ;;
+        esac
+    else
+        read -rp "Vuoi avviare subito la Web App? [1=Sviluppo, 2=Produzione, Invio=Torna al menu]: " run_now
+        case "${run_now:-}" in
+            1) start_dev ;;
+            2) start_prod ;;
+            *) ;;
+        esac
+    fi
 }
 
 # Opzione 1: Avviare la Web App in Sviluppo (Dev)

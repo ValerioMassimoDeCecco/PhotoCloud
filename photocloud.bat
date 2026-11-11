@@ -265,10 +265,15 @@ goto UPDATE_NPM_STEP
 :DO_GIT_PULL
 echo.
 echo [1/3] Scaricamento ultimi aggiornamenti da GitHub (git pull)...
+call git checkout -- package-lock.json photocloud.bat >nul 2>&1
 call git pull --rebase --autostash
 if not errorlevel 1 goto UPDATE_NPM_STEP
 echo [INFO] Tentativo di allineamento dal branch principale (origin/main)...
 call git pull origin main
+if not errorlevel 1 goto UPDATE_NPM_STEP
+echo [INFO] Allineamento forzato da origin/main...
+call git fetch origin main
+call git reset --hard origin/main
 if errorlevel 1 goto GIT_PULL_ERR
 
 :UPDATE_NPM_STEP

@@ -1,6 +1,6 @@
-# Ensure Windows batch scripts always use CRLF so cmd.exe goto/labels never corrupt
-*.bat text eol=crlf
-*.cmd text eol=crlf
+# Batch scripts for Windows: treat as verbatim binary without line-ending normalization
+*.bat -text
+*.cmd -text
 
 # Ensure shell scripts always use LF
 *.sh text eol=lf
