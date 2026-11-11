@@ -863,6 +863,7 @@ test('Release v1.2.9: Pause/Resume & Delete transfers, Pre-Transfer Choice Modal
   );
   assert.ok(apiClientKt.includes('enum class TransferPackagingMode'));
   assert.ok(apiClientKt.includes('enum class DownloadDirectoryMode'));
+  assert.ok(apiClientKt.includes('val description: String = defaultRelPath'));
   assert.ok(apiClientKt.includes('class TransferControlHandle'));
   assert.ok(apiClientKt.includes('fun pauseTransfer(opId: String)'));
   assert.ok(apiClientKt.includes('fun resumeTransfer(opId: String)'));
@@ -876,6 +877,21 @@ test('Release v1.2.9: Pause/Resume & Delete transfers, Pre-Transfer Choice Modal
     path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
     'utf-8'
   );
+  assert.ok(mainActivityKt.includes('import android.content.Intent'));
+  assert.ok(mainActivityKt.includes('import androidx.compose.material.icons.filled.FolderOpen'));
+  assert.ok(mainActivityKt.includes('import androidx.compose.material.icons.filled.PauseCircleOutline'));
+  assert.equal(mainActivityKt.includes('dirModeOverride ='), false);
+  assert.equal(mainActivityKt.includes('subfolderOverride ='), false);
+
+  // Verify every Icons.Default.<Icon> used in MainActivity.kt is imported
+  const importedFilledIcons = new Set(
+    [...mainActivityKt.matchAll(/import androidx\.compose\.material\.icons\.filled\.([A-Za-z0-9_]+)/g)].map(m => m[1])
+  );
+  const usedFilledIcons = [...new Set([...mainActivityKt.matchAll(/Icons\.Default\.([A-Za-z0-9_]+)/g)].map(m => m[1]))];
+  for (const iconName of usedFilledIcons) {
+    assert.ok(importedFilledIcons.has(iconName), `Missing import for Icons.Default.${iconName} in MainActivity.kt`);
+  }
+
   assert.ok(mainActivityKt.includes('sealed class PendingTransferRequest'));
   assert.ok(mainActivityKt.includes('fun PreTransferOptionsDialog('));
   assert.ok(mainActivityKt.includes('fun togglePauseTransferOperation(op: TransferOperation)'));

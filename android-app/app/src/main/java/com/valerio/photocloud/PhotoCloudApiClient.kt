@@ -96,41 +96,53 @@ enum class TransferPackagingMode(val storageKey: String, val label: String, val 
     }
 }
 
-enum class DownloadDirectoryMode(val storageKey: String, val label: String, val defaultRelPath: String) {
+enum class DownloadDirectoryMode(
+    val storageKey: String,
+    val label: String,
+    val defaultRelPath: String,
+    val description: String = defaultRelPath
+) {
     AUTO_BY_TYPE(
         "auto_by_type",
         "Default automatico in base al tipo",
-        "Auto (Foto → Immagini, Video → Film, Audio → Musica, File → Download)"
+        "Auto (Foto → Immagini, Video → Film, Audio → Musica, File → Download)",
+        "Foto in Immagini, Video in Film, Audio in Musica e File in Download"
     ),
     PICTURES(
         "pictures",
         "Immagini (Pictures/PhotoCloud)",
-        "Pictures/PhotoCloud"
+        "Pictures/PhotoCloud",
+        "Salva nella cartella Immagini del dispositivo (Pictures/PhotoCloud)"
     ),
     MOVIES(
         "movies",
         "Video (Movies/PhotoCloud)",
-        "Movies/PhotoCloud"
+        "Movies/PhotoCloud",
+        "Salva nella cartella Video del dispositivo (Movies/PhotoCloud)"
     ),
     MUSIC(
         "music",
         "Musica (Music/PhotoCloud)",
-        "Music/PhotoCloud"
+        "Music/PhotoCloud",
+        "Salva nella cartella Musica del dispositivo (Music/PhotoCloud)"
     ),
     DOCUMENTS(
         "documents",
         "Documenti (Documents/PhotoCloud)",
-        "Documents/PhotoCloud"
+        "Documents/PhotoCloud",
+        "Salva nella cartella Documenti del dispositivo (Documents/PhotoCloud)"
     ),
     DOWNLOADS(
         "downloads",
         "Download (Download/PhotoCloud)",
-        "Download/PhotoCloud"
+        "Download/PhotoCloud",
+        "Salva nella cartella Download del dispositivo (Download/PhotoCloud)"
     ),
     CUSTOM_FOLDER(
         "custom_folder",
         "Cartella personalizzata",
-        "Download/PhotoCloud"
+        "Download/PhotoCloud",
+        "Usa la cartella o sottocartella personalizzata scelta dall'utente"
     );
 
     companion object {

@@ -3,6 +3,7 @@ package com.valerio.photocloud
 import android.Manifest
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -92,6 +93,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Key
@@ -99,6 +101,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.ManageSearch
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PauseCircleOutline
 import androidx.compose.material.icons.filled.PhotoAlbum
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
@@ -1968,7 +1971,7 @@ fun NativeVaultScreen(
     ) { treeUri: Uri? ->
         if (treeUri != null) {
             try {
-                val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                val takeFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 localContext.contentResolver.takePersistableUriPermission(treeUri, takeFlags)
             } catch (_: Exception) {
             }
@@ -3725,8 +3728,8 @@ fun NativeVaultScreen(
                             filenames = req.filenames,
                             fromTrash = req.fromTrash,
                             archiveAsZip = archiveAsZip,
-                            dirModeOverride = selectedDirMode,
-                            subfolderOverride = customSubfolder
+                            directoryMode = selectedDirMode,
+                            customSubfolder = customSubfolder
                         )
                     }
                 },
