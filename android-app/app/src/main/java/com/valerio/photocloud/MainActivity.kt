@@ -290,15 +290,36 @@ data class CustomizationState(
     val biometricEnabled: Boolean = true,
     val lockOnBackground: Boolean = false,
     val secureScreenFlag: Boolean = false,
-    val maxParallelTransfers: Int = 3
+    val maxParallelTransfers: Int = 3,
+    val uploadPackagingMode: TransferPackagingMode = TransferPackagingMode.ASK_ALWAYS,
+    val downloadPackagingMode: TransferPackagingMode = TransferPackagingMode.ASK_ALWAYS,
+    val downloadDirectoryMode: DownloadDirectoryMode = DownloadDirectoryMode.AUTO_BY_TYPE,
+    val photoDownloadDirMode: DownloadDirectoryMode = DownloadDirectoryMode.PICTURES,
+    val videoDownloadDirMode: DownloadDirectoryMode = DownloadDirectoryMode.MOVIES,
+    val fileDownloadDirMode: DownloadDirectoryMode = DownloadDirectoryMode.DOWNLOADS,
+    val customDownloadSubfolder: String = "PhotoCloud",
+    val customSafTreeUri: String = ""
 )
 
+sealed class PendingTransferRequest {
+    data class Upload(
+        val uris: List<Uri>,
+        val targetAlbum: String
+    ) : PendingTransferRequest()
+
+    data class Download(
+        val filenames: List<String>,
+        val fromTrash: Boolean
+    ) : PendingTransferRequest()
+}
+
 /**
- * PhotoCloud 100% Native Android Client v1.1.5
+ * PhotoCloud 100% Native Android Client v1.2.9
  * - Drag-to-Select Multiple Media in LazyVerticalGrid & SelectionActionsPanel
  * - Lightbox Gesture Navigation with HorizontalPager, Swipe-to-Dismiss, Double-Tap Zoom & Coherent Slide Transitions
  * - Cloud File Manager for non-media files (PDF, ZIP, APK, Docs, Audio, Code, etc.)
- * - Top-Right Upload/Download Transfer Center with floating operations menu (real-time speed, size, progress)
+ * - Top-Right Upload/Download Transfer Center with floating operations menu (real-time speed, size, progress, Pause/Resume & Delete)
+ * - Pre-Transfer Choice Dialog (Direct to Storage vs .zip Archive + Configurable Download Directory per Category or Custom Folder)
  * - Media & File Grouping by Album (create, assign, filter, delete albums)
  * - 0ms Instant Startup (Synchronous cookie/cache hydration, zero loading circle)
  * - Full Settings & Customization Menu + Dual App Icon Support (Color & B/W)
@@ -457,16 +478,50 @@ class MainActivity : FragmentActivity() {
                         biometricEnabled = prefs.getBoolean("biometric_enabled", true),
                         lockOnBackground = prefs.getBoolean("lock_on_background", false),
                         secureScreenFlag = prefs.getBoolean("secure_screen_flag", false),
-                        maxParallelTransfers = prefs.getInt("max_parallel_transfers", 3).coerceIn(1, 16)
+                        maxParallelTransfers = prefs.getInt("max_parallel_transfers", 3).coerceIn(1, 16),
+                        uploadPackagingMode = TransferPackagingMode.fromKey(
+                            prefs.getString("default_upload_packaging_mode", TransferPackagingMode.ASK_ALWAYS.storageKey)
+                        ),
+                        downloadPackagingMode = TransferPackagingMode.fromKey(
+                            prefs.getString("default_download_packaging_mode", TransferPackagingMode.ASK_ALWAYS.storageKey)
+                        ),
+                        downloadDirectoryMode = DownloadDirectoryMode.fromKey(
+                            prefs.getString("download_dir_mode", DownloadDirectoryMode.AUTO_BY_TYPE.storageKey)
+                        ),
+                        photoDownloadDirMode = DownloadDirectoryMode.fromKey(
+                            prefs.getString("photo_download_dir_mode", DownloadDirectoryMode.PICTURES.storageKey)
+                        ),
+                        videoDownloadDirMode = DownloadDirectoryMode.fromKey(
+                            prefs.getString("video_download_dir_mode", DownloadDirectoryMode.MOVIES.storageKey)
+                        ),
+                        fileDownloadDirMode = DownloadDirectoryMode.fromKey(
+                            prefs.getString("file_download_dir_mode", DownloadDirectoryMode.DOWNLOADS.storageKey)
+                        ),
+                        customDownloadSubfolder = PhotoCloudApiClient.sanitizeSubfolderName(
+                            prefs.getString("custom_download_subfolder", "PhotoCloud") ?: "PhotoCloud"
+                        ),
+                        customSafTreeUri = prefs.getString("custom_saf_tree_uri", "") ?: ""
                     )
                 )
             }
 
             fun updateCustom(newState: CustomizationState) {
                 val safeParallel = newState.maxParallelTransfers.coerceIn(1, 16)
-                val normalized = newState.copy(maxParallelTransfers = safeParallel)
+                val safeSubfolder = PhotoCloudApiClient.sanitizeSubfolderName(newState.customDownloadSubfolder)
+                val normalized = newState.copy(
+                    maxParallelTransfers = safeParallel,
+                    customDownloadSubfolder = safeSubfolder
+                )
                 custom = normalized
                 apiClient.setMaxParallelTransfers(safeParallel)
+                apiClient.setDefaultUploadPackagingMode(normalized.uploadPackagingMode)
+                apiClient.setDefaultDownloadPackagingMode(normalized.downloadPackagingMode)
+                apiClient.setDownloadDirectoryMode(normalized.downloadDirectoryMode)
+                apiClient.setPhotoDownloadDirMode(normalized.photoDownloadDirMode)
+                apiClient.setVideoDownloadDirMode(normalized.videoDownloadDirMode)
+                apiClient.setFileDownloadDirMode(normalized.fileDownloadDirMode)
+                apiClient.setCustomDownloadSubfolder(safeSubfolder)
+                apiClient.setCustomSafTreeUri(normalized.customSafTreeUri)
                 LiquidGlassConfigStore.saveDesignTheme(prefs, normalized.designThemeMode)
                 LiquidGlassConfigStore.saveConfig(prefs, normalized.liquidGlassConfig)
                 prefs.edit()
@@ -491,6 +546,14 @@ class MainActivity : FragmentActivity() {
                     .putBoolean("lock_on_background", normalized.lockOnBackground)
                     .putBoolean("secure_screen_flag", normalized.secureScreenFlag)
                     .putInt("max_parallel_transfers", safeParallel)
+                    .putString("default_upload_packaging_mode", normalized.uploadPackagingMode.storageKey)
+                    .putString("default_download_packaging_mode", normalized.downloadPackagingMode.storageKey)
+                    .putString("download_dir_mode", normalized.downloadDirectoryMode.storageKey)
+                    .putString("photo_download_dir_mode", normalized.photoDownloadDirMode.storageKey)
+                    .putString("video_download_dir_mode", normalized.videoDownloadDirMode.storageKey)
+                    .putString("file_download_dir_mode", normalized.fileDownloadDirMode.storageKey)
+                    .putString("custom_download_subfolder", safeSubfolder)
+                    .putString("custom_saf_tree_uri", normalized.customSafTreeUri)
                     .apply()
             }
 
@@ -1601,6 +1664,7 @@ fun NativeVaultScreen(
     var transferOperations by remember { mutableStateOf<List<TransferOperation>>(emptyList()) }
     var showTransferPopup by remember { mutableStateOf(false) }
     var hadRunningTransfers by remember { mutableStateOf(false) }
+    var pendingTransferRequest by remember { mutableStateOf<PendingTransferRequest?>(null) }
     val transferOpsLock = remember { Any() }
 
     fun upsertTransferOperation(op: TransferOperation) {
@@ -1616,11 +1680,43 @@ fun NativeVaultScreen(
         }
     }
 
+    fun togglePauseTransferOperation(op: TransferOperation) {
+        if (op.status == TransferStatus.RUNNING) {
+            if (apiClient.pauseTransfer(op.id)) {
+                upsertTransferOperation(
+                    op.copy(
+                        status = TransferStatus.PAUSED,
+                        speedBytesPerSec = 0L,
+                        detail = "In pausa",
+                        updatedAtMs = System.currentTimeMillis()
+                    )
+                )
+            }
+        } else if (op.status == TransferStatus.PAUSED) {
+            if (apiClient.resumeTransfer(op.id)) {
+                upsertTransferOperation(
+                    op.copy(
+                        status = TransferStatus.RUNNING,
+                        detail = "Ripresa in corso...",
+                        updatedAtMs = System.currentTimeMillis()
+                    )
+                )
+            }
+        }
+    }
+
+    fun deleteTransferOperation(op: TransferOperation) {
+        apiClient.cancelTransfer(op.id)
+        synchronized(transferOpsLock) {
+            transferOperations = transferOperations.filterNot { it.id == op.id }
+        }
+    }
+
     val activeRunningOps = remember(transferOperations) {
-        transferOperations.filter { it.status == TransferStatus.RUNNING }
+        transferOperations.filter { it.status == TransferStatus.RUNNING || it.status == TransferStatus.PAUSED }
     }
     val totalLiveSpeed = remember(activeRunningOps) {
-        activeRunningOps.sumOf { it.speedBytesPerSec }
+        activeRunningOps.filter { it.status == TransferStatus.RUNNING }.sumOf { it.speedBytesPerSec }
     }
     val overallProgressFraction = remember(activeRunningOps) {
         val totalB = activeRunningOps.sumOf { it.totalBytes }
@@ -1634,7 +1730,7 @@ fun NativeVaultScreen(
             hadRunningTransfers = true
         } else if (hadRunningTransfers) {
             delay(600)
-            if (transferOperations.none { it.status == TransferStatus.RUNNING }) {
+            if (transferOperations.none { it.status == TransferStatus.RUNNING || it.status == TransferStatus.PAUSED }) {
                 showTransferPopup = false
                 hadRunningTransfers = false
             }
@@ -1786,25 +1882,112 @@ fun NativeVaultScreen(
         }
     }
 
+    fun executeUploadTransfer(
+        uris: List<Uri>,
+        targetAlbum: String,
+        archiveAsZip: Boolean,
+        archiveName: String = ""
+    ) {
+        val parallelLimit = custom.maxParallelTransfers.coerceIn(1, 16)
+        scope.launch {
+            val (ok, msg) = apiClient.uploadMediaUris(
+                uris = uris,
+                targetAlbum = targetAlbum,
+                maxParallelTransfers = parallelLimit,
+                archiveAsZip = archiveAsZip,
+                archiveName = archiveName,
+                onTransferUpdate = { op -> upsertTransferOperation(op) }
+            )
+            onShowInfo(msg)
+            if (ok) {
+                onRefresh()
+            }
+        }
+    }
+
+    fun executeDownloadTransfer(
+        filenames: List<String>,
+        fromTrash: Boolean,
+        archiveAsZip: Boolean,
+        directoryMode: DownloadDirectoryMode = custom.downloadDirectoryMode,
+        customSubfolder: String = custom.customDownloadSubfolder,
+        customTreeUri: String = custom.customSafTreeUri
+    ) {
+        val parallelLimit = custom.maxParallelTransfers.coerceIn(1, 16)
+        scope.launch {
+            val (_, msg) = if (archiveAsZip) {
+                apiClient.downloadZipToDevice(
+                    filenames = filenames,
+                    directoryMode = directoryMode,
+                    customSubfolder = customSubfolder,
+                    customTreeUri = customTreeUri,
+                    onTransferUpdate = { op -> upsertTransferOperation(op) }
+                )
+            } else {
+                apiClient.downloadMultipleDirectToDevice(
+                    filenames = filenames,
+                    fromTrash = fromTrash,
+                    directoryMode = directoryMode,
+                    photoDirMode = custom.photoDownloadDirMode,
+                    videoDirMode = custom.videoDownloadDirMode,
+                    fileDirMode = custom.fileDownloadDirMode,
+                    customSubfolder = customSubfolder,
+                    customTreeUri = customTreeUri,
+                    maxParallelTransfers = parallelLimit,
+                    onTransferUpdate = { op -> upsertTransferOperation(op) }
+                )
+            }
+            onShowInfo(msg)
+        }
+    }
+
+    fun startOrPromptUpload(uris: List<Uri>, targetAlbum: String) {
+        if (uris.isEmpty()) return
+        when (custom.uploadPackagingMode) {
+            TransferPackagingMode.DIRECT_FILES -> executeUploadTransfer(uris, targetAlbum, archiveAsZip = false)
+            TransferPackagingMode.ZIP_ARCHIVE -> executeUploadTransfer(uris, targetAlbum, archiveAsZip = true)
+            TransferPackagingMode.ASK_ALWAYS -> {
+                pendingTransferRequest = PendingTransferRequest.Upload(uris = uris, targetAlbum = targetAlbum)
+            }
+        }
+    }
+
+    fun startOrPromptDownload(filenames: List<String>, fromTrash: Boolean) {
+        if (filenames.isEmpty()) return
+        when (custom.downloadPackagingMode) {
+            TransferPackagingMode.DIRECT_FILES -> executeDownloadTransfer(filenames, fromTrash, archiveAsZip = false)
+            TransferPackagingMode.ZIP_ARCHIVE -> executeDownloadTransfer(filenames, fromTrash, archiveAsZip = true)
+            TransferPackagingMode.ASK_ALWAYS -> {
+                pendingTransferRequest = PendingTransferRequest.Download(filenames = filenames, fromTrash = fromTrash)
+            }
+        }
+    }
+
+    val safFolderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri: Uri? ->
+        if (treeUri != null) {
+            try {
+                val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                localContext.contentResolver.takePersistableUriPermission(treeUri, takeFlags)
+            } catch (_: Exception) {
+            }
+            onUpdateCustom(
+                custom.copy(
+                    downloadDirectoryMode = DownloadDirectoryMode.CUSTOM_FOLDER,
+                    customSafTreeUri = treeUri.toString()
+                )
+            )
+            onShowInfo("Cartella di scaricamento personalizzata selezionata")
+        }
+    }
+
     val uploadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
-            // Do NOT auto-open showTransferPopup; discreet icon appears automatically
             val targetAlb = selectedAlbumFilter ?: ""
-            val parallelLimit = custom.maxParallelTransfers.coerceIn(1, 16)
-            scope.launch {
-                val (ok, msg) = apiClient.uploadMediaUris(
-                    uris = uris,
-                    targetAlbum = targetAlb,
-                    maxParallelTransfers = parallelLimit,
-                    onTransferUpdate = { op -> upsertTransferOperation(op) }
-                )
-                onShowInfo(msg)
-                if (ok) {
-                    onRefresh()
-                }
-            }
+            startOrPromptUpload(uris, targetAlb)
         }
     }
 
@@ -2776,7 +2959,8 @@ fun NativeVaultScreen(
                                 },
                                 onLockNow = onLockNow,
                                 onLogout = onLogout,
-                                onShowInfo = onShowInfo
+                                onShowInfo = onShowInfo,
+                                onPickCustomSafFolder = { safFolderPickerLauncher.launch(null) }
                             )
                         }
                     }
@@ -2812,14 +2996,10 @@ fun NativeVaultScreen(
                                     openCloudItemWithExternalChooser(item)
                                 },
                                 onDownloadFile = { item ->
-                                    scope.launch {
-                                        val (_, msg) = apiClient.saveSingleMediaToDownloads(
-                                            filename = item.filename,
-                                            fromTrash = false,
-                                            onTransferUpdate = { op -> upsertTransferOperation(op) }
-                                        )
-                                        onShowInfo(msg)
-                                    }
+                                    startOrPromptDownload(
+                                        filenames = listOf(item.filename),
+                                        fromTrash = false
+                                    )
                                 },
                                 onUploadFilesClick = {
                                     uploadLauncher.launch("*/*")
@@ -2969,8 +3149,12 @@ fun NativeVaultScreen(
             TransferOperationsFloatingCard(
                 operations = transferOperations,
                 totalLiveSpeed = totalLiveSpeed,
+                onTogglePause = { op -> togglePauseTransferOperation(op) },
+                onDeleteOperation = { op -> deleteTransferOperation(op) },
                 onClearFinished = {
-                    transferOperations = transferOperations.filter { it.status == TransferStatus.RUNNING }
+                    transferOperations = transferOperations.filter {
+                        it.status == TransferStatus.RUNNING || it.status == TransferStatus.PAUSED
+                    }
                 },
                 onClose = { showTransferPopup = false }
             )
@@ -3012,23 +3196,11 @@ fun NativeVaultScreen(
                     },
                     onDownload = {
                         val toDownload = selectedFilenames.toList()
-                        scope.launch {
-                            if (toDownload.size == 1) {
-                                val (_, msg) = apiClient.saveSingleMediaToDownloads(
-                                    filename = toDownload.first(),
-                                    fromTrash = false,
-                                    onTransferUpdate = { op -> upsertTransferOperation(op) }
-                                )
-                                onShowInfo(msg)
-                            } else {
-                                val (_, msg) = apiClient.downloadZipToDevice(
-                                    filenames = toDownload,
-                                    onTransferUpdate = { op -> upsertTransferOperation(op) }
-                                )
-                                onShowInfo(msg)
-                            }
-                            selectedFilenames = emptySet()
-                        }
+                        selectedFilenames = emptySet()
+                        startOrPromptDownload(
+                            filenames = toDownload,
+                            fromTrash = false
+                        )
                     },
                     onTrash = {
                         val toTrash = selectedFilenames.toList()
@@ -3292,14 +3464,10 @@ fun NativeVaultScreen(
                     }
                 },
                 onDownload = { filename ->
-                    scope.launch {
-                        val (_, msg) = apiClient.saveSingleMediaToDownloads(
-                            filename = filename,
-                            fromTrash = isFromTrash,
-                            onTransferUpdate = { op -> upsertTransferOperation(op) }
-                        )
-                        onShowInfo(msg)
-                    }
+                    startOrPromptDownload(
+                        filenames = listOf(filename),
+                        fromTrash = isFromTrash
+                    )
                 }
             )
         }
@@ -3332,14 +3500,10 @@ fun NativeVaultScreen(
                     openCloudItemWithExternalChooser(docTargetItem)
                 },
                 onDownloadToDevice = {
-                    scope.launch {
-                        val (_, msg) = apiClient.saveSingleMediaToDownloads(
-                            filename = docTargetItem.filename,
-                            fromTrash = isFromTrash,
-                            onTransferUpdate = { op -> upsertTransferOperation(op) }
-                        )
-                        onShowInfo(msg)
-                    }
+                    startOrPromptDownload(
+                        filenames = listOf(docTargetItem.filename),
+                        fromTrash = isFromTrash
+                    )
                 },
                 onTransferUpdate = { op -> upsertTransferOperation(op) }
             )
@@ -3353,7 +3517,7 @@ fun NativeVaultScreen(
                 title = { Text("Nessuna app compatibile trovata", fontWeight = FontWeight.Bold) },
                 text = {
                     Text(
-                        "Sul dispositivo non risultano installate applicazioni compatibili per aprire direttamente \"${fallbackItem.filename}\". Vuoi scaricare manualmente il file nella cartella Download?"
+                        "Sul dispositivo non risultano installate applicazioni compatibili per aprire direttamente \"${fallbackItem.filename}\". Vuoi scaricare manualmente il file nella memoria del dispositivo?"
                     )
                 },
                 confirmButton = {
@@ -3361,19 +3525,15 @@ fun NativeVaultScreen(
                         onClick = {
                             val target = fallbackItem
                             externalFallbackItem = null
-                            scope.launch {
-                                val (_, msg) = apiClient.saveSingleMediaToDownloads(
-                                    filename = target.filename,
-                                    fromTrash = isFromTrash,
-                                    onTransferUpdate = { op -> upsertTransferOperation(op) }
-                                )
-                                onShowInfo(msg)
-                            }
+                            startOrPromptDownload(
+                                filenames = listOf(target.filename),
+                                fromTrash = isFromTrash
+                            )
                         }
                     ) {
                         Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Scarica in Download")
+                        Text("Scarica")
                     }
                 },
                 dismissButton = {
@@ -3537,17 +3697,370 @@ fun NativeVaultScreen(
                 onDismiss = { showCloudStorageDialog = false }
             )
         }
+
+        val activePendingTransfer = pendingTransferRequest
+        if (activePendingTransfer != null) {
+            PreTransferOptionsDialog(
+                request = activePendingTransfer,
+                custom = custom,
+                onUpdateCustom = onUpdateCustom,
+                onPickSafFolder = { safFolderPickerLauncher.launch(null) },
+                onConfirmUpload = { archiveAsZip, archiveName ->
+                    val req = activePendingTransfer as? PendingTransferRequest.Upload
+                    pendingTransferRequest = null
+                    if (req != null) {
+                        executeUploadTransfer(
+                            uris = req.uris,
+                            targetAlbum = req.targetAlbum,
+                            archiveAsZip = archiveAsZip,
+                            archiveName = archiveName
+                        )
+                    }
+                },
+                onConfirmDownload = { archiveAsZip, selectedDirMode, customSubfolder ->
+                    val req = activePendingTransfer as? PendingTransferRequest.Download
+                    pendingTransferRequest = null
+                    if (req != null) {
+                        executeDownloadTransfer(
+                            filenames = req.filenames,
+                            fromTrash = req.fromTrash,
+                            archiveAsZip = archiveAsZip,
+                            dirModeOverride = selectedDirMode,
+                            subfolderOverride = customSubfolder
+                        )
+                    }
+                },
+                onDismiss = { pendingTransferRequest = null }
+            )
+        }
     }
 }
 
 /**
+ * Dialog shown at the start of an upload or download allowing the user to choose:
+ * 1. Direct transfer of individual files vs. packaging into a single .zip archive
+ * 2. Target download directory mode (Auto by type: Pictures/Movies/Download, or specific/custom folder)
+ */
+@Composable
+fun PreTransferOptionsDialog(
+    request: PendingTransferRequest,
+    custom: CustomizationState,
+    onUpdateCustom: (CustomizationState) -> Unit,
+    onPickSafFolder: () -> Unit,
+    onConfirmUpload: (archiveAsZip: Boolean, archiveName: String) -> Unit,
+    onConfirmDownload: (archiveAsZip: Boolean, dirMode: DownloadDirectoryMode, customSubfolder: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isUpload = request is PendingTransferRequest.Upload
+    val count = when (request) {
+        is PendingTransferRequest.Upload -> request.uris.size
+        is PendingTransferRequest.Download -> request.filenames.size
+    }
+
+    var archiveAsZip by remember(request) {
+        mutableStateOf(
+            when (request) {
+                is PendingTransferRequest.Upload -> custom.uploadPackagingMode == TransferPackagingMode.ZIP_ARCHIVE
+                is PendingTransferRequest.Download -> custom.downloadPackagingMode == TransferPackagingMode.ZIP_ARCHIVE
+            }
+        )
+    }
+    var customArchiveName by remember(request) {
+        mutableStateOf("PhotoCloud_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ITALIAN).format(Date())}.zip")
+    }
+    var selectedDirMode by remember(custom.downloadDirectoryMode) {
+        mutableStateOf(custom.downloadDirectoryMode)
+    }
+    var customSubfolderText by remember(custom.customDownloadSubfolder) {
+        mutableStateOf(custom.customDownloadSubfolder)
+    }
+    var rememberChoice by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Icon(
+                    imageVector = if (isUpload) Icons.Default.CloudUpload else Icons.Default.CloudDownload,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column {
+                    Text(
+                        text = if (isUpload) "Modalità di Caricamento" else "Modalità e Directory di Scaricamento",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "$count ${if (count == 1) "elemento selezionato" else "elementi selezionati"}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = if (isUpload) {
+                        "Scegli se trasferire i media direttamente nella cassaforte Cloud oppure raggrupparli in un unico archivio .zip:"
+                    } else {
+                        "Scegli se trasferire i media direttamente nella memoria del dispositivo oppure scaricarli come archivio .zip:"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // Option 1: Direct to storage
+                Surface(
+                    onClick = { archiveAsZip = false },
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (!archiveAsZip) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            width = if (!archiveAsZip) 2.dp else 1.dp,
+                            color = if (!archiveAsZip) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        RadioButton(
+                            selected = !archiveAsZip,
+                            onClick = { archiveAsZip = false }
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Direttamente in memoria (File Singoli)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (isUpload) {
+                                    "Carica ogni foto, video o file singolarmente con streaming parallelo"
+                                } else {
+                                    "Salva ogni foto, video o documento direttamente nelle cartelle del dispositivo"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // Option 2: .zip Archive
+                Surface(
+                    onClick = { archiveAsZip = true },
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (archiveAsZip) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            width = if (archiveAsZip) 2.dp else 1.dp,
+                            color = if (archiveAsZip) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(16.dp)
+                        )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        RadioButton(
+                            selected = archiveAsZip,
+                            onClick = { archiveAsZip = true }
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Crea Archivio (.zip)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (isUpload) {
+                                    "Comprimi tutti gli elementi selezionati in un unico pacchetto .zip prima dell'invio"
+                                } else {
+                                    "Raggruppa tutti gli elementi selezionati in un unico archivio .zip"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                if (isUpload && archiveAsZip) {
+                    OutlinedTextField(
+                        value = customArchiveName,
+                        onValueChange = { customArchiveName = it },
+                        singleLine = true,
+                        label = { Text("Nome archivio .zip") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                if (!isUpload) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    Text(
+                        text = "Directory di Scaricamento",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Scegli dove salvare i file sul dispositivo (default automatico per tipo oppure cartella specifica):",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    DownloadDirectoryMode.entries.forEach { mode ->
+                        Surface(
+                            onClick = { selectedDirMode = mode },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (selectedDirMode == mode) {
+                                MaterialTheme.colorScheme.secondaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                RadioButton(
+                                    selected = selectedDirMode == mode,
+                                    onClick = { selectedDirMode = mode }
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = mode.label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = mode.description,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = customSubfolderText,
+                        onValueChange = { customSubfolderText = it },
+                        singleLine = true,
+                        label = { Text("Sottocartella (es. PhotoCloud o PhotoCloud/Vacanze)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (selectedDirMode == DownloadDirectoryMode.CUSTOM_FOLDER) {
+                        OutlinedButton(
+                            onClick = onPickSafFolder,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                if (custom.customSafTreeUri.isNotBlank()) "Cambia Cartella Dispositivo (SAF)"
+                                else "Scegli Cartella Dispositivo (SAF)"
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { rememberChoice = !rememberChoice }
+                        .padding(vertical = 2.dp)
+                ) {
+                    Checkbox(
+                        checked = rememberChoice,
+                        onCheckedChange = { rememberChoice = it }
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "Ricorda questa modalità come predefinita (modificabile in Impostazioni)",
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val chosenMode = if (archiveAsZip) TransferPackagingMode.ZIP_ARCHIVE else TransferPackagingMode.DIRECT_FILES
+                    if (isUpload) {
+                        if (rememberChoice) {
+                            onUpdateCustom(custom.copy(uploadPackagingMode = chosenMode))
+                        }
+                        onConfirmUpload(archiveAsZip, customArchiveName)
+                    } else {
+                        val cleanSub = PhotoCloudApiClient.sanitizeSubfolderName(customSubfolderText)
+                        onUpdateCustom(
+                            custom.copy(
+                                downloadPackagingMode = if (rememberChoice) chosenMode else custom.downloadPackagingMode,
+                                downloadDirectoryMode = selectedDirMode,
+                                customDownloadSubfolder = cleanSub
+                            )
+                        )
+                        onConfirmDownload(archiveAsZip, selectedDirMode, cleanSub)
+                    }
+                }
+            ) {
+                Icon(
+                    imageVector = if (isUpload) Icons.Default.CloudUpload else Icons.Default.Download,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(if (isUpload) "Avvia Caricamento" else "Avvia Scaricamento")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Annulla")
+            }
+        }
+    )
+}
+
+/**
  * Floating Transfer Operations Menu anchored in the top-right, displaying all active & recent
- * uploads/downloads with real-time speed (KB/s, MB/s), transferred/total size, and progress bars.
+ * uploads/downloads with real-time speed (KB/s, MB/s), transferred/total size, progress bars,
+ * and individual Pause/Resume & Delete/Cancel buttons.
  */
 @Composable
 fun TransferOperationsFloatingCard(
     operations: List<TransferOperation>,
     totalLiveSpeed: Long,
+    onTogglePause: (TransferOperation) -> Unit,
+    onDeleteOperation: (TransferOperation) -> Unit,
     onClearFinished: () -> Unit,
     onClose: () -> Unit
 ) {
@@ -3557,7 +4070,7 @@ fun TransferOperationsFloatingCard(
         tonalElevation = 10.dp,
         shadowElevation = 20.dp,
         modifier = Modifier
-            .widthIn(max = 390.dp)
+            .widthIn(max = 400.dp)
             .fillMaxWidth()
             .border(
                 width = 1.dp,
@@ -3600,7 +4113,7 @@ fun TransferOperationsFloatingCard(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (operations.any { it.status != TransferStatus.RUNNING }) {
+                    if (operations.any { it.status != TransferStatus.RUNNING && it.status != TransferStatus.PAUSED }) {
                         TextButton(
                             onClick = onClearFinished,
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
@@ -3643,7 +4156,7 @@ fun TransferOperationsFloatingCard(
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.heightIn(max = 320.dp),
+                    modifier = Modifier.heightIn(max = 340.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(operations, key = { it.id }) { op ->
@@ -3668,6 +4181,7 @@ fun TransferOperationsFloatingCard(
                                                 TransferStatus.COMPLETED -> Icons.Default.CheckCircle
                                                 TransferStatus.ERROR -> Icons.Default.ErrorOutline
                                                 TransferStatus.CANCELLED -> Icons.Default.Close
+                                                TransferStatus.PAUSED -> Icons.Default.PauseCircleOutline
                                                 TransferStatus.RUNNING -> if (op.isUpload) Icons.Default.CloudUpload else Icons.Default.CloudDownload
                                             },
                                             contentDescription = null,
@@ -3675,6 +4189,7 @@ fun TransferOperationsFloatingCard(
                                                 TransferStatus.COMPLETED -> MaterialTheme.colorScheme.primary
                                                 TransferStatus.ERROR -> MaterialTheme.colorScheme.error
                                                 TransferStatus.CANCELLED -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                TransferStatus.PAUSED -> Color(0xFFF59E0B)
                                                 TransferStatus.RUNNING -> MaterialTheme.colorScheme.tertiary
                                             },
                                             modifier = Modifier.size(18.dp)
@@ -3688,23 +4203,67 @@ fun TransferOperationsFloatingCard(
                                         )
                                     }
 
-                                    Spacer(Modifier.width(8.dp))
+                                    Spacer(Modifier.width(6.dp))
 
-                                    Surface(
-                                        shape = CircleShape,
-                                        color = MaterialTheme.colorScheme.secondaryContainer
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
-                                        Text(
-                                            text = if (op.status == TransferStatus.RUNNING && op.speedBytesPerSec > 0L) {
-                                                PhotoCloudApiClient.formatSpeedHuman(op.speedBytesPerSec)
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = if (op.status == TransferStatus.PAUSED) {
+                                                Color(0xFFF59E0B).copy(alpha = 0.2f)
                                             } else {
-                                                "${op.percentInt}%"
-                                            },
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                        )
+                                                MaterialTheme.colorScheme.secondaryContainer
+                                            }
+                                        ) {
+                                            Text(
+                                                text = when {
+                                                    op.status == TransferStatus.PAUSED -> "In pausa • ${op.percentInt}%"
+                                                    op.status == TransferStatus.RUNNING && op.speedBytesPerSec > 0L ->
+                                                        PhotoCloudApiClient.formatSpeedHuman(op.speedBytesPerSec)
+                                                    else -> "${op.percentInt}%"
+                                                },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (op.status == TransferStatus.PAUSED) {
+                                                    Color(0xFFF59E0B)
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                                },
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                            )
+                                        }
+
+                                        if (op.status == TransferStatus.RUNNING || op.status == TransferStatus.PAUSED) {
+                                            IconButton(
+                                                onClick = { onTogglePause(op) },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (op.status == TransferStatus.PAUSED) {
+                                                        Icons.Default.PlayArrow
+                                                    } else {
+                                                        Icons.Default.Pause
+                                                    },
+                                                    contentDescription = if (op.status == TransferStatus.PAUSED) "Riprendi" else "Metti in pausa",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(17.dp)
+                                                )
+                                            }
+                                        }
+
+                                        IconButton(
+                                            onClick = { onDeleteOperation(op) },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.DeleteOutline,
+                                                contentDescription = "Elimina trasferimento",
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(17.dp)
+                                            )
+                                        }
                                     }
                                 }
 
@@ -3716,10 +4275,10 @@ fun TransferOperationsFloatingCard(
                                         .fillMaxWidth()
                                         .height(6.dp)
                                         .clip(CircleShape),
-                                    color = if (op.status == TransferStatus.ERROR) {
-                                        MaterialTheme.colorScheme.error
-                                    } else {
-                                        MaterialTheme.colorScheme.primary
+                                    color = when (op.status) {
+                                        TransferStatus.ERROR -> MaterialTheme.colorScheme.error
+                                        TransferStatus.PAUSED -> Color(0xFFF59E0B)
+                                        else -> MaterialTheme.colorScheme.primary
                                     }
                                 )
 
@@ -4600,7 +5159,8 @@ fun NativeSettingsScreen(
     onScanDuplicates: () -> Unit,
     onLockNow: () -> Unit,
     onLogout: () -> Unit,
-    onShowInfo: (String) -> Unit
+    onShowInfo: (String) -> Unit,
+    onPickCustomSafFolder: () -> Unit = {}
 ) {
     var cacheStats by remember { mutableStateOf(apiClient.getDiskCacheStats()) }
     val prefs = remember { activity.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE) }
@@ -5190,6 +5750,250 @@ fun NativeSettingsScreen(
                     }
                 ) {
                     Text("Applica")
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 14.dp))
+
+            // MODALITÀ INIZIO TRASFERIMENTO (DIRETTAMENTE IN MEMORIA vs ARCHIVIO .ZIP)
+            Text(
+                text = "Scelta all'Inizio del Trasferimento (Diretto vs Archivio .zip)",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Decidi se chiedere a ogni caricamento/scaricamento oppure trasferire direttamente i file nella memoria o creare un archivio .zip:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "All'inizio di un Caricamento (Upload):",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TransferPackagingMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = custom.uploadPackagingMode == mode,
+                        onClick = { onUpdateCustom(custom.copy(uploadPackagingMode = mode)) },
+                        label = { Text(mode.label, maxLines = 1) }
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "All'inizio di uno Scaricamento (Download):",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TransferPackagingMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = custom.downloadPackagingMode == mode,
+                        onClick = { onUpdateCustom(custom.copy(downloadPackagingMode = mode)) },
+                        label = { Text(mode.label, maxLines = 1) }
+                    )
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 14.dp))
+
+            // DIRECTORY E MODALITÀ DI SCARICAMENTO (FOTO, VIDEO, FILE)
+            Text(
+                text = "Modalità e Directory di Scaricamento (Foto, Video e File)",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Scegli la directory predefinita (automatica in base al tipo di file: Immagini per le foto, Video per i filmati, Download per i documenti) oppure imposta cartelle dedicate:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(8.dp))
+            DownloadDirectoryMode.entries.forEach { dirMode ->
+                Surface(
+                    onClick = { onUpdateCustom(custom.copy(downloadDirectoryMode = dirMode)) },
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (custom.downloadDirectoryMode == dirMode) {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 3.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        RadioButton(
+                            selected = custom.downloadDirectoryMode == dirMode,
+                            onClick = { onUpdateCustom(custom.copy(downloadDirectoryMode = dirMode)) }
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = dirMode.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = dirMode.description,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (custom.downloadDirectoryMode == DownloadDirectoryMode.AUTO_BY_TYPE) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "Personalizza Directory per Singola Categoria (Foto, Video, File):",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(6.dp))
+
+                val categoryOptions = listOf(
+                    DownloadDirectoryMode.AUTO_BY_TYPE,
+                    DownloadDirectoryMode.PICTURES,
+                    DownloadDirectoryMode.MOVIES,
+                    DownloadDirectoryMode.DOCUMENTS,
+                    DownloadDirectoryMode.DOWNLOADS,
+                    DownloadDirectoryMode.CUSTOM_FOLDER
+                )
+
+                Text("• Directory Foto:", style = MaterialTheme.typography.labelSmall)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    categoryOptions.forEach { opt ->
+                        FilterChip(
+                            selected = custom.photoDownloadDirMode == opt,
+                            onClick = { onUpdateCustom(custom.copy(photoDownloadDirMode = opt)) },
+                            label = {
+                                Text(
+                                    if (opt == DownloadDirectoryMode.AUTO_BY_TYPE) "Default (Pictures)" else opt.label,
+                                    maxLines = 1
+                                )
+                            }
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(4.dp))
+                Text("• Directory Video:", style = MaterialTheme.typography.labelSmall)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    categoryOptions.forEach { opt ->
+                        FilterChip(
+                            selected = custom.videoDownloadDirMode == opt,
+                            onClick = { onUpdateCustom(custom.copy(videoDownloadDirMode = opt)) },
+                            label = {
+                                Text(
+                                    if (opt == DownloadDirectoryMode.AUTO_BY_TYPE) "Default (Movies)" else opt.label,
+                                    maxLines = 1
+                                )
+                            }
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(4.dp))
+                Text("• Directory File / Documenti / Archivi:", style = MaterialTheme.typography.labelSmall)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    categoryOptions.forEach { opt ->
+                        FilterChip(
+                            selected = custom.fileDownloadDirMode == opt,
+                            onClick = { onUpdateCustom(custom.copy(fileDownloadDirMode = opt)) },
+                            label = {
+                                Text(
+                                    if (opt == DownloadDirectoryMode.AUTO_BY_TYPE) "Default (Download)" else opt.label,
+                                    maxLines = 1
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            var subfolderInput by remember(custom.customDownloadSubfolder) {
+                mutableStateOf(custom.customDownloadSubfolder)
+            }
+            OutlinedTextField(
+                value = subfolderInput,
+                onValueChange = { raw ->
+                    subfolderInput = raw
+                    onUpdateCustom(
+                        custom.copy(
+                            customDownloadSubfolder = PhotoCloudApiClient.sanitizeSubfolderName(raw)
+                        )
+                    )
+                },
+                singleLine = true,
+                label = { Text("Nome Sottocartella (es. PhotoCloud)") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = onPickCustomSafFolder,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (custom.customSafTreeUri.isNotBlank()) "Cambia Cartella SAF"
+                        else "Scegli Cartella Dispositivo (SAF)"
+                    )
+                }
+                if (custom.customSafTreeUri.isNotBlank()) {
+                    TextButton(
+                        onClick = {
+                            onUpdateCustom(
+                                custom.copy(
+                                    customSafTreeUri = "",
+                                    downloadDirectoryMode = DownloadDirectoryMode.AUTO_BY_TYPE
+                                )
+                            )
+                            onShowInfo("Ripristinata directory predefinita per tipo")
+                        }
+                    ) {
+                        Text("Reset")
+                    }
                 }
             }
         }

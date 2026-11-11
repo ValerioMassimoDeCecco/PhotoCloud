@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.8)
+# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.9)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -7,6 +7,27 @@
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
+
+---
+
+## ⚡ Novità Principali della Release `v1.2.9` (`versionCode 26`) — Pausa/Elimina Trasferimenti, Scelta Diretto vs Archivio `.zip` & Directory di Scaricamento Configurabili
+
+### 1. Pausa / Riprendi ed Eliminazione di Ogni Trasferimento in Tempo Reale (`PhotoCloudApiClient.kt`, `MainActivity.kt`, `upload.js`, `selection.js`)
+- **Controllo granulare su Android (`TransferControlHandle` + `TransferOperationsFloatingCard`) e Web (`#upload-file-list`)**:
+  - Ogni operazione di upload o download espone i pulsanti **Pausa (`pause`) / Riprendi (`play_arrow`)** ed **Elimina / Annulla (`delete_outline`)**.
+  - Mettendo in pausa un trasferimento, lo streaming dei blocchi da 32 KB (Android) o la coda dei micro-blocchi XHR/Fetch (Web) si sospende immediatamente mantenendo lo stato parziale e riprende esattamente dal punto di interruzione al tocco su **Riprendi**.
+  - Toccando **Elimina**, i flussi di rete attivi vengono interrotti istantaneamente e l'operazione viene rimossa dalla lista dei trasferimenti.
+
+### 2. Scelta all'Inizio di Ogni Trasferimento: Direttamente in Memoria vs Archivio `.zip` (`PreTransferOptionsDialog` & `#pre-transfer-modal-backdrop`)
+- **Modale di Opzioni Pre-Trasferimento (Upload & Download)**:
+  - All'inizio di ogni caricamento o scaricamento (oppure impostando una preferenza predefinita in **Impostazioni**), l'utente può scegliere se:
+    - **Trasferire tutti i media direttamente nella memoria (`DIRECT_FILES`)** come file singoli con streaming parallelo.
+    - **Creare un Archivio (`.zip`) (`ZIP_ARCHIVE`)** comprimendo/raggruppando tutti gli elementi selezionati in un unico pacchetto `.zip` prima del trasferimento.
+
+### 3. Modalità e Directory di Scaricamento Configurabili per Foto, Video e File (`DownloadDirectoryMode`)
+- **Default Automatico per Tipo (`AUTO_BY_TYPE`) o Directory Specifica/Personalizzata**:
+  - **Automatica in base al tipo (Default)**: salva automaticamente le foto in `Pictures/PhotoCloud`, i video in `Movies/PhotoCloud`, l'audio in `Music/PhotoCloud` e i documenti/archivi in `Download/PhotoCloud`.
+  - **Personalizzazione per Singola Categoria o Globale**: possibilità di scegliere separatamente la directory per **Foto**, **Video** e **File/Documenti** (`Immagini`, `Video`, `Documenti`, `Download`, o `Cartella Personalizzata` tramite selettore di sistema Android SAF `OpenDocumentTree` e Web File System Access API `showDirectoryPicker`).
 
 ---
 

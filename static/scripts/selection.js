@@ -199,20 +199,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function pollZipProgress(taskId, fileCount) {
         const startTime = performance.now();
+        let isPaused = false;
+        let isCancelled = false;
+        let interval = null;
+
         const tracker = window.registerTransferOperation
             ? window.registerTransferOperation({
                   id: `zip_${taskId}`,
                   name: `Archivio ZIP (${fileCount} file)`,
                   type: 'download',
-                  totalBytes: 0
+                  totalBytes: 0,
+                  onCancel: () => {
+                      isCancelled = true;
+                      if (interval) clearInterval(interval);
+                  },
+                  onPause: () => {
+                      isPaused = true;
+                  },
+                  onResume: () => {
+                      isPaused = false;
+                  }
               })
             : null;
 
-        const interval = setInterval(async () => {
+        interval = setInterval(async () => {
+            if (isCancelled || isPaused) return;
             try {
                 const response = await fetch(`/zip-progress/${taskId}`);
                 if (!response.ok) throw new Error(`Errore: ${response.status}`);
                 const data = await response.json();
+                if (isCancelled || isPaused) return;
+
                 const elapsedSec = Math.max(0.1, (performance.now() - startTime) / 1000);
                 const processed = data.processedBytes || 0;
                 const total = data.totalBytes || processed || 1;
@@ -234,6 +251,54 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }, 800);
     }
+
+    async function startZipDownload(filesToDownload) {
+        try {
+            const response = await fetch('/prepare-zip', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filenames: filesToDownload }),
+            });
+            const data = await response.json();
+            if (data.task_id) {
+                pollZipProgress(data.task_id, filesToDownload.length);
+            }
+        } catch (error) {
+            console.error('Errore preparazione ZIP:', error);
+        }
+    }
+
+    window.startOrPromptDownload = function (filenames, fromTrash = false) {
+        const list = Array.isArray(filenames) ? filenames : [];
+        if (list.length === 0) return;
+
+        const prefs = typeof window.getTransferPreferences === 'function'
+            ? window.getTransferPreferences()
+            : { downloadPackagingMode: 'ASK_ALWAYS', downloadDirectoryMode: 'AUTO_BY_TYPE' };
+
+        if (prefs.downloadPackagingMode === 'DIRECT_FILES') {
+            if (typeof window.downloadFilesDirectInParallel === 'function') {
+                window.downloadFilesDirectInParallel(list, { fromTrash, dirMode: prefs.downloadDirectoryMode });
+            }
+        } else if (prefs.downloadPackagingMode === 'ZIP_ARCHIVE') {
+            startZipDownload(list);
+        } else if (typeof window.openPreTransferModal === 'function') {
+            window.openPreTransferModal({
+                type: 'download',
+                count: list.length,
+                defaultZip: false,
+                onConfirm: ({ archiveAsZip, dirMode }) => {
+                    if (archiveAsZip) {
+                        startZipDownload(list);
+                    } else if (typeof window.downloadFilesDirectInParallel === 'function') {
+                        window.downloadFilesDirectInParallel(list, { fromTrash, dirMode });
+                    }
+                }
+            });
+        } else {
+            startZipDownload(list);
+        }
+    };
 
     if (selectAllBtn) {
         selectAllBtn.addEventListener('click', () => {
@@ -383,22 +448,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (downloadSelectedBtn) {
-        downloadSelectedBtn.addEventListener('click', async () => {
+        downloadSelectedBtn.addEventListener('click', () => {
             const filesToDownload = Array.from(selectedFiles);
             if (filesToDownload.length === 0) return;
 
-            try {
-                const response = await fetch('/prepare-zip', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ filenames: filesToDownload }),
-                });
-                const data = await response.json();
-                if (data.task_id) {
-                    pollZipProgress(data.task_id, filesToDownload.length);
-                }
-            } catch (error) {
-                console.error('Errore preparazione ZIP:', error);
+            if (typeof window.startOrPromptDownload === 'function') {
+                window.startOrPromptDownload(filesToDownload, false);
+            } else {
+                startZipDownload(filesToDownload);
             }
         });
     }

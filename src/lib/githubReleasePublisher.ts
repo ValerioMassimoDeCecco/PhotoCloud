@@ -38,8 +38,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.2.8';
-const APK_FILENAME = 'photocloud-release-v1.2.8-signed.apk';
+const DEFAULT_TAG = 'v1.2.9';
+const APK_FILENAME = 'photocloud-release-v1.2.9-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
@@ -56,10 +56,10 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     // If gradle binary is not present in local container, use pre-built signed release APK
     const fallbackCandidates = [
       path.join(outputDir, APK_FILENAME),
+      path.join(outputDir, 'photocloud-release-v1.2.8-signed.apk'),
       path.join(outputDir, 'photocloud-release-v1.2.7-signed.apk'),
       path.join(outputDir, 'photocloud-release-v1.2.6-signed.apk'),
       path.join(outputDir, 'photocloud-release-v1.2.5-signed.apk'),
-      path.join(outputDir, 'photocloud-release-v1.2.4-signed.apk'),
     ];
     const existingFallback = fallbackCandidates.find((candidate) => fs.existsSync(candidate));
     if (existingFallback) {
@@ -78,17 +78,17 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     sha256,
     sizeBytes: apkBuffer.length,
     applicationId: 'com.valerio.photocloud',
-    versionName: '1.2.8',
-    versionCode: 25,
-    changelog: 'Release 1.2.8 — Motore di caricamento/scaricamento streaming Zero-OOM per selezioni massive (250, 500, 1000+ foto/file senza mai crashare su Android, Web e Server) e impostazione Trasferimenti Paralleli Massimi con preset rapidi (1, 2, 3, 4, 6, 8) e numero manuale (1–16).',
+    versionName: '1.2.9',
+    versionCode: 26,
+    changelog: 'Release 1.2.9 — Pausa/Riprendi ed Eliminazione dei singoli trasferimenti in tempo reale, scelta all\'inizio di ogni trasferimento tra trasferimento diretto nella memoria o creazione di archivio .zip, e configurazione della modalità e directory di scaricamento per Foto, Video e File (default automatico in base al tipo oppure cartella specifica/personalizzata).',
     features: [
-      'Fix definitivo crash OutOfMemoryError nel caricamento di 250+ foto su Android tramite UriStreamingRequestBody (streaming a blocchi da 32 KB senza mai caricare i file interi in RAM)',
-      'Configurazione Trasferimenti Paralleli Massimi (Impostazioni Android & Web) con preset rapidi (1 Sequenziale, 2 Leggero, 3 Bilanciato, 4 Veloce, 6 Turbo, 8 Massimo) e campo numerico manuale (1–16)',
-      'Motore Web di upload parallelo con micro-blocchi bilanciati, avanzamento e velocità aggregati in tempo reale e sincronizzazione DOM finale ottimizzata',
-      'Hardening endpoint /upload sul server per volumi elevati di file con rilascio immediato dei buffer RAM e skipList sui blocchi intermedi',
+      'Controllo completo dei trasferimenti in tempo reale (Android & Web): pulsanti Pausa / Riprendi ed Elimina / Annulla su ogni operazione di upload o download attiva',
+      'Scelta all\'inizio di ogni trasferimento (Modale Pre-Trasferimento configurabile): decidi se trasferire tutti i media direttamente nella memoria (file singoli in parallelo) oppure creare un archivio .zip',
+      'Modalità e Directory di Scaricamento configurabili per Foto, Video e File: default automatico in base al tipo (Pictures/PhotoCloud per foto, Movies/PhotoCloud per video, Download/PhotoCloud per file) oppure cartella specifica/SAF personalizzata',
+      'Motore di caricamento/scaricamento streaming Zero-OOM per selezioni massive (250+ foto) con trasferimenti paralleli configurabili (1–16)',
       'Indicatori Memoria Usata Totale del Cloud (Header, Impostazioni e Cestino) e compatibilità completa Tema Originale + Liquid Glass'
     ],
-    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.8',
+    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.9',
     publishedAt: new Date().toISOString(),
   }, null, 2));
   return { apkPath, apkBuffer, sha256, metadataPath };

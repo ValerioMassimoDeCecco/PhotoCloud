@@ -312,6 +312,104 @@
                         <button type="button" class="btn outlined" id="settings-parallel-inc-btn" aria-label="Aumenta trasferimenti paralleli" style="width:36px;height:36px;padding:0;margin:0;min-width:36px;">+</button>
                         <button type="button" class="btn primary" id="settings-parallel-apply-btn" style="width:auto;height:36px;padding:0 14px;margin:0;font-size:12px;">Applica</button>
                     </div>
+
+                    <hr style="border:none;border-top:1px solid rgba(148,163,184,0.22);margin:14px 0;" />
+
+                    <div class="cloud-storage-settings-header" style="margin-bottom:6px;">
+                        <h4 style="margin:0;font-size:13px;display:flex;align-items:center;gap:6px;">
+                            <span class="material-icons" style="font-size:17px;">inventory_2</span>
+                            Scelta all'Inizio del Trasferimento (Diretto in Memoria vs Archivio .zip)
+                        </h4>
+                    </div>
+                    <p style="margin:0 0 10px;font-size:12px;opacity:0.82;">
+                        Scegli se decidere all'inizio di ogni trasferimento oppure trasferire sempre i media direttamente nella memoria o creare un archivio .zip:
+                    </p>
+                    <div class="lg-controls-grid" style="margin-bottom:12px;">
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Modalità Caricamento (Upload)</span></span>
+                            <select id="settings-upload-packaging-select" class="btn-like-select" aria-label="Modalità caricamento upload" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="ASK_ALWAYS">Chiedi a ogni trasferimento</option>
+                                <option value="DIRECT_FILES">Direttamente in memoria (File singoli)</option>
+                                <option value="ZIP_ARCHIVE">Crea Archivio (.zip)</option>
+                            </select>
+                        </label>
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Modalità Scaricamento (Download)</span></span>
+                            <select id="settings-download-packaging-select" class="btn-like-select" aria-label="Modalità scaricamento download" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="ASK_ALWAYS">Chiedi a ogni trasferimento</option>
+                                <option value="DIRECT_FILES">Direttamente in memoria (File singoli)</option>
+                                <option value="ZIP_ARCHIVE">Crea Archivio (.zip)</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    <hr style="border:none;border-top:1px solid rgba(148,163,184,0.22);margin:14px 0;" />
+
+                    <div class="cloud-storage-settings-header" style="margin-bottom:6px;">
+                        <h4 style="margin:0;font-size:13px;display:flex;align-items:center;gap:6px;">
+                            <span class="material-icons" style="font-size:17px;">folder_special</span>
+                            Modalità e Directory di Scaricamento (Foto, Video e File)
+                        </h4>
+                    </div>
+                    <p style="margin:0 0 10px;font-size:12px;opacity:0.82;">
+                        Configura la directory di destinazione per Foto, Video e File (automatica in base al tipo oppure cartella specifica):
+                    </p>
+                    <div class="lg-controls-grid" style="margin-bottom:10px;">
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Modalità Directory Globale</span></span>
+                            <select id="settings-download-dir-mode-select" class="btn-like-select" aria-label="Modalità directory di scaricamento" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="AUTO_BY_TYPE">Automatica in base al tipo (Default)</option>
+                                <option value="PICTURES">Immagini (Pictures/PhotoCloud)</option>
+                                <option value="MOVIES">Video (Movies/PhotoCloud)</option>
+                                <option value="MUSIC">Musica (Music/PhotoCloud)</option>
+                                <option value="DOCUMENTS">Documenti (Documents/PhotoCloud)</option>
+                                <option value="DOWNLOADS">Download (Download/PhotoCloud)</option>
+                                <option value="CUSTOM_FOLDER">Cartella Personalizzata</option>
+                            </select>
+                        </label>
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Sottocartella Predefinita</span></span>
+                            <input type="text" id="settings-download-subfolder-input" value="PhotoCloud" placeholder="PhotoCloud" aria-label="Nome sottocartella di scaricamento" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);" />
+                        </label>
+                    </div>
+                    <div class="lg-controls-grid" style="margin-bottom:10px;">
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Directory Foto</span></span>
+                            <select id="settings-photo-dir-select" class="btn-like-select" aria-label="Directory scaricamento foto" style="height:34px;padding:0 8px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="AUTO_BY_TYPE">Default (Pictures/PhotoCloud)</option>
+                                <option value="PICTURES">Immagini (Pictures)</option>
+                                <option value="DOCUMENTS">Documenti</option>
+                                <option value="DOWNLOADS">Download</option>
+                                <option value="CUSTOM_FOLDER">Cartella Personalizzata</option>
+                            </select>
+                        </label>
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Directory Video</span></span>
+                            <select id="settings-video-dir-select" class="btn-like-select" aria-label="Directory scaricamento video" style="height:34px;padding:0 8px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="AUTO_BY_TYPE">Default (Movies/PhotoCloud)</option>
+                                <option value="MOVIES">Video (Movies)</option>
+                                <option value="PICTURES">Immagini (Pictures)</option>
+                                <option value="DOWNLOADS">Download</option>
+                                <option value="CUSTOM_FOLDER">Cartella Personalizzata</option>
+                            </select>
+                        </label>
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Directory File &amp; Documenti</span></span>
+                            <select id="settings-file-dir-select" class="btn-like-select" aria-label="Directory scaricamento file" style="height:34px;padding:0 8px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="AUTO_BY_TYPE">Default (Download/PhotoCloud)</option>
+                                <option value="DOWNLOADS">Download</option>
+                                <option value="DOCUMENTS">Documenti</option>
+                                <option value="CUSTOM_FOLDER">Cartella Personalizzata</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <button type="button" class="btn outlined" id="settings-pick-download-dir-btn" style="width:auto;height:36px;padding:0 14px;margin:0;font-size:12px;">
+                            <span class="material-icons" style="font-size:16px;">folder_open</span>
+                            <span id="settings-pick-download-dir-label">Scegli Directory Dispositivo...</span>
+                        </button>
+                        <span id="settings-picked-dir-status" style="font-size:12px;opacity:0.8;">Directory automatica in base al tipo attiva</span>
+                    </div>
                 </div>
 
                 <!-- 1. Theme Selector -->
@@ -554,6 +652,97 @@
                             <span id="lg-json-status-msg" style="font-size:12px;"></span>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pre-Transfer Choice Modal (Direct to Storage vs .zip Archive + Download Directory Selection) -->
+    <div id="pre-transfer-modal-backdrop" class="lg-settings-backdrop" role="dialog" aria-modal="true" aria-labelledby="pre-transfer-modal-title" style="display: none; z-index: 12500;">
+        <div class="lg-settings-sheet" style="max-width: 520px; max-height: 90vh;">
+            <div class="lg-settings-header">
+                <div>
+                    <h2 id="pre-transfer-modal-title">
+                        <span class="material-icons" id="pre-transfer-modal-icon">swap_vert</span>
+                        <span id="pre-transfer-modal-title-text">Opzioni di Trasferimento</span>
+                    </h2>
+                    <span id="pre-transfer-modal-subtitle">Scegli come trasferire gli elementi selezionati</span>
+                </div>
+                <button type="button" class="btn icon" id="pre-transfer-modal-close-btn" title="Chiudi" aria-label="Chiudi opzioni trasferimento">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+            <div class="lg-settings-body" style="gap: 14px;">
+                <div class="lg-section-block" style="margin: 0;">
+                    <h3 style="margin-bottom: 8px;"><span class="material-icons">inventory_2</span> Modalità di Trasferimento</h3>
+                    <div class="lg-theme-selector-grid" style="grid-template-columns: 1fr;">
+                        <button type="button" id="pre-transfer-choice-direct" class="lg-theme-choice-card active" style="text-align: left;">
+                            <div class="lg-theme-choice-title">
+                                <span>Direttamente in memoria (File Singoli)</span>
+                                <span class="material-icons">Insert_drive_file</span>
+                            </div>
+                            <span id="pre-transfer-direct-desc" style="font-size: 12px; opacity: 0.84;">
+                                Trasferisce ogni foto, video o file direttamente nella memoria con streaming parallelo.
+                            </span>
+                        </button>
+                        <button type="button" id="pre-transfer-choice-zip" class="lg-theme-choice-card" style="text-align: left;">
+                            <div class="lg-theme-choice-title">
+                                <span>Crea Archivio (.zip)</span>
+                                <span class="material-icons">folder_zip</span>
+                            </div>
+                            <span id="pre-transfer-zip-desc" style="font-size: 12px; opacity: 0.84;">
+                                Raggruppa tutti i media selezionati in un unico pacchetto .zip.
+                            </span>
+                        </button>
+                    </div>
+                    <div id="pre-transfer-zip-name-row" style="display: none; margin-top: 10px;">
+                        <label style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600;">
+                            <span>Nome archivio .zip:</span>
+                            <input type="text" id="pre-transfer-zip-name-input" value="PhotoCloud_Archivio.zip" style="height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid rgba(148,163,184,0.35);" />
+                        </label>
+                    </div>
+                </div>
+
+                <div id="pre-transfer-download-dir-section" class="lg-section-block" style="margin: 0; display: none;">
+                    <h3 style="margin-bottom: 8px;"><span class="material-icons">folder_special</span> Directory di Scaricamento</h3>
+                    <p style="margin: 0 0 8px; font-size: 12px; opacity: 0.82;">
+                        Scegli dove salvare i file sul dispositivo (default automatico in base al tipo oppure directory specifica):
+                    </p>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <label style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600;">
+                            <span>Modalità Directory:</span>
+                            <select id="pre-transfer-dir-mode-select" class="btn-like-select" style="height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid rgba(148,163,184,0.35);">
+                                <option value="AUTO_BY_TYPE">Automatica in base al tipo (Foto→Pictures, Video→Movies, File→Download)</option>
+                                <option value="PICTURES">Immagini (Pictures/PhotoCloud)</option>
+                                <option value="MOVIES">Video (Movies/PhotoCloud)</option>
+                                <option value="MUSIC">Musica (Music/PhotoCloud)</option>
+                                <option value="DOCUMENTS">Documenti (Documents/PhotoCloud)</option>
+                                <option value="DOWNLOADS">Download (Download/PhotoCloud)</option>
+                                <option value="CUSTOM_FOLDER">Cartella Personalizzata</option>
+                            </select>
+                        </label>
+                        <label style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600;">
+                            <span>Sottocartella (es. PhotoCloud):</span>
+                            <input type="text" id="pre-transfer-subfolder-input" value="PhotoCloud" style="height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid rgba(148,163,184,0.35);" />
+                        </label>
+                        <button type="button" class="btn outlined" id="pre-transfer-pick-dir-btn" style="width: auto; height: 34px; padding: 0 12px; margin: 0; font-size: 12px;">
+                            <span class="material-icons" style="font-size: 16px;">folder_open</span>
+                            <span>Scegli Cartella Dispositivo...</span>
+                        </button>
+                    </div>
+                </div>
+
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer;">
+                    <input type="checkbox" id="pre-transfer-remember-checkbox" />
+                    <span>Ricorda questa modalità come predefinita (modificabile in Impostazioni)</span>
+                </label>
+
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
+                    <button type="button" class="btn outlined" id="pre-transfer-cancel-btn" style="width: auto; margin: 0;">Annulla</button>
+                    <button type="button" class="btn primary" id="pre-transfer-confirm-btn" style="width: auto; margin: 0;">
+                        <span class="material-icons" id="pre-transfer-confirm-icon">upload</span>
+                        <span id="pre-transfer-confirm-label">Avvia Trasferimento</span>
+                    </button>
                 </div>
             </div>
         </div>

@@ -530,15 +530,15 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.1.3-signed.apk')));
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.2.8"'));
-  assert.ok(appBuildGradle.includes('versionCode = 25'));
+  assert.ok(appBuildGradle.includes('versionName = "1.2.9"'));
+  assert.ok(appBuildGradle.includes('versionCode = 26'));
   assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
   assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
   assert.ok(appBuildGradle.includes('androidx.work:work-runtime-ktx:2.9.0'));
   assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.2.8');
+  assert.equal(pkgJson.version, '1.2.9');
 
   // 6. Multi-platform interactive CLI scripts (photocloud.bat & photocloud.sh)
   const batPath = path.resolve(process.cwd(), 'photocloud.bat');
@@ -581,8 +581,8 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   const baseConfig = {
     appName: 'PhotoCloud "Vault" <Test>',
     packageName: 'com.valerio.photocloud',
-    versionName: '1.2.8',
-    versionCode: 25,
+    versionName: '1.2.9',
+    versionCode: 26,
     serverUrl: 'http://10.0.2.2:3000',
     minSdk: 26,
     targetSdk: 35,
@@ -608,7 +608,7 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   assert.ok(!manifestXml.includes('android:label="PhotoCloud "Vault"'));
 
   const gradleKts = generateAppBuildGradleKts(baseConfig);
-  assert.ok(gradleKts.includes('versionName = "1.2.8"'));
+  assert.ok(gradleKts.includes('versionName = "1.2.9"'));
 
   const mainKt = generateMainActivityKt(baseConfig);
   assert.ok(mainKt.includes('settings.allowFileAccess = false'));
@@ -855,5 +855,56 @@ test('Zero-OOM Streaming Bulk Upload (250+ photos) & Configurable Parallel Trans
   assert.ok(uploadJs.includes('async function runWorker()'));
   assert.ok(uploadJs.includes("formData.append('skipList', '1')"));
 });
+
+test('Release v1.2.9: Pause/Resume & Delete transfers, Pre-Transfer Choice Modal (Direct vs .zip), and Configurable Download Directories', async () => {
+  const apiClientKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt'),
+    'utf-8'
+  );
+  assert.ok(apiClientKt.includes('enum class TransferPackagingMode'));
+  assert.ok(apiClientKt.includes('enum class DownloadDirectoryMode'));
+  assert.ok(apiClientKt.includes('class TransferControlHandle'));
+  assert.ok(apiClientKt.includes('fun pauseTransfer(opId: String)'));
+  assert.ok(apiClientKt.includes('fun resumeTransfer(opId: String)'));
+  assert.ok(apiClientKt.includes('fun cancelTransfer(opId: String)'));
+  assert.ok(apiClientKt.includes('suspend fun downloadMultipleDirectToDevice('));
+  assert.ok(apiClientKt.includes('fun saveStreamToTargetDirectory('));
+  assert.ok(apiClientKt.includes('fun resolveEffectiveDirectoryMode('));
+  assert.ok(apiClientKt.includes('class FileStreamingRequestBody('));
+
+  const mainActivityKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
+    'utf-8'
+  );
+  assert.ok(mainActivityKt.includes('sealed class PendingTransferRequest'));
+  assert.ok(mainActivityKt.includes('fun PreTransferOptionsDialog('));
+  assert.ok(mainActivityKt.includes('fun togglePauseTransferOperation(op: TransferOperation)'));
+  assert.ok(mainActivityKt.includes('fun deleteTransferOperation(op: TransferOperation)'));
+  assert.ok(mainActivityKt.includes('fun startOrPromptUpload('));
+  assert.ok(mainActivityKt.includes('fun startOrPromptDownload('));
+  assert.ok(mainActivityKt.includes('TransferStatus.PAUSED -> Icons.Default.PauseCircleOutline'));
+  assert.ok(mainActivityKt.includes('Modalità e Directory di Scaricamento (Foto, Video e File)'));
+
+  const baseHtml = fs.readFileSync(path.resolve(process.cwd(), 'templates/base.html'), 'utf-8');
+  assert.ok(baseHtml.includes('id="pre-transfer-modal-backdrop"'));
+  assert.ok(baseHtml.includes('id="settings-upload-packaging-select"'));
+  assert.ok(baseHtml.includes('id="settings-download-packaging-select"'));
+  assert.ok(baseHtml.includes('id="settings-download-dir-mode-select"'));
+  assert.ok(baseHtml.includes('id="settings-photo-dir-select"'));
+  assert.ok(baseHtml.includes('id="settings-video-dir-select"'));
+  assert.ok(baseHtml.includes('id="settings-file-dir-select"'));
+
+  const uploadJs = fs.readFileSync(path.resolve(process.cwd(), 'static/scripts/upload.js'), 'utf-8');
+  assert.ok(uploadJs.includes('window.pauseTransferOperation = function'));
+  assert.ok(uploadJs.includes('window.resumeTransferOperation = function'));
+  assert.ok(uploadJs.includes('window.deleteTransferOperation = function'));
+  assert.ok(uploadJs.includes('window.openPreTransferModal = function'));
+  assert.ok(uploadJs.includes('window.downloadFilesDirectInParallel = async function'));
+  assert.ok(uploadJs.includes('async function createClientZipFile('));
+
+  const selectionJs = fs.readFileSync(path.resolve(process.cwd(), 'static/scripts/selection.js'), 'utf-8');
+  assert.ok(selectionJs.includes('window.startOrPromptDownload = function'));
+});
+
 
 
