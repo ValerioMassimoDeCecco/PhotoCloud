@@ -52,6 +52,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipInputStream
 import kotlin.math.max
 
@@ -1472,7 +1473,7 @@ class PhotoCloudApiClient(
 
             val semaphore = Semaphore(parallelLimit)
             val lastErrMessage = AtomicLong(0L)
-            @Volatile var firstErrorText = ""
+            val firstErrorText = AtomicReference("")
 
             coroutineScope {
                 tasks.mapIndexed { taskIndex, batch ->
@@ -1545,18 +1546,14 @@ class PhotoCloudApiClient(
                                             }
                                         } else {
                                             val errBody = response.body?.string() ?: "Errore HTTP ${response.code}"
-                                            if (firstErrorText.isBlank()) {
-                                                firstErrorText = errBody
-                                            }
+                                            firstErrorText.compareAndSet("", errBody)
                                             if (attempt < 2) {
                                                 delay(250L)
                                             }
                                         }
                                     }
                                 } catch (e: Throwable) {
-                                    if (firstErrorText.isBlank()) {
-                                        firstErrorText = e.localizedMessage ?: "Errore di connessione"
-                                    }
+                                    firstErrorText.compareAndSet("", e.localizedMessage ?: "Errore di connessione")
                                     if (attempt < 2) {
                                         delay(250L)
                                     }
@@ -1584,7 +1581,7 @@ class PhotoCloudApiClient(
             val failedCount = failedFilesCounter.get()
 
             if (succeededCount == 0) {
-                val errDetail = firstErrorText.ifBlank { "Errore durante il caricamento dei file" }
+                val errDetail = firstErrorText.get().ifBlank { "Errore durante il caricamento dei file" }
                 emitProgress(force = true, status = TransferStatus.ERROR, customDetail = errDetail)
                 return@withContext Pair(false, errDetail)
             }

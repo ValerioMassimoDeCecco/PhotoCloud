@@ -818,6 +818,12 @@ test('Zero-OOM Streaming Bulk Upload (250+ photos) & Configurable Parallel Trans
   );
   assert.ok(apiClientKt.includes('fun resolveUriMetadata('));
   assert.ok(apiClientKt.includes('val semaphore = Semaphore(parallelLimit)'));
+  assert.ok(apiClientKt.includes('val firstErrorText = AtomicReference("")'));
+  assert.equal(
+    apiClientKt.includes('@Volatile var firstErrorText'),
+    false,
+    '@Volatile cannot be applied to local variables in Kotlin'
+  );
   assert.ok(apiClientKt.includes('fun getMaxParallelTransfers(): Int'));
   assert.ok(apiClientKt.includes('fun setMaxParallelTransfers(value: Int)'));
   assert.ok(apiClientKt.includes('fun saveStreamToDownloads('));
