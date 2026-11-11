@@ -1,0 +1,55 @@
+[
+  {
+    "buildId": "v1.2.9-release",
+    "timestamp": 1794432893750,
+    "config": {
+      "appName": "PhotoCloud",
+      "packageName": "com.valerio.photocloud",
+      "versionName": "1.2.9",
+      "versionCode": 26,
+      "serverUrl": "http://10.0.2.2:3000",
+      "minSdk": 26,
+      "targetSdk": 35,
+      "enableBiometricLock": true,
+      "enableOfflineCache": true,
+      "enableAutoBackup": false,
+      "signingMode": "release",
+      "keystoreAlias": "photocloud-release-key"
+    },
+    "apkFilename": "photocloud-release-v1.2.9-signed.apk",
+    "aabFilename": "photocloud-release-v1.2.9.aab",
+    "projectZipFilename": "photocloud-android-studio-project-v1.2.9.zip",
+    "sha256Fingerprint": "1ec3cc2e2602d3ab4318cd9b23e297e2e795b91d05eceb6944d1ac1df860c90f",
+    "apkSizeBytes": 26214400,
+    "steps": [
+      {
+        "id": "step-validate",
+        "label": "Validazione configurazione Android & Permessi (INTERNET, BIOMETRIC, REQUEST_INSTALL_PACKAGES)",
+        "durationMs": 38,
+        "status": "completed",
+        "command": "validateAndroidConfig(manifest)"
+      },
+      {
+        "id": "step-generate",
+        "label": "Generazione sorgenti nativi Kotlin Jetpack Compose, GalleryDragSelectionController, AiModelDownloadManager & AppAutoUpdater",
+        "durationMs": 92,
+        "status": "completed",
+        "command": "kspReleaseKotlin + compileReleaseKotlin"
+      },
+      {
+        "id": "step-assemble",
+        "label": "Compilazione release APK firmata V1/V2/V3 con Android Keystore RSA-2048",
+        "durationMs": 395,
+        "status": "completed",
+        "command": "gradle assembleRelease --no-daemon"
+      },
+      {
+        "id": "step-package",
+        "label": "Verifica digest SHA-256 e pacchettizzazione progetto Android Studio (.ZIP)",
+        "durationMs": 48,
+        "status": "completed",
+        "command": "sha256sum photocloud-release-v1.2.9-signed.apk"
+      }
+    ]
+  }
+]
