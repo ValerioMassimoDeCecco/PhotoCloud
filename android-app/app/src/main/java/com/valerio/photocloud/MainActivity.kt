@@ -289,7 +289,8 @@ data class CustomizationState(
     val autoplayVideos: Boolean = true,
     val biometricEnabled: Boolean = true,
     val lockOnBackground: Boolean = false,
-    val secureScreenFlag: Boolean = false
+    val secureScreenFlag: Boolean = false,
+    val maxParallelTransfers: Int = 3
 )
 
 /**
@@ -455,36 +456,41 @@ class MainActivity : FragmentActivity() {
                         autoplayVideos = prefs.getBoolean("autoplay_videos", true),
                         biometricEnabled = prefs.getBoolean("biometric_enabled", true),
                         lockOnBackground = prefs.getBoolean("lock_on_background", false),
-                        secureScreenFlag = prefs.getBoolean("secure_screen_flag", false)
+                        secureScreenFlag = prefs.getBoolean("secure_screen_flag", false),
+                        maxParallelTransfers = prefs.getInt("max_parallel_transfers", 3).coerceIn(1, 16)
                     )
                 )
             }
 
             fun updateCustom(newState: CustomizationState) {
-                custom = newState
-                LiquidGlassConfigStore.saveDesignTheme(prefs, newState.designThemeMode)
-                LiquidGlassConfigStore.saveConfig(prefs, newState.liquidGlassConfig)
+                val safeParallel = newState.maxParallelTransfers.coerceIn(1, 16)
+                val normalized = newState.copy(maxParallelTransfers = safeParallel)
+                custom = normalized
+                apiClient.setMaxParallelTransfers(safeParallel)
+                LiquidGlassConfigStore.saveDesignTheme(prefs, normalized.designThemeMode)
+                LiquidGlassConfigStore.saveConfig(prefs, normalized.liquidGlassConfig)
                 prefs.edit()
-                    .putString("theme_mode", newState.themeMode.name)
-                    .putBoolean("amoled_black", newState.amoledBlack)
-                    .putBoolean("dynamic_colors", newState.dynamicColors)
-                    .putString("accent_preset", newState.accentPreset.id)
-                    .putBoolean("monochrome_app_icon", newState.monochromeAppIcon)
-                    .putInt("grid_columns", newState.gridColumns)
-                    .putInt("grid_spacing_dp", newState.gridSpacingDp)
-                    .putInt("tile_corner_dp", newState.tileCornerRadiusDp)
-                    .putBoolean("portrait_aspect", newState.portraitAspectRatio)
-                    .putString("default_grouping", newState.defaultGrouping.name)
-                    .putString("sort_order", newState.sortOrder.name)
-                    .putBoolean("show_video_badges", newState.showVideoBadges)
-                    .putBoolean("show_floating_labels", newState.showFloatingBarLabels)
-                    .putBoolean("compact_floating_bar", newState.compactFloatingBar)
-                    .putBoolean("haptics_enabled", newState.hapticsEnabled)
-                    .putBoolean("confirm_before_trash", newState.confirmBeforeTrash)
-                    .putBoolean("autoplay_videos", newState.autoplayVideos)
-                    .putBoolean("biometric_enabled", newState.biometricEnabled)
-                    .putBoolean("lock_on_background", newState.lockOnBackground)
-                    .putBoolean("secure_screen_flag", newState.secureScreenFlag)
+                    .putString("theme_mode", normalized.themeMode.name)
+                    .putBoolean("amoled_black", normalized.amoledBlack)
+                    .putBoolean("dynamic_colors", normalized.dynamicColors)
+                    .putString("accent_preset", normalized.accentPreset.id)
+                    .putBoolean("monochrome_app_icon", normalized.monochromeAppIcon)
+                    .putInt("grid_columns", normalized.gridColumns)
+                    .putInt("grid_spacing_dp", normalized.gridSpacingDp)
+                    .putInt("tile_corner_dp", normalized.tileCornerRadiusDp)
+                    .putBoolean("portrait_aspect", normalized.portraitAspectRatio)
+                    .putString("default_grouping", normalized.defaultGrouping.name)
+                    .putString("sort_order", normalized.sortOrder.name)
+                    .putBoolean("show_video_badges", normalized.showVideoBadges)
+                    .putBoolean("show_floating_labels", normalized.showFloatingBarLabels)
+                    .putBoolean("compact_floating_bar", normalized.compactFloatingBar)
+                    .putBoolean("haptics_enabled", normalized.hapticsEnabled)
+                    .putBoolean("confirm_before_trash", normalized.confirmBeforeTrash)
+                    .putBoolean("autoplay_videos", normalized.autoplayVideos)
+                    .putBoolean("biometric_enabled", normalized.biometricEnabled)
+                    .putBoolean("lock_on_background", normalized.lockOnBackground)
+                    .putBoolean("secure_screen_flag", normalized.secureScreenFlag)
+                    .putInt("max_parallel_transfers", safeParallel)
                     .apply()
             }
 
@@ -1595,16 +1601,19 @@ fun NativeVaultScreen(
     var transferOperations by remember { mutableStateOf<List<TransferOperation>>(emptyList()) }
     var showTransferPopup by remember { mutableStateOf(false) }
     var hadRunningTransfers by remember { mutableStateOf(false) }
+    val transferOpsLock = remember { Any() }
 
     fun upsertTransferOperation(op: TransferOperation) {
-        val current = transferOperations.toMutableList()
-        val idx = current.indexOfFirst { it.id == op.id }
-        if (idx >= 0) {
-            current[idx] = op
-        } else {
-            current.add(0, op)
+        synchronized(transferOpsLock) {
+            val current = transferOperations.toMutableList()
+            val idx = current.indexOfFirst { it.id == op.id }
+            if (idx >= 0) {
+                current[idx] = op
+            } else {
+                current.add(0, op)
+            }
+            transferOperations = current.take(25)
         }
-        transferOperations = current.take(25)
     }
 
     val activeRunningOps = remember(transferOperations) {
@@ -1783,10 +1792,12 @@ fun NativeVaultScreen(
         if (uris.isNotEmpty()) {
             // Do NOT auto-open showTransferPopup; discreet icon appears automatically
             val targetAlb = selectedAlbumFilter ?: ""
+            val parallelLimit = custom.maxParallelTransfers.coerceIn(1, 16)
             scope.launch {
                 val (ok, msg) = apiClient.uploadMediaUris(
                     uris = uris,
                     targetAlbum = targetAlb,
+                    maxParallelTransfers = parallelLimit,
                     onTransferUpdate = { op -> upsertTransferOperation(op) }
                 )
                 onShowInfo(msg)
@@ -5063,7 +5074,127 @@ fun NativeSettingsScreen(
             }
         }
 
-        // 4. FLOATING BAR & INTERAZIONE
+        // 4. TRASFERIMENTI & CARICAMENTI PARALLELI (Anti-Crash Streaming Engine)
+        SettingsSectionCard(
+            title = "Trasferimenti & Caricamenti Paralleli",
+            icon = Icons.Default.SwapVert
+        ) {
+            var customParallelText by remember(custom.maxParallelTransfers) {
+                mutableStateOf(custom.maxParallelTransfers.toString())
+            }
+            val parallelPresets = listOf(
+                1 to "1 • Sequenziale",
+                2 to "2 • Leggero",
+                3 to "3 • Bilanciato",
+                4 to "4 • Veloce",
+                6 to "6 • Turbo",
+                8 to "8 • Massimo"
+            )
+
+            Text(
+                text = "Trasferimenti Paralleli Massimi: ${custom.maxParallelTransfers} simultanei",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Seleziona un preset rapido oppure imposta manualmente quanti file caricare o scaricare in parallelo (1–16). Lo streaming diretto su disco impedisce qualsiasi crash di memoria anche selezionando oltre 250+ foto.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Preset Rapidi",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                parallelPresets.forEach { (presetValue, presetLabel) ->
+                    FilterChip(
+                        selected = custom.maxParallelTransfers == presetValue,
+                        onClick = {
+                            customParallelText = presetValue.toString()
+                            onUpdateCustom(custom.copy(maxParallelTransfers = presetValue))
+                        },
+                        label = { Text(presetLabel, maxLines = 1) }
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = "Oppure imposta numero manuale (1 – 16)",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        val next = (custom.maxParallelTransfers - 1).coerceIn(1, 16)
+                        customParallelText = next.toString()
+                        onUpdateCustom(custom.copy(maxParallelTransfers = next))
+                    },
+                    enabled = custom.maxParallelTransfers > 1,
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.size(42.dp)
+                ) {
+                    Text("−", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                }
+
+                OutlinedTextField(
+                    value = customParallelText,
+                    onValueChange = { raw ->
+                        val digitsOnly = raw.filter { it.isDigit() }.take(2)
+                        customParallelText = digitsOnly
+                        val parsed = digitsOnly.toIntOrNull()
+                        if (parsed != null && parsed in 1..16) {
+                            onUpdateCustom(custom.copy(maxParallelTransfers = parsed))
+                        }
+                    },
+                    singleLine = true,
+                    label = { Text("Paralleli (1-16)") },
+                    modifier = Modifier.weight(1f)
+                )
+
+                OutlinedButton(
+                    onClick = {
+                        val next = (custom.maxParallelTransfers + 1).coerceIn(1, 16)
+                        customParallelText = next.toString()
+                        onUpdateCustom(custom.copy(maxParallelTransfers = next))
+                    },
+                    enabled = custom.maxParallelTransfers < 16,
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.size(42.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Aumenta", modifier = Modifier.size(18.dp))
+                }
+
+                FilledTonalButton(
+                    onClick = {
+                        val parsed = customParallelText.toIntOrNull()?.coerceIn(1, 16) ?: 3
+                        customParallelText = parsed.toString()
+                        onUpdateCustom(custom.copy(maxParallelTransfers = parsed))
+                        onShowInfo("Trasferimenti paralleli impostati a ${parsed}x")
+                    }
+                ) {
+                    Text("Applica")
+                }
+            }
+        }
+
+        // 4B. FLOATING BAR & INTERAZIONE
         SettingsSectionCard(
             title = "Floating Bar & Comportamento",
             icon = Icons.Default.Tune

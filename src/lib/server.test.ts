@@ -78,13 +78,13 @@ test('server protects vaults, preserves collisions, and handles real media flows
     if (updateManifestResp.status === 404) {
       const missing = await updateManifestResp.json() as any;
       assert.equal(missing.error, 'Nessun APK di release disponibile sul server');
-      assert.equal(missing.versionName, '1.2.7');
+      assert.equal(missing.versionName, '1.2.8');
     } else {
       assert.equal(updateManifestResp.status, 200);
       const updateManifest = await updateManifestResp.json() as any;
-      assert.equal(updateManifest.versionCode, 24);
-      assert.equal(updateManifest.versionName, '1.2.7');
-      assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.2.7-signed.apk');
+      assert.equal(updateManifest.versionCode, 25);
+      assert.equal(updateManifest.versionName, '1.2.8');
+      assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.2.8-signed.apk');
       assert.equal(updateManifest.sha256.length, 64);
       assert.ok(updateManifest.sizeBytes > 20 * 1024 * 1024);
     }
@@ -197,6 +197,51 @@ test('server protects vaults, preserves collisions, and handles real media flows
     assert.equal(unauthBuildResp.status, 403);
     const invalidDownloadResp = await get('/api/android/download/..%2F..%2Fetc/apk', alice);
     assert.equal(invalidDownloadResp.status, 400);
+
+    // 8. Bulk Parallel Upload Stress Test (260 photos selected at once with 6 parallel workers)
+    const totalPhotosToUpload = 260;
+    const parallelWorkers = 6;
+    const photoIndices = Array.from({ length: totalPhotosToUpload }, (_, idx) => idx);
+    let cursor = 0;
+    let totalUploadedCount = 0;
+
+    async function bulkUploadWorker() {
+      while (cursor < photoIndices.length) {
+        const myIdx = cursor++;
+        if (myIdx >= photoIndices.length) break;
+        const form = new FormData();
+        const fakeJpegPayload = new Uint8Array(1024);
+        fakeJpegPayload[0] = 0xff;
+        fakeJpegPayload[1] = 0xd8;
+        fakeJpegPayload[2] = myIdx & 0xff;
+        form.append('file[]', new Blob([fakeJpegPayload], { type: 'image/jpeg' }), `bulk_photo_${myIdx}.jpg`);
+        form.append('timestamp[]', String(Date.now() - myIdx * 1000));
+        form.append('album', 'Vacanze250');
+        if (myIdx < totalPhotosToUpload - 1) {
+          form.append('skipList', '1');
+        }
+        const resp = await fetch(base + '/upload', {
+          method: 'POST',
+          headers: { Cookie: bob },
+          body: form,
+        });
+        assert.equal(resp.status, 200, `Bulk upload failed on photo ${myIdx}`);
+        const data = await resp.json() as any;
+        assert.equal(data.success, true);
+        assert.equal(data.uploadedCount, 1);
+        totalUploadedCount += data.uploadedCount;
+      }
+    }
+
+    await Promise.all(Array.from({ length: parallelWorkers }, () => bulkUploadWorker()));
+    assert.equal(totalUploadedCount, totalPhotosToUpload);
+
+    const bobSession = await (await get('/api/session', bob)).json() as any;
+    assert.equal(bobSession.authenticated, true);
+    assert.equal(bobSession.media.length, totalPhotosToUpload);
+    assert.ok(bobSession.albums.includes('Vacanze250'));
+    assert.equal(bobSession.storageStats.mediaCount, totalPhotosToUpload);
+    assert.equal(bobSession.storageStats.mediaBytes, totalPhotosToUpload * 1024);
   } finally {
     child.kill(); await once(child, 'exit').catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });

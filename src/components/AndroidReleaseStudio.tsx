@@ -20,8 +20,8 @@ export const AndroidReleaseStudio: React.FC<AndroidReleaseStudioProps> = ({
   const [config, setConfig] = useState<AndroidBuildConfig>({
     appName: 'PhotoCloud',
     packageName: 'com.valerio.photocloud',
-    versionName: '1.2.7',
-    versionCode: 24,
+    versionName: '1.2.8',
+    versionCode: 25,
     serverUrl: typeof window !== 'undefined' ? window.location.origin : 'http://10.0.2.2:3000',
     minSdk: 26,
     targetSdk: 35,

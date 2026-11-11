@@ -530,15 +530,15 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.1.3-signed.apk')));
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.2.7"'));
-  assert.ok(appBuildGradle.includes('versionCode = 24'));
+  assert.ok(appBuildGradle.includes('versionName = "1.2.8"'));
+  assert.ok(appBuildGradle.includes('versionCode = 25'));
   assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
   assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
   assert.ok(appBuildGradle.includes('androidx.work:work-runtime-ktx:2.9.0'));
   assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.2.7');
+  assert.equal(pkgJson.version, '1.2.8');
 
   // 6. Multi-platform interactive CLI scripts (photocloud.bat & photocloud.sh)
   const batPath = path.resolve(process.cwd(), 'photocloud.bat');
@@ -581,8 +581,8 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   const baseConfig = {
     appName: 'PhotoCloud "Vault" <Test>',
     packageName: 'com.valerio.photocloud',
-    versionName: '1.2.7',
-    versionCode: 24,
+    versionName: '1.2.8',
+    versionCode: 25,
     serverUrl: 'http://10.0.2.2:3000',
     minSdk: 26,
     targetSdk: 35,
@@ -608,7 +608,7 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   assert.ok(!manifestXml.includes('android:label="PhotoCloud "Vault"'));
 
   const gradleKts = generateAppBuildGradleKts(baseConfig);
-  assert.ok(gradleKts.includes('versionName = "1.2.7"'));
+  assert.ok(gradleKts.includes('versionName = "1.2.8"'));
 
   const mainKt = generateMainActivityKt(baseConfig);
   assert.ok(mainKt.includes('settings.allowFileAccess = false'));
@@ -801,4 +801,53 @@ test('Cloud Total Used Storage Indicator (Header Badge, Popover, Settings Card &
   assert.ok(mainActivityKt.includes('fun CloudStorageBreakdownDialog('));
   assert.ok(mainActivityKt.includes('Memoria Usata Totale del Cloud'));
 });
+
+test('Zero-OOM Streaming Bulk Upload (250+ photos) & Configurable Parallel Transfers (Web & Android v1.2.8)', async () => {
+  const apiClientKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt'),
+    'utf-8'
+  );
+  // 1. Android must stream URIs on demand (UriStreamingRequestBody + ForwardingSink) and never readBytes() all selected URIs into RAM
+  assert.ok(apiClientKt.includes('class UriStreamingRequestBody('));
+  assert.ok(apiClientKt.includes('class ProgressRequestBody('));
+  assert.ok(apiClientKt.includes('ForwardingSink(sink)'));
+  assert.equal(
+    apiClientKt.includes('context.contentResolver.openInputStream(uri)?.use { it.readBytes() }'),
+    false,
+    'uploadMediaUris must never read all selected URIs into ByteArray in RAM upfront'
+  );
+  assert.ok(apiClientKt.includes('fun resolveUriMetadata('));
+  assert.ok(apiClientKt.includes('val semaphore = Semaphore(parallelLimit)'));
+  assert.ok(apiClientKt.includes('fun getMaxParallelTransfers(): Int'));
+  assert.ok(apiClientKt.includes('fun setMaxParallelTransfers(value: Int)'));
+  assert.ok(apiClientKt.includes('fun saveStreamToDownloads('));
+
+  // 2. Android Settings screen & CustomizationState must expose presets + custom numeric input (1..16)
+  const mainActivityKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
+    'utf-8'
+  );
+  assert.ok(mainActivityKt.includes('val maxParallelTransfers: Int = 3'));
+  assert.ok(mainActivityKt.includes('synchronized(transferOpsLock)'));
+  assert.ok(mainActivityKt.includes('title = "Trasferimenti & Caricamenti Paralleli"'));
+  assert.ok(mainActivityKt.includes('1 to "1 • Sequenziale"'));
+  assert.ok(mainActivityKt.includes('3 to "3 • Bilanciato"'));
+  assert.ok(mainActivityKt.includes('8 to "8 • Massimo"'));
+  assert.ok(mainActivityKt.includes('Oppure imposta numero manuale (1 – 16)'));
+
+  // 3. Web App Settings Modal & upload.js parallel worker pool
+  const baseHtml = fs.readFileSync(path.resolve(process.cwd(), 'templates/base.html'), 'utf-8');
+  assert.ok(baseHtml.includes('id="settings-parallel-transfers-card"'));
+  assert.ok(baseHtml.includes('data-parallel-preset="1"'));
+  assert.ok(baseHtml.includes('data-parallel-preset="3"'));
+  assert.ok(baseHtml.includes('data-parallel-preset="8"'));
+  assert.ok(baseHtml.includes('id="settings-parallel-custom-input"'));
+
+  const uploadJs = fs.readFileSync(path.resolve(process.cwd(), 'static/scripts/upload.js'), 'utf-8');
+  assert.ok(uploadJs.includes('window.getMaxParallelTransfers = function'));
+  assert.ok(uploadJs.includes('window.setMaxParallelTransfers = function'));
+  assert.ok(uploadJs.includes('async function runWorker()'));
+  assert.ok(uploadJs.includes("formData.append('skipList', '1')"));
+});
+
 

@@ -536,12 +536,61 @@
         });
     }
 
+    const PARALLEL_STORAGE_KEY = 'photocloud_max_parallel_transfers';
+
+    function clampParallelValue(val) {
+        const parsed = parseInt(String(val), 10);
+        if (!Number.isFinite(parsed)) return 3;
+        return Math.min(16, Math.max(1, parsed));
+    }
+
+    if (typeof window.getMaxParallelTransfers !== 'function') {
+        window.getMaxParallelTransfers = function () {
+            try {
+                const raw = localStorage.getItem(PARALLEL_STORAGE_KEY);
+                return raw ? clampParallelValue(raw) : 3;
+            } catch {
+                return 3;
+            }
+        };
+    }
+
+    if (typeof window.setMaxParallelTransfers !== 'function') {
+        window.setMaxParallelTransfers = function (val) {
+            const clamped = clampParallelValue(val);
+            try {
+                localStorage.setItem(PARALLEL_STORAGE_KEY, String(clamped));
+            } catch {}
+            syncParallelModalControls(clamped);
+            return clamped;
+        };
+    }
+
+    function syncParallelModalControls(valOverride) {
+        const activeVal = valOverride || (typeof window.getMaxParallelTransfers === 'function' ? window.getMaxParallelTransfers() : 3);
+        const badge = document.getElementById('settings-parallel-active-badge');
+        if (badge) badge.textContent = `${activeVal}x simultanei`;
+        const customInput = document.getElementById('settings-parallel-custom-input');
+        if (customInput && document.activeElement !== customInput) {
+            customInput.value = String(activeVal);
+        }
+        const presetBtns = document.querySelectorAll('.parallel-preset-btn[data-parallel-preset]');
+        presetBtns.forEach((btn) => {
+            const pVal = parseInt(btn.getAttribute('data-parallel-preset') || '0', 10);
+            const isSelected = pVal === activeVal;
+            btn.classList.toggle('active', isSelected);
+            btn.classList.toggle('primary', isSelected);
+            btn.classList.toggle('outlined', !isSelected);
+        });
+    }
+
     function openSettingsModal() {
         const modal = document.getElementById('lg-settings-modal-backdrop');
         if (!modal) return;
         if (typeof window.updateCloudStorageIndicators === 'function') {
             window.updateCloudStorageIndicators();
         }
+        syncParallelModalControls();
         modal.classList.add('open');
         syncSettingsDialogControls();
         renderSavedPresetsList();
@@ -557,6 +606,53 @@
         const modal = document.getElementById('lg-settings-modal-backdrop');
         if (!modal || modal.dataset.bound === 'true') return;
         modal.dataset.bound = 'true';
+
+        const card = document.getElementById('settings-parallel-transfers-card');
+        if (card && card.dataset.bound !== 'true') {
+            card.dataset.bound = 'true';
+            card.querySelectorAll('.parallel-preset-btn[data-parallel-preset]').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    const pVal = clampParallelValue(btn.getAttribute('data-parallel-preset'));
+                    window.setMaxParallelTransfers(pVal);
+                    syncParallelModalControls(pVal);
+                });
+            });
+            const customInput = document.getElementById('settings-parallel-custom-input');
+            const decBtn = document.getElementById('settings-parallel-dec-btn');
+            const incBtn = document.getElementById('settings-parallel-inc-btn');
+            const applyBtn = document.getElementById('settings-parallel-apply-btn');
+            if (decBtn) {
+                decBtn.addEventListener('click', () => {
+                    const next = clampParallelValue(window.getMaxParallelTransfers() - 1);
+                    window.setMaxParallelTransfers(next);
+                    syncParallelModalControls(next);
+                });
+            }
+            if (incBtn) {
+                incBtn.addEventListener('click', () => {
+                    const next = clampParallelValue(window.getMaxParallelTransfers() + 1);
+                    window.setMaxParallelTransfers(next);
+                    syncParallelModalControls(next);
+                });
+            }
+            if (customInput) {
+                customInput.addEventListener('change', () => {
+                    const next = clampParallelValue(customInput.value);
+                    customInput.value = String(next);
+                    window.setMaxParallelTransfers(next);
+                    syncParallelModalControls(next);
+                });
+            }
+            if (applyBtn && customInput) {
+                applyBtn.addEventListener('click', () => {
+                    const next = clampParallelValue(customInput.value);
+                    customInput.value = String(next);
+                    window.setMaxParallelTransfers(next);
+                    syncParallelModalControls(next);
+                });
+            }
+        }
+        syncParallelModalControls();
 
         modal.addEventListener('click', (e) => {
             if (e.target === modal) closeSettingsModal();

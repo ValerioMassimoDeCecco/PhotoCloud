@@ -292,38 +292,117 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => tracker.complete(sizeBytes || 0, 0.35), 450);
     };
 
-    function uploadSingleBatch(formData, batchFiles, batchNum, totalBatches, previouslyLoadedBytes, grandTotalBytes, tracker) {
+    const PARALLEL_STORAGE_KEY = 'photocloud_max_parallel_transfers';
+
+    function clampParallelTransfers(val) {
+        const parsed = parseInt(String(val), 10);
+        if (!Number.isFinite(parsed)) return 3;
+        return Math.min(16, Math.max(1, parsed));
+    }
+
+    window.getMaxParallelTransfers = function () {
+        try {
+            const raw = localStorage.getItem(PARALLEL_STORAGE_KEY);
+            return raw ? clampParallelTransfers(raw) : 3;
+        } catch (_e) {
+            return 3;
+        }
+    };
+
+    window.setMaxParallelTransfers = function (val) {
+        const clamped = clampParallelTransfers(val);
+        try {
+            localStorage.setItem(PARALLEL_STORAGE_KEY, String(clamped));
+        } catch (_e) {}
+        syncParallelTransferSettingsUI(clamped);
+        return clamped;
+    };
+
+    function syncParallelTransferSettingsUI(currentVal) {
+        const activeVal = currentVal || window.getMaxParallelTransfers();
+        const badge = document.getElementById('settings-parallel-active-badge');
+        if (badge) {
+            badge.textContent = `${activeVal}x simultanei`;
+        }
+        const customInput = document.getElementById('settings-parallel-custom-input');
+        if (customInput && document.activeElement !== customInput) {
+            customInput.value = String(activeVal);
+        }
+        const presetBtns = document.querySelectorAll('.parallel-preset-btn[data-parallel-preset]');
+        presetBtns.forEach((btn) => {
+            const pVal = parseInt(btn.getAttribute('data-parallel-preset') || '0', 10);
+            const isSelected = pVal === activeVal;
+            btn.classList.toggle('active', isSelected);
+            btn.classList.toggle('primary', isSelected);
+            btn.classList.toggle('outlined', !isSelected);
+        });
+    }
+
+    function bindParallelTransferSettingsUI() {
+        const card = document.getElementById('settings-parallel-transfers-card');
+        if (!card || card.dataset.bound === 'true') return;
+        card.dataset.bound = 'true';
+
+        syncParallelTransferSettingsUI();
+
+        const presetBtns = card.querySelectorAll('.parallel-preset-btn[data-parallel-preset]');
+        presetBtns.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const pVal = clampParallelTransfers(btn.getAttribute('data-parallel-preset'));
+                window.setMaxParallelTransfers(pVal);
+            });
+        });
+
+        const customInput = document.getElementById('settings-parallel-custom-input');
+        const decBtn = document.getElementById('settings-parallel-dec-btn');
+        const incBtn = document.getElementById('settings-parallel-inc-btn');
+        const applyBtn = document.getElementById('settings-parallel-apply-btn');
+
+        if (decBtn) {
+            decBtn.addEventListener('click', () => {
+                const next = clampParallelTransfers(window.getMaxParallelTransfers() - 1);
+                window.setMaxParallelTransfers(next);
+            });
+        }
+        if (incBtn) {
+            incBtn.addEventListener('click', () => {
+                const next = clampParallelTransfers(window.getMaxParallelTransfers() + 1);
+                window.setMaxParallelTransfers(next);
+            });
+        }
+        if (customInput) {
+            customInput.addEventListener('change', () => {
+                const next = clampParallelTransfers(customInput.value);
+                customInput.value = String(next);
+                window.setMaxParallelTransfers(next);
+            });
+        }
+        if (applyBtn && customInput) {
+            applyBtn.addEventListener('click', () => {
+                const next = clampParallelTransfers(customInput.value);
+                customInput.value = String(next);
+                window.setMaxParallelTransfers(next);
+            });
+        }
+    }
+
+    bindParallelTransferSettingsUI();
+
+    function uploadMicroBatchXHR(formData, activeXhrsSet, onChunkProgress) {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
-            const startTime = performance.now();
             xhr.open('POST', '/upload', true);
-
-            if (tracker && typeof tracker.setCancelHandler === 'function') {
-                tracker.setCancelHandler(() => {
-                    xhr.abort();
-                });
-            }
+            activeXhrsSet.add(xhr);
 
             xhr.upload.onprogress = (e) => {
-                if (e.lengthComputable) {
-                    const elapsedSec = Math.max(0.05, (performance.now() - startTime) / 1000);
-                    const speedBps = e.loaded / elapsedSec;
-                    const currentTotalLoaded = Math.min(grandTotalBytes, previouslyLoadedBytes + e.loaded);
-                    const overallPct = grandTotalBytes > 0 ? (currentTotalLoaded / grandTotalBytes) * 100 : (e.loaded / e.total) * 100;
-
-                    tracker.update(
-                        currentTotalLoaded,
-                        grandTotalBytes,
-                        speedBps,
-                        totalBatches > 1
-                            ? `Pacchetto ${batchNum}/${totalBatches} • ${Math.round(overallPct)}% (${formatSpeed(speedBps)})`
-                            : `${Math.round(overallPct)}% • ${formatBytes(currentTotalLoaded)} / ${formatBytes(grandTotalBytes)} (${formatSpeed(speedBps)})`
-                    );
+                if (e.lengthComputable && typeof onChunkProgress === 'function') {
+                    onChunkProgress(e.loaded);
                 }
             };
 
             xhr.onload = () => {
-                if (xhr.status === 200) {
+                activeXhrsSet.delete(xhr);
+                if (xhr.status >= 200 && xhr.status < 300) {
                     let parsed = null;
                     try {
                         parsed = JSON.parse(xhr.responseText);
@@ -339,25 +418,36 @@ document.addEventListener('DOMContentLoaded', () => {
             };
 
             xhr.onabort = () => {
+                activeXhrsSet.delete(xhr);
                 const abortErr = new Error('Trasferimento annullato dall\'utente.');
                 abortErr.isCancelled = true;
                 reject(abortErr);
             };
 
             xhr.onerror = () => {
-                reject(new Error('Errore di rete. Impossibile connettersi al server.'));
+                activeXhrsSet.delete(xhr);
+                reject(new Error('Errore di rete durante il caricamento.'));
             };
 
             xhr.send(formData);
         });
     }
 
+    /**
+     * Partitions any number of files (e.g. 250, 500, 1000+ photos) into small byte-bounded
+     * micro-batches and uploads them using a bounded concurrency pool (maxParallelTransfers 1..16).
+     * Never packs huge multi-file FormData payloads in RAM and never thrash-rebuilds the DOM on every chunk.
+     */
     async function uploadInBatches(files) {
         if (!files || files.length === 0) return;
 
         const allFiles = Array.from(files);
+        const totalFilesCount = allFiles.length;
+        const parallelLimit = window.getMaxParallelTransfers();
         const grandTotalBytes = allFiles.reduce((acc, f) => acc + (f.size || 0), 0);
-        const opTitle = allFiles.length === 1 ? allFiles[0].name : `Caricamento (${allFiles.length} file)`;
+        const opTitle = totalFilesCount === 1
+            ? allFiles[0].name
+            : `Caricamento (${totalFilesCount} file • ${parallelLimit}x)`;
 
         const tracker = window.registerTransferOperation({
             id: `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -366,54 +456,176 @@ document.addEventListener('DOMContentLoaded', () => {
             totalBytes: grandTotalBytes
         });
 
-        const batchSize = 25;
-        let uploadedBytesSoFar = 0;
-        const startOverall = performance.now();
+        // Build byte-aware micro-batches (max 3 files and max 18 MB per XHR request)
+        const MAX_FILES_PER_BATCH = totalFilesCount > 40 ? 2 : 1;
+        const MAX_BYTES_PER_BATCH = 18 * 1024 * 1024;
+        const microBatches = [];
+        let currentBatch = [];
+        let currentBatchBytes = 0;
+
+        for (let i = 0; i < allFiles.length; i++) {
+            const file = allFiles[i];
+            const fSize = file.size || 0;
+            if (
+                currentBatch.length > 0 &&
+                (currentBatch.length >= MAX_FILES_PER_BATCH || currentBatchBytes + fSize > MAX_BYTES_PER_BATCH)
+            ) {
+                microBatches.push({ files: currentBatch, totalBytes: currentBatchBytes });
+                currentBatch = [];
+                currentBatchBytes = 0;
+            }
+            currentBatch.push(file);
+            currentBatchBytes += fSize;
+        }
+        if (currentBatch.length > 0) {
+            microBatches.push({ files: currentBatch, totalBytes: currentBatchBytes });
+        }
+
+        const totalBatches = microBatches.length;
+        const activeXhrs = new Set();
+        const batchLoadedBytes = new Array(totalBatches).fill(0);
+        let completedFilesCount = 0;
+        let failedFilesCount = 0;
+        let isCancelledByUser = false;
         let latestMediaFiles = null;
+        let firstErrorMessage = '';
+        const startOverall = performance.now();
 
-        try {
-            for (let i = 0; i < allFiles.length; i += batchSize) {
-                const batch = allFiles.slice(i, i + batchSize);
-                const batchBytes = batch.reduce((acc, f) => acc + (f.size || 0), 0);
-                const formData = new FormData();
-
-                batch.forEach(file => {
-                    formData.append('file[]', file, file.name);
-                    formData.append('timestamp[]', file.lastModified);
+        if (tracker && typeof tracker.setCancelHandler === 'function') {
+            tracker.setCancelHandler(() => {
+                isCancelledByUser = true;
+                activeXhrs.forEach((xhr) => {
+                    try {
+                        xhr.abort();
+                    } catch (_e) {}
                 });
+                activeXhrs.clear();
+            });
+        }
 
-                const activeAlbum = window.currentSelectedAlbumFilter || '';
-                if (activeAlbum) {
-                    formData.append('album', activeAlbum);
-                }
+        function emitCombinedProgress() {
+            if (isCancelledByUser) return;
+            let loadedSum = 0;
+            for (let i = 0; i < batchLoadedBytes.length; i++) {
+                loadedSum += batchLoadedBytes[i];
+            }
+            const currentTotalLoaded = grandTotalBytes > 0 ? Math.min(grandTotalBytes, loadedSum) : loadedSum;
+            const elapsedSec = Math.max(0.08, (performance.now() - startOverall) / 1000);
+            const speedBps = currentTotalLoaded / elapsedSec;
+            const overallPct = grandTotalBytes > 0 ? (currentTotalLoaded / grandTotalBytes) * 100 : 0;
 
-                const batchNum = Math.floor(i / batchSize) + 1;
-                const totalBatches = Math.ceil(allFiles.length / batchSize);
+            tracker.update(
+                currentTotalLoaded,
+                grandTotalBytes,
+                speedBps,
+                totalFilesCount > 1
+                    ? `${completedFilesCount}/${totalFilesCount} file (${parallelLimit}x) • ${Math.round(overallPct)}% (${formatSpeed(speedBps)})`
+                    : `${Math.round(overallPct)}% • ${formatBytes(currentTotalLoaded)} / ${formatBytes(grandTotalBytes)} (${formatSpeed(speedBps)})`
+            );
+        }
 
-                const batchResp = await uploadSingleBatch(formData, batch, batchNum, totalBatches, uploadedBytesSoFar, grandTotalBytes, tracker);
-                uploadedBytesSoFar += batchBytes;
-                if (batchResp && Array.isArray(batchResp.mediaFiles)) {
-                    latestMediaFiles = batchResp.mediaFiles;
-                    if (typeof window.syncVaultItemsFromServer === 'function') {
-                        window.syncVaultItemsFromServer(latestMediaFiles, { fromUpload: true });
+        let nextBatchIndex = 0;
+        const activeAlbum = window.currentSelectedAlbumFilter || '';
+
+        async function runWorker() {
+            while (!isCancelledByUser) {
+                const batchIdx = nextBatchIndex++;
+                if (batchIdx >= totalBatches) break;
+
+                const micro = microBatches[batchIdx];
+                const expectedBytes = micro.totalBytes;
+                let attempt = 0;
+                let batchSucceeded = false;
+
+                while (attempt < 2 && !batchSucceeded && !isCancelledByUser) {
+                    attempt++;
+                    const formData = new FormData();
+                    micro.files.forEach((file) => {
+                        formData.append('file[]', file, file.name);
+                        formData.append('timestamp[]', file.lastModified || Date.now());
+                    });
+                    if (activeAlbum) {
+                        formData.append('album', activeAlbum);
+                    }
+                    // Skip server-side full directory scan on intermediate micro-batches
+                    if (totalBatches > 1 && batchIdx < totalBatches - 1) {
+                        formData.append('skipList', '1');
+                    }
+
+                    try {
+                        const resp = await uploadMicroBatchXHR(formData, activeXhrs, (loadedInBatch) => {
+                            batchLoadedBytes[batchIdx] = expectedBytes > 0
+                                ? Math.min(expectedBytes, loadedInBatch)
+                                : loadedInBatch;
+                            emitCombinedProgress();
+                        });
+                        batchSucceeded = true;
+                        batchLoadedBytes[batchIdx] = expectedBytes;
+                        completedFilesCount += micro.files.length;
+                        if (resp && Array.isArray(resp.mediaFiles)) {
+                            latestMediaFiles = resp.mediaFiles;
+                        }
+                        emitCombinedProgress();
+                    } catch (err) {
+                        if (err && err.isCancelled) {
+                            isCancelledByUser = true;
+                            throw err;
+                        }
+                        if (!firstErrorMessage && err && err.message) {
+                            firstErrorMessage = err.message;
+                        }
+                        if (attempt >= 2) {
+                            batchLoadedBytes[batchIdx] = 0;
+                            failedFilesCount += micro.files.length;
+                            emitCombinedProgress();
+                        }
                     }
                 }
+            }
+        }
+
+        try {
+            const workerCount = Math.min(parallelLimit, totalBatches);
+            const workers = [];
+            for (let w = 0; w < workerCount; w++) {
+                workers.push(runWorker());
+            }
+            await Promise.all(workers);
+
+            if (isCancelledByUser) {
+                tracker.cancel('Annullato dall\'utente');
+                return;
+            }
+
+            if (completedFilesCount === 0 && failedFilesCount > 0) {
+                tracker.fail(firstErrorMessage || 'Errore durante il caricamento dei file');
+                return;
             }
 
             const totalElapsedSec = Math.max(0.1, (performance.now() - startOverall) / 1000);
             tracker.complete(grandTotalBytes, totalElapsedSec);
 
-            // Sync DOM in-place without reloading the page
-            if (latestMediaFiles && typeof window.syncVaultItemsFromServer === 'function') {
-                window.syncVaultItemsFromServer(latestMediaFiles, { fromUpload: true });
-            } else if (typeof window.refreshVaultFromSession === 'function') {
+            // Sync DOM once at the end of the parallel upload session
+            if (typeof window.refreshVaultFromSession === 'function') {
                 await window.refreshVaultFromSession({ fromUpload: true });
+            } else if (latestMediaFiles && typeof window.syncVaultItemsFromServer === 'function') {
+                window.syncVaultItemsFromServer(latestMediaFiles, { fromUpload: true });
+            } else {
+                try {
+                    const sessResp = await fetch('/api/session', { headers: { Accept: 'application/json' } });
+                    if (sessResp.ok) {
+                        const sessJson = await sessResp.json();
+                        if (sessJson && Array.isArray(sessJson.media) && typeof window.syncVaultItemsFromServer === 'function') {
+                            window.syncVaultItemsFromServer(sessJson.media, { fromUpload: true });
+                        }
+                    }
+                } catch (_e) {}
             }
         } catch (error) {
-            if (error && error.isCancelled) {
+            if (isCancelledByUser || (error && error.isCancelled)) {
                 tracker.cancel('Annullato dall\'utente');
             } else {
-                tracker.fail(error.message || 'Errore caricamento');
+                tracker.fail((error && error.message) || 'Errore caricamento');
             }
         } finally {
             if (uploadForm) uploadForm.reset();

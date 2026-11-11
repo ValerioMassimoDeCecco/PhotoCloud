@@ -288,6 +288,32 @@
                     </div>
                 </div>
 
+                <!-- 0B. Parallel Transfers & Anti-Crash Bulk Upload Engine Configuration -->
+                <div class="lg-section-block" id="settings-parallel-transfers-card">
+                    <div class="cloud-storage-settings-header">
+                        <h3><span class="material-icons">swap_vert</span> Trasferimenti &amp; Caricamenti Paralleli</h3>
+                        <span id="settings-parallel-active-badge" class="cloud-storage-total-pill">3x simultanei</span>
+                    </div>
+                    <p style="margin:0 0 10px;font-size:12px;opacity:0.82;">
+                        Configura quanti trasferimenti eseguire contemporaneamente (1–16). I file vengono suddivisi in micro-blocchi bilanciati per caricare anche oltre 250+ foto senza mai saturare la memoria.
+                    </p>
+                    <div id="settings-parallel-presets-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+                        <button type="button" class="btn outlined parallel-preset-btn" data-parallel-preset="1" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">1 • Sequenziale</button>
+                        <button type="button" class="btn outlined parallel-preset-btn" data-parallel-preset="2" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">2 • Leggero</button>
+                        <button type="button" class="btn outlined parallel-preset-btn active" data-parallel-preset="3" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">3 • Bilanciato</button>
+                        <button type="button" class="btn outlined parallel-preset-btn" data-parallel-preset="4" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">4 • Veloce</button>
+                        <button type="button" class="btn outlined parallel-preset-btn" data-parallel-preset="6" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">6 • Turbo</button>
+                        <button type="button" class="btn outlined parallel-preset-btn" data-parallel-preset="8" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">8 • Massimo</button>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <label for="settings-parallel-custom-input" style="font-size:12px;font-weight:600;">Numero manuale (1–16):</label>
+                        <button type="button" class="btn outlined" id="settings-parallel-dec-btn" aria-label="Riduci trasferimenti paralleli" style="width:36px;height:36px;padding:0;margin:0;min-width:36px;">−</button>
+                        <input type="number" id="settings-parallel-custom-input" min="1" max="16" step="1" value="3" aria-label="Numero trasferimenti paralleli personalizzato" style="width:76px;height:36px;text-align:center;font-weight:700;padding:0 8px;margin:0;" />
+                        <button type="button" class="btn outlined" id="settings-parallel-inc-btn" aria-label="Aumenta trasferimenti paralleli" style="width:36px;height:36px;padding:0;margin:0;min-width:36px;">+</button>
+                        <button type="button" class="btn primary" id="settings-parallel-apply-btn" style="width:auto;height:36px;padding:0 14px;margin:0;font-size:12px;">Applica</button>
+                    </div>
+                </div>
+
                 <!-- 1. Theme Selector -->
                 <div class="lg-section-block">
                     <h3><span class="material-icons">palette</span> Selezione Tema Applicazione</h3>

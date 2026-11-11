@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.7)
+# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.8)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -7,6 +7,24 @@
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
+
+---
+
+## ⚡ Novità Principali della Release `v1.2.8` (`versionCode 25`) — Caricamento Massivo Anti-Crash (250+ Foto) & Trasferimenti Paralleli Configurabili
+
+### 1. Eliminazione Definitiva del Crash con 250+ Foto/File (`PhotoCloudApiClient.kt`, `upload.js`, `server.ts`)
+- **Streaming Diretto da Disco Zero-OOM su Android (`UriStreamingRequestBody` + `ProgressRequestBody`)**:
+  - Risolta la causa del crash (`OutOfMemoryError`) quando si selezionavano 250 o più foto dal telefono: in precedenza l'app leggeva preventivamente in RAM i `ByteArray` completi di tutte le foto selezionate (`openInputStream(uri).readBytes()`) prima di iniziare l'invio.
+  - Con `UriStreamingRequestBody` e il nuovo `ProgressRequestBody` basato su `ForwardingSink`, durante la preparazione vengono letti **solo i metadati leggeri** (`DISPLAY_NAME` e `SIZE`), mentre i byte di ogni foto/video vengono trasmessi direttamente in streaming a blocchi da **32 KB** solo quando il worker di rete invia quel singolo file. L'occupazione di memoria rimane inferiore a pochi megabyte indipendentemente dal numero di file selezionati (250, 500, 1.000+ foto o video pesanti).
+  - Anche il download di pacchetti ZIP e file singoli (`saveStreamToDownloads`) scrive direttamente in streaming in `MediaStore.Downloads` senza allocare l'intero file in RAM.
+- **Motore Web a Micro-Blocchi Bilanciati (`static/scripts/upload.js`) & Hardening Server (`/upload`)**:
+  - La Web App suddivide qualsiasi selezione massiva di file in micro-blocchi sicuri e li carica con un pool di worker concorrenti limitato, aggiornando la galleria DOM una sola volta al termine senza bloccare il browser.
+  - Il server `/upload` supporta fino a 500 file per blocco, gestisce esplicitamente gli errori `MulterError`, rilascia immediatamente i buffer in RAM dopo la cifratura su disco e supporta `skipList=1` sui blocchi intermedi.
+
+### 2. Impostazione Trasferimenti Paralleli Massimi (Preset + Numero Manuale su Android & Web)
+- **Card `Trasferimenti & Caricamenti Paralleli` nelle Impostazioni (Android `NativeSettingsScreen` & Web `#settings-parallel-transfers-card`)**:
+  - **Preset Rapidi**: `1 • Sequenziale`, `2 • Leggero`, `3 • Bilanciato (Default)`, `4 • Veloce`, `6 • Turbo`, `8 • Massimo`.
+  - **Configurazione Manuale (`1 – 16`)**: pulsanti `−` / `+`, campo numerico personalizzato e pulsante `Applica` per scegliere liberamente il numero di trasferimenti simultanei.
 
 ---
 

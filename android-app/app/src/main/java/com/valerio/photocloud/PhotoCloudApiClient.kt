@@ -15,10 +15,16 @@ import android.util.LruCache
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.Cookie
 import okhttp3.CookieJar
+import okhttp3.Dispatcher
 import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.MediaType
@@ -28,16 +34,24 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.Buffer
 import okio.BufferedSink
+import okio.ForwardingSink
+import okio.buffer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.util.Collections
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.ZipInputStream
 import kotlin.math.max
 
@@ -175,7 +189,8 @@ data class MediaItemModel(
 }
 
 /**
- * RequestBody wrapper that reports live upload progress and bytes written.
+ * Zero-allocation streaming RequestBody wrapper that reports live upload progress and bytes written
+ * directly over the underlying BufferedSink without buffering files in RAM.
  */
 class ProgressRequestBody(
     private val delegate: RequestBody,
@@ -191,21 +206,45 @@ class ProgressRequestBody(
 
     override fun writeTo(sink: BufferedSink) {
         val total = contentLength()
-        val buffer = ByteArray(16 * 1024)
-        val outStream = sink.outputStream()
-        // Write delegate into an in-memory buffer or pipe so we can chunk-report
-        val tempBuffer = okio.Buffer()
-        delegate.writeTo(tempBuffer)
-        val totalBytes = if (total > 0L) total else tempBuffer.size
         var uploaded = 0L
-        val inputStream = tempBuffer.inputStream()
-        var read: Int
-        while (inputStream.read(buffer).also { read = it } != -1) {
-            outStream.write(buffer, 0, read)
-            uploaded += read
-            onBytesWritten(uploaded, totalBytes)
+        val countingSink = object : ForwardingSink(sink) {
+            override fun write(source: Buffer, byteCount: Long) {
+                super.write(source, byteCount)
+                uploaded += byteCount
+                onBytesWritten(uploaded, if (total > 0L) total else uploaded)
+            }
         }
-        outStream.flush()
+        val bufferedCountingSink = countingSink.buffer()
+        delegate.writeTo(bufferedCountingSink)
+        bufferedCountingSink.flush()
+    }
+}
+
+/**
+ * Streams a content:// or file:// Uri directly from ContentResolver in 32 KB chunks on demand.
+ * Never loads the entire photo/video into a heap ByteArray, eliminating OutOfMemoryError
+ * even when selecting 250, 500, or 1,000+ photos at once.
+ */
+class UriStreamingRequestBody(
+    private val context: Context,
+    private val uri: Uri,
+    private val mediaType: MediaType?,
+    private val knownByteSize: Long
+) : RequestBody() {
+    override fun contentType(): MediaType? = mediaType
+
+    override fun contentLength(): Long = if (knownByteSize > 0L) knownByteSize else -1L
+
+    override fun writeTo(sink: BufferedSink) {
+        val outStream = sink.outputStream()
+        val buffer = ByteArray(32 * 1024)
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            var read: Int
+            while (input.read(buffer).also { read = it } != -1) {
+                outStream.write(buffer, 0, read)
+            }
+        }
+        sink.flush()
     }
 }
 
@@ -440,13 +479,30 @@ class PhotoCloudApiClient(
         }
     }
 
+    private val appPrefs = context.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE)
+
+    fun getMaxParallelTransfers(): Int {
+        return appPrefs.getInt("max_parallel_transfers", 3).coerceIn(1, 16)
+    }
+
+    fun setMaxParallelTransfers(value: Int) {
+        val clamped = value.coerceIn(1, 16)
+        appPrefs.edit().putInt("max_parallel_transfers", clamped).apply()
+    }
+
     val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .dispatcher(
+            Dispatcher().apply {
+                maxRequests = 64
+                maxRequestsPerHost = 16
+            }
+        )
         .cookieJar(cookieJar)
         .followRedirects(true)
         .followSslRedirects(true)
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
-        .writeTimeout(90, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
+        .writeTimeout(180, TimeUnit.SECONDS)
         .build()
 
     private val noRedirectClient: OkHttpClient = httpClient.newBuilder()
@@ -1294,37 +1350,322 @@ class PhotoCloudApiClient(
         }
     }
 
+    private data class PreparedUploadUri(
+        val uri: Uri,
+        val displayName: String,
+        val mimeType: String,
+        val sizeBytes: Long,
+        val timestampMs: Long
+    )
+
     /**
-     * Uploads any files (photos, videos, PDFs, ZIPs, APKs, docs, audio, etc.) with real-time
-     * byte progress, speed (bytes/sec), and total size reporting.
+     * Uploads any number of files (e.g., 1, 250, 500, or 1,000+ photos, videos, PDFs, ZIPs, APKs, docs, audio)
+     * using zero-OOM streaming (UriStreamingRequestBody) and a bounded parallel coroutine worker pool
+     * controlled by [maxParallelTransfers] (1..16 concurrent transfers).
      */
     suspend fun uploadMediaUris(
         uris: List<Uri>,
         targetAlbum: String = "",
+        maxParallelTransfers: Int = getMaxParallelTransfers(),
         onProgress: (Int, Int) -> Unit = { _, _ -> },
         onTransferUpdate: (TransferOperation) -> Unit = {}
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         if (uris.isEmpty()) return@withContext Pair(false, "Nessun file selezionato")
 
+        val parallelLimit = maxParallelTransfers.coerceIn(1, 16)
         val opId = "up_${System.currentTimeMillis()}"
-        data class PreparedUploadFile(
-            val displayName: String,
-            val mimeType: String,
-            val bytes: ByteArray
-        )
-
-        val prepared = mutableListOf<PreparedUploadFile>()
+        val prepared = ArrayList<PreparedUploadUri>(uris.size)
         var grandTotalBytes = 0L
+        val nowBaseMs = System.currentTimeMillis()
 
-        for (uri in uris) {
-            val bytes = try {
-                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            } catch (_: Exception) {
+        // 1. Resolve ONLY lightweight metadata (name + byte length). Never read file bytes into RAM upfront!
+        for ((idx, uri) in uris.withIndex()) {
+            val meta = resolveUriMetadata(uri, nowBaseMs + idx) ?: continue
+            prepared.add(meta)
+            grandTotalBytes += meta.sizeBytes.coerceAtLeast(0L)
+        }
+
+        if (prepared.isEmpty()) {
+            return@withContext Pair(false, "Impossibile leggere i file selezionati")
+        }
+
+        val totalFilesCount = prepared.size
+        val safeGrandTotal = grandTotalBytes.coerceAtLeast(totalFilesCount * 1024L)
+        val opTitle = if (totalFilesCount == 1) {
+            prepared.first().displayName
+        } else {
+            "Upload ($totalFilesCount file • ${parallelLimit}x)"
+        }
+
+        val startTimeMs = System.currentTimeMillis()
+        val emitLock = Any()
+        val lastEmitMs = AtomicLong(0L)
+        val taskBytesMap = ConcurrentHashMap<Int, Long>()
+        val completedFilesCounter = AtomicInteger(0)
+        val failedFilesCounter = AtomicInteger(0)
+        val uploadedFilenames = Collections.synchronizedList(ArrayList<String>(totalFilesCount))
+
+        fun emitProgress(force: Boolean = false, status: TransferStatus = TransferStatus.RUNNING, customDetail: String? = null) {
+            val now = System.currentTimeMillis()
+            val prev = lastEmitMs.get()
+            if (!force && now - prev < 100L) return
+            if (!force && !lastEmitMs.compareAndSet(prev, now)) return
+            if (force) lastEmitMs.set(now)
+
+            var sumTransferred = 0L
+            for (v in taskBytesMap.values) {
+                sumTransferred += v
+            }
+            val clampedTransferred = if (status == TransferStatus.COMPLETED) {
+                safeGrandTotal
+            } else {
+                sumTransferred.coerceIn(0L, safeGrandTotal)
+            }
+            val elapsedSec = max(0.15, (now - startTimeMs) / 1000.0)
+            val speed = (clampedTransferred / elapsedSec).toLong()
+            val doneCount = completedFilesCounter.get().coerceIn(0, totalFilesCount)
+            val detailStr = customDetail ?: "$doneCount / $totalFilesCount file (${parallelLimit}x paralleli)"
+
+            synchronized(emitLock) {
+                onTransferUpdate(
+                    TransferOperation(
+                        id = opId,
+                        title = opTitle,
+                        isUpload = true,
+                        transferredBytes = clampedTransferred,
+                        totalBytes = safeGrandTotal,
+                        speedBytesPerSec = speed,
+                        status = status,
+                        detail = detailStr
+                    )
+                )
+            }
+        }
+
+        emitProgress(force = true, status = TransferStatus.RUNNING, customDetail = "0 / $totalFilesCount file (${parallelLimit}x paralleli)")
+
+        try {
+            // Partition into byte-bounded micro-batches:
+            // Each worker task carries 1 file (or up to 2 small files < 3 MB when uploading > 60 files)
+            // so memory per worker is strictly 32 KB and parallel workers stay evenly balanced.
+            val tasks = ArrayList<List<PreparedUploadUri>>()
+            var currentBatch = ArrayList<PreparedUploadUri>(2)
+            var currentBatchBytes = 0L
+            val maxFilesPerTask = if (totalFilesCount > 60) 2 else 1
+            val maxBytesPerTask = 6L * 1024L * 1024L // 6 MB cap for multi-file micro-batch
+
+            for (item in prepared) {
+                val itemSize = item.sizeBytes.coerceAtLeast(1024L)
+                if (currentBatch.isNotEmpty() &&
+                    (currentBatch.size >= maxFilesPerTask || (currentBatchBytes + itemSize) > maxBytesPerTask)
+                ) {
+                    tasks.add(currentBatch)
+                    currentBatch = ArrayList(2)
+                    currentBatchBytes = 0L
+                }
+                currentBatch.add(item)
+                currentBatchBytes += itemSize
+            }
+            if (currentBatch.isNotEmpty()) {
+                tasks.add(currentBatch)
+            }
+
+            val semaphore = Semaphore(parallelLimit)
+            val lastErrMessage = AtomicLong(0L)
+            @Volatile var firstErrorText = ""
+
+            coroutineScope {
+                tasks.mapIndexed { taskIndex, batch ->
+                    async(Dispatchers.IO) {
+                        semaphore.withPermit {
+                            val batchExpectedBytes = batch.sumOf { it.sizeBytes.coerceAtLeast(1024L) }
+                            var taskSuccess = false
+                            var attempt = 0
+
+                            while (attempt < 2 && !taskSuccess) {
+                                attempt++
+                                try {
+                                    val multipartBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
+                                    for (item in batch) {
+                                        val streamBody = UriStreamingRequestBody(
+                                            context = context,
+                                            uri = item.uri,
+                                            mediaType = item.mimeType.toMediaTypeOrNull(),
+                                            knownByteSize = item.sizeBytes
+                                        )
+                                        multipartBuilder.addFormDataPart(
+                                            "file[]",
+                                            item.displayName,
+                                            streamBody
+                                        )
+                                        multipartBuilder.addFormDataPart("timestamp[]", item.timestampMs.toString())
+                                    }
+
+                                    if (targetAlbum.isNotBlank()) {
+                                        multipartBuilder.addFormDataPart("album", targetAlbum.trim())
+                                    }
+                                    // Skip heavy server directory scan on intermediate chunks
+                                    if (tasks.size > 1) {
+                                        multipartBuilder.addFormDataPart("skipList", "1")
+                                    }
+
+                                    val rawBody = multipartBuilder.build()
+                                    val progressBody = ProgressRequestBody(rawBody) { writtenInBatch, _ ->
+                                        taskBytesMap[taskIndex] = writtenInBatch.coerceAtMost(batchExpectedBytes)
+                                        emitProgress(force = false)
+                                    }
+
+                                    val request = Request.Builder()
+                                        .url("${cleanBaseUrl()}/upload")
+                                        .post(progressBody)
+                                        .build()
+
+                                    httpClient.newCall(request).execute().use { response ->
+                                        if (response.isSuccessful) {
+                                            taskSuccess = true
+                                            taskBytesMap[taskIndex] = batchExpectedBytes
+                                            val bodyStr = response.body?.string() ?: ""
+                                            var parsedServerNames = false
+                                            if (bodyStr.trim().startsWith("{")) {
+                                                try {
+                                                    val json = JSONObject(bodyStr)
+                                                    val fnArr = json.optJSONArray("uploadedFilenames")
+                                                    if (fnArr != null && fnArr.length() > 0) {
+                                                        for (i in 0 until fnArr.length()) {
+                                                            val fn = fnArr.optString(i, "")
+                                                            if (fn.isNotBlank()) uploadedFilenames.add(fn)
+                                                        }
+                                                        parsedServerNames = true
+                                                    }
+                                                } catch (_: Exception) {
+                                                }
+                                            }
+                                            if (!parsedServerNames) {
+                                                batch.forEach { uploadedFilenames.add(it.displayName) }
+                                            }
+                                        } else {
+                                            val errBody = response.body?.string() ?: "Errore HTTP ${response.code}"
+                                            if (firstErrorText.isBlank()) {
+                                                firstErrorText = errBody
+                                            }
+                                            if (attempt < 2) {
+                                                delay(250L)
+                                            }
+                                        }
+                                    }
+                                } catch (e: Throwable) {
+                                    if (firstErrorText.isBlank()) {
+                                        firstErrorText = e.localizedMessage ?: "Errore di connessione"
+                                    }
+                                    if (attempt < 2) {
+                                        delay(250L)
+                                    }
+                                }
+                            }
+
+                            if (taskSuccess) {
+                                val doneNow = completedFilesCounter.addAndGet(batch.size)
+                                synchronized(emitLock) {
+                                    onProgress(doneNow, totalFilesCount)
+                                }
+                                emitProgress(force = true)
+                            } else {
+                                taskBytesMap[taskIndex] = 0L
+                                failedFilesCounter.addAndGet(batch.size)
+                                lastErrMessage.set(System.currentTimeMillis())
+                                emitProgress(force = true)
+                            }
+                        }
+                    }
+                }.awaitAll()
+            }
+
+            val succeededCount = completedFilesCounter.get()
+            val failedCount = failedFilesCounter.get()
+
+            if (succeededCount == 0) {
+                val errDetail = firstErrorText.ifBlank { "Errore durante il caricamento dei file" }
+                emitProgress(force = true, status = TransferStatus.ERROR, customDetail = errDetail)
+                return@withContext Pair(false, errDetail)
+            }
+
+            if (targetAlbum.isNotBlank() && uploadedFilenames.isNotEmpty()) {
+                assignFilesToAlbum(uploadedFilenames.toList(), targetAlbum.trim())
+            }
+
+            val finalSummary = if (failedCount > 0) {
+                "$succeededCount / $totalFilesCount file caricati ($failedCount non riusciti)"
+            } else {
+                "$succeededCount file caricati con successo"
+            }
+
+            emitProgress(
+                force = true,
+                status = TransferStatus.COMPLETED,
+                customDetail = "$succeededCount file caricati"
+            )
+
+            Pair(true, finalSummary)
+        } catch (e: Throwable) {
+            val errDetail = e.localizedMessage ?: "Errore di rete"
+            emitProgress(force = true, status = TransferStatus.ERROR, customDetail = errDetail)
+            Pair(false, "Errore durante il caricamento: $errDetail")
+        }
+    }
+
+    /**
+     * Extracts display name and byte size from a Uri without reading file content into RAM.
+     */
+    private fun resolveUriMetadata(uri: Uri, fallbackTimestampMs: Long): PreparedUploadUri? {
+        return try {
+            var displayName: String? = null
+            var byteSize = -1L
+
+            context.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null,
+                null,
                 null
-            } ?: continue
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIdx >= 0 && !cursor.isNull(nameIdx)) {
+                        displayName = cursor.getString(nameIdx)
+                    }
+                    val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) {
+                        byteSize = cursor.getLong(sizeIdx)
+                    }
+                }
+            }
+
+            if (byteSize <= 0L) {
+                try {
+                    context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                        if (afd.length > 0L) {
+                            byteSize = afd.length
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+            }
+
+            // Verify stream can be opened without reading bytes
+            if (byteSize < 0L) {
+                val canOpen = try {
+                    context.contentResolver.openInputStream(uri)?.use { true } ?: false
+                } catch (_: Exception) {
+                    false
+                }
+                if (!canOpen) return null
+                byteSize = 0L
+            }
 
             val mime = context.contentResolver.getType(uri) ?: "application/octet-stream"
-            val rawName = resolveDisplayName(uri) ?: "file_${System.currentTimeMillis()}"
+            val rawName = displayName?.takeIf { it.isNotBlank() }
+                ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+                ?: "file_$fallbackTimestampMs"
             val hasExt = rawName.contains('.') && rawName.substringAfterLast('.', "").isNotBlank()
 
             val finalName = if (hasExt) {
@@ -1343,160 +1684,13 @@ class PhotoCloudApiClient(
                 "$rawName.$ext"
             }
 
-            prepared.add(PreparedUploadFile(finalName, mime, bytes))
-            grandTotalBytes += bytes.size.toLong()
-        }
-
-        if (prepared.isEmpty()) {
-            return@withContext Pair(false, "Impossibile leggere i file selezionati")
-        }
-
-        val opTitle = if (prepared.size == 1) {
-            prepared.first().displayName
-        } else {
-            "Upload (${prepared.size} file)"
-        }
-
-        val startTimeMs = System.currentTimeMillis()
-        var completedBytesBeforeBatch = 0L
-        var uploadedCount = 0
-
-        onTransferUpdate(
-            TransferOperation(
-                id = opId,
-                title = opTitle,
-                isUpload = true,
-                transferredBytes = 0L,
-                totalBytes = grandTotalBytes,
-                speedBytesPerSec = 0L,
-                status = TransferStatus.RUNNING,
-                detail = "0 / ${prepared.size} file"
+            PreparedUploadUri(
+                uri = uri,
+                displayName = finalName,
+                mimeType = mime,
+                sizeBytes = byteSize.coerceAtLeast(0L),
+                timestampMs = fallbackTimestampMs
             )
-        )
-
-        try {
-            val batchSize = 5
-            val batches = prepared.chunked(batchSize)
-            val uploadedFilenames = mutableListOf<String>()
-
-            for (batch in batches) {
-                val multipartBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
-                var batchPayloadBytes = 0L
-
-                for (item in batch) {
-                    multipartBuilder.addFormDataPart(
-                        "file[]",
-                        item.displayName,
-                        item.bytes.toRequestBody(item.mimeType.toMediaTypeOrNull())
-                    )
-                    multipartBuilder.addFormDataPart("timestamp[]", System.currentTimeMillis().toString())
-                    batchPayloadBytes += item.bytes.size.toLong()
-                    uploadedFilenames.add(item.displayName)
-                }
-
-                if (targetAlbum.isNotBlank()) {
-                    multipartBuilder.addFormDataPart("album", targetAlbum.trim())
-                }
-
-                val rawBody = multipartBuilder.build()
-                var lastEmitMs = 0L
-                val progressBody = ProgressRequestBody(rawBody) { writtenInBatch, _ ->
-                    val now = System.currentTimeMillis()
-                    if (now - lastEmitMs >= 120L || writtenInBatch >= batchPayloadBytes) {
-                        lastEmitMs = now
-                        val currentTotalTransferred = (completedBytesBeforeBatch + writtenInBatch)
-                            .coerceAtMost(grandTotalBytes)
-                        val elapsedSec = max(0.15, (now - startTimeMs) / 1000.0)
-                        val speed = (currentTotalTransferred / elapsedSec).toLong()
-                        onTransferUpdate(
-                            TransferOperation(
-                                id = opId,
-                                title = opTitle,
-                                isUpload = true,
-                                transferredBytes = currentTotalTransferred,
-                                totalBytes = grandTotalBytes,
-                                speedBytesPerSec = speed,
-                                status = TransferStatus.RUNNING,
-                                detail = "${uploadedCount + batch.size} / ${prepared.size} file"
-                            )
-                        )
-                    }
-                }
-
-                val request = Request.Builder()
-                    .url("${cleanBaseUrl()}/upload")
-                    .post(progressBody)
-                    .build()
-
-                httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        val errBody = response.body?.string() ?: "Errore upload (${response.code})"
-                        onTransferUpdate(
-                            TransferOperation(
-                                id = opId,
-                                title = opTitle,
-                                isUpload = true,
-                                transferredBytes = completedBytesBeforeBatch,
-                                totalBytes = grandTotalBytes,
-                                speedBytesPerSec = 0L,
-                                status = TransferStatus.ERROR,
-                                detail = errBody
-                            )
-                        )
-                        return@withContext Pair(false, errBody)
-                    }
-                }
-
-                completedBytesBeforeBatch += batchPayloadBytes
-                uploadedCount += batch.size
-                onProgress(uploadedCount, prepared.size)
-            }
-
-            if (targetAlbum.isNotBlank() && uploadedFilenames.isNotEmpty()) {
-                assignFilesToAlbum(uploadedFilenames, targetAlbum.trim())
-            }
-
-            val totalElapsedSec = max(0.2, (System.currentTimeMillis() - startTimeMs) / 1000.0)
-            val avgSpeed = (grandTotalBytes / totalElapsedSec).toLong()
-            onTransferUpdate(
-                TransferOperation(
-                    id = opId,
-                    title = opTitle,
-                    isUpload = true,
-                    transferredBytes = grandTotalBytes,
-                    totalBytes = grandTotalBytes,
-                    speedBytesPerSec = avgSpeed,
-                    status = TransferStatus.COMPLETED,
-                    detail = "$uploadedCount file caricati"
-                )
-            )
-
-            Pair(true, "$uploadedCount file caricati con successo")
-        } catch (e: Exception) {
-            onTransferUpdate(
-                TransferOperation(
-                    id = opId,
-                    title = opTitle,
-                    isUpload = true,
-                    transferredBytes = completedBytesBeforeBatch,
-                    totalBytes = grandTotalBytes,
-                    speedBytesPerSec = 0L,
-                    status = TransferStatus.ERROR,
-                    detail = e.localizedMessage ?: "Errore di rete"
-                )
-            )
-            Pair(false, "Errore durante il caricamento: ${e.localizedMessage}")
-        }
-    }
-
-    private fun resolveDisplayName(uri: Uri): String? {
-        return try {
-            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (idx >= 0) cursor.getString(idx) else null
-                } else null
-            }
         } catch (_: Exception) {
             null
         }
@@ -1749,50 +1943,45 @@ class PhotoCloudApiClient(
                 if (!resp.isSuccessful) return@withContext Pair(false, "Errore download ZIP")
                 val body = resp.body ?: return@withContext Pair(false, "ZIP vuoto")
                 val contentLen = body.contentLength().coerceAtLeast(0L)
-                val outBuffer = java.io.ByteArrayOutputStream()
-                val buf = ByteArray(16 * 1024)
-                var downloaded = 0L
+                val savedName = "PhotoCloud_${System.currentTimeMillis()}.zip"
                 var lastEmit = 0L
 
-                body.byteStream().use { input ->
-                    var r: Int
-                    while (input.read(buf).also { r = it } != -1) {
-                        outBuffer.write(buf, 0, r)
-                        downloaded += r
-                        val now = System.currentTimeMillis()
-                        if (now - lastEmit >= 120L) {
-                            lastEmit = now
-                            val elapsed = max(0.15, (now - dlStartMs) / 1000.0)
-                            val speed = (downloaded / elapsed).toLong()
-                            onTransferUpdate(
-                                TransferOperation(
-                                    id = opId,
-                                    title = opTitle,
-                                    isUpload = false,
-                                    transferredBytes = downloaded,
-                                    totalBytes = if (contentLen > 0L) contentLen else downloaded,
-                                    speedBytesPerSec = speed,
-                                    status = TransferStatus.RUNNING,
-                                    detail = "Scaricamento pacchetto ZIP..."
-                                )
+                val (ok, writtenBytes) = saveStreamToDownloads(
+                    context = context,
+                    filename = savedName,
+                    inputStream = body.byteStream(),
+                    mimeType = "application/zip"
+                ) { downloaded ->
+                    val now = System.currentTimeMillis()
+                    if (now - lastEmit >= 120L) {
+                        lastEmit = now
+                        val elapsed = max(0.15, (now - dlStartMs) / 1000.0)
+                        val speed = (downloaded / elapsed).toLong()
+                        onTransferUpdate(
+                            TransferOperation(
+                                id = opId,
+                                title = opTitle,
+                                isUpload = false,
+                                transferredBytes = downloaded,
+                                totalBytes = if (contentLen > 0L) contentLen else downloaded,
+                                speedBytesPerSec = speed,
+                                status = TransferStatus.RUNNING,
+                                detail = "Scaricamento pacchetto ZIP..."
                             )
-                        }
+                        )
                     }
                 }
 
-                val bytes = outBuffer.toByteArray()
-                val savedName = "PhotoCloud_${System.currentTimeMillis()}.zip"
-                val ok = saveBytesToDownloads(context, savedName, bytes, "application/zip")
                 val elapsed = max(0.2, (System.currentTimeMillis() - dlStartMs) / 1000.0)
-                val finalSpeed = (bytes.size / elapsed).toLong()
+                val finalSpeed = (writtenBytes / elapsed).toLong()
 
                 onTransferUpdate(
                     TransferOperation(
                         id = opId,
                         title = opTitle,
                         isUpload = false,
-                        transferredBytes = bytes.size.toLong(),
-                        totalBytes = bytes.size.toLong(),
+                        transferredBytes = writtenBytes,
+                        totalBytes = writtenBytes,
                         speedBytesPerSec = finalSpeed,
                         status = if (ok) TransferStatus.COMPLETED else TransferStatus.ERROR,
                         detail = if (ok) "Salvato in Download: $savedName" else "Errore salvataggio"
@@ -1863,50 +2052,45 @@ class PhotoCloudApiClient(
                 }
                 val body = resp.body ?: return@withContext Pair(false, "File vuoto")
                 val totalLen = body.contentLength().coerceAtLeast(0L)
-                val outBuffer = java.io.ByteArrayOutputStream()
-                val buf = ByteArray(16 * 1024)
-                var downloaded = 0L
+                val mime = resp.header("Content-Type") ?: "application/octet-stream"
                 var lastEmit = 0L
 
-                body.byteStream().use { input ->
-                    var r: Int
-                    while (input.read(buf).also { r = it } != -1) {
-                        outBuffer.write(buf, 0, r)
-                        downloaded += r
-                        val now = System.currentTimeMillis()
-                        if (now - lastEmit >= 100L) {
-                            lastEmit = now
-                            val elapsed = max(0.15, (now - startMs) / 1000.0)
-                            val speed = (downloaded / elapsed).toLong()
-                            onTransferUpdate(
-                                TransferOperation(
-                                    id = opId,
-                                    title = filename,
-                                    isUpload = false,
-                                    transferredBytes = downloaded,
-                                    totalBytes = if (totalLen > 0L) totalLen else downloaded,
-                                    speedBytesPerSec = speed,
-                                    status = TransferStatus.RUNNING,
-                                    detail = "In scaricamento..."
-                                )
+                val (ok, writtenBytes) = saveStreamToDownloads(
+                    context = context,
+                    filename = filename,
+                    inputStream = body.byteStream(),
+                    mimeType = mime
+                ) { downloaded ->
+                    val now = System.currentTimeMillis()
+                    if (now - lastEmit >= 100L) {
+                        lastEmit = now
+                        val elapsed = max(0.15, (now - startMs) / 1000.0)
+                        val speed = (downloaded / elapsed).toLong()
+                        onTransferUpdate(
+                            TransferOperation(
+                                id = opId,
+                                title = filename,
+                                isUpload = false,
+                                transferredBytes = downloaded,
+                                totalBytes = if (totalLen > 0L) totalLen else downloaded,
+                                speedBytesPerSec = speed,
+                                status = TransferStatus.RUNNING,
+                                detail = "In scaricamento..."
                             )
-                        }
+                        )
                     }
                 }
 
-                val bytes = outBuffer.toByteArray()
-                val mime = resp.header("Content-Type") ?: "application/octet-stream"
-                val ok = saveBytesToDownloads(context, filename, bytes, mime)
                 val elapsed = max(0.15, (System.currentTimeMillis() - startMs) / 1000.0)
-                val speed = (bytes.size / elapsed).toLong()
+                val speed = (writtenBytes / elapsed).toLong()
 
                 onTransferUpdate(
                     TransferOperation(
                         id = opId,
                         title = filename,
                         isUpload = false,
-                        transferredBytes = bytes.size.toLong(),
-                        totalBytes = bytes.size.toLong(),
+                        transferredBytes = writtenBytes,
+                        totalBytes = writtenBytes,
                         speedBytesPerSec = speed,
                         status = if (ok) TransferStatus.COMPLETED else TransferStatus.ERROR,
                         detail = if (ok) "Salvato in Download" else "Errore salvataggio"
@@ -2393,7 +2577,28 @@ class PhotoCloudApiClient(
             bytes: ByteArray,
             mimeType: String
         ): Boolean {
+            return saveStreamToDownloads(
+                context = context,
+                filename = filename,
+                inputStream = ByteArrayInputStream(bytes),
+                mimeType = mimeType
+            ).first
+        }
+
+        /**
+         * Streams an InputStream directly to MediaStore.Downloads (API 29+) or public Downloads folder
+         * in 32 KB chunks without allocating the entire file in RAM.
+         */
+        fun saveStreamToDownloads(
+            context: Context,
+            filename: String,
+            inputStream: InputStream,
+            mimeType: String,
+            onProgressBytes: (Long) -> Unit = {}
+        ): Pair<Boolean, Long> {
+            var totalWritten = 0L
             return try {
+                val buf = ByteArray(32 * 1024)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     val values = ContentValues().apply {
                         put(MediaStore.Downloads.DISPLAY_NAME, filename)
@@ -2403,28 +2608,42 @@ class PhotoCloudApiClient(
                     }
                     val resolver = context.contentResolver
                     val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                        ?: return false
-                    resolver.openOutputStream(uri)?.use { out ->
-                        out.write(bytes)
-                        out.flush()
+                        ?: return Pair(false, 0L)
+                    inputStream.use { input ->
+                        resolver.openOutputStream(uri)?.use { out ->
+                            var r: Int
+                            while (input.read(buf).also { r = it } != -1) {
+                                out.write(buf, 0, r)
+                                totalWritten += r
+                                onProgressBytes(totalWritten)
+                            }
+                            out.flush()
+                        } ?: return Pair(false, 0L)
                     }
                     values.clear()
                     values.put(MediaStore.Downloads.IS_PENDING, 0)
                     resolver.update(uri, values, null, null)
-                    true
+                    Pair(true, totalWritten)
                 } else {
                     @Suppress("DEPRECATION")
                     val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                     if (!dir.exists()) dir.mkdirs()
                     val file = File(dir, filename)
-                    FileOutputStream(file).use { out ->
-                        out.write(bytes)
-                        out.flush()
+                    inputStream.use { input ->
+                        FileOutputStream(file).use { out ->
+                            var r: Int
+                            while (input.read(buf).also { r = it } != -1) {
+                                out.write(buf, 0, r)
+                                totalWritten += r
+                                onProgressBytes(totalWritten)
+                            }
+                            out.flush()
+                        }
                     }
-                    true
+                    Pair(true, totalWritten)
                 }
             } catch (_: Exception) {
-                false
+                Pair(false, totalWritten)
             }
         }
     }

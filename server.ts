@@ -18,6 +18,7 @@ import {
   renderLoginTemplate,
   renderGalleryTemplate,
   renderTrashTemplate,
+  computeCloudStorageStats,
 } from './src/lib/templateRenderer';
 import {
   resolveFileViewerSpec,
@@ -41,7 +42,7 @@ const RELEASE_DIR = path.resolve(process.cwd(), 'release');
  * così non si può più annunciare una versione diversa da quella realmente compilata.
  */
 function readAndroidAppVersion(): { versionName: string; versionCode: number } {
-  const fallback = { versionName: '1.2.7', versionCode: 24 };
+  const fallback = { versionName: '1.2.8', versionCode: 25 };
   try {
     const gradlePath = path.resolve(APP_ROOT, 'android-app/app/build.gradle.kts');
     if (!fs.existsSync(gradlePath)) return fallback;
@@ -314,8 +315,8 @@ function listMediaFiles(folderPath: string, username?: string): MediaItem[] {
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 200 * 1024 * 1024, // 200 MB max per file
-    files: 50,
+    fileSize: 250 * 1024 * 1024, // 250 MB max per file
+    files: 500, // Support large multi-file batches without LIMIT_FILE_COUNT crash
     fieldSize: 25 * 1024 * 1024,
   },
 });
@@ -409,13 +410,17 @@ async function startServer() {
     const userFolder = path.join(UPLOAD_FOLDER, sess.username);
     const trashFolder = path.join(userFolder, 'trash');
     const albumsData = loadUserAlbums(sess.username);
+    const activeMediaFiles = listMediaFiles(userFolder, sess.username);
+    const trashedMediaFiles = listMediaFiles(trashFolder, sess.username);
     res.json({
       authenticated: true,
       username: sess.username,
-      mediaFiles: listMediaFiles(userFolder, sess.username),
-      trashedFiles: listMediaFiles(trashFolder, sess.username),
+      media: activeMediaFiles,
+      mediaFiles: activeMediaFiles,
+      trashedFiles: trashedMediaFiles,
       albums: albumsData.albums,
       fileAlbums: albumsData.fileAlbums,
+      storageStats: computeCloudStorageStats(activeMediaFiles, trashedMediaFiles),
     });
   });
 
@@ -626,100 +631,127 @@ async function startServer() {
     res.redirect('/');
   });
 
-  // --- UPLOAD (Supports Both Media & Non-Media Cloud Files + Optional Album) ---
-  app.post('/upload', upload.array('file[]'), (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const files = req.files as Express.Multer.File[] | undefined;
-    if (!files || files.length === 0) {
-      res.status(400).json({ error: 'Nessun file' });
-      return;
-    }
-
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    fs.mkdirSync(userFolder, { recursive: true });
-
-    const rawTimestamps = req.body?.['timestamp[]'] || req.body?.timestamp;
-    const timestamps = Array.isArray(rawTimestamps)
-      ? rawTimestamps
-      : rawTimestamps
-      ? [rawTimestamps]
-      : [];
-
-    const targetAlbum = String(req.body?.album || '').trim();
-    const albumsData = loadUserAlbums(sess.username);
-    if (targetAlbum && !albumsData.albums.includes(targetAlbum)) {
-      albumsData.albums.push(targetAlbum);
-      albumsData.albums.sort((a, b) => a.localeCompare(b, 'it'));
-    }
-
-    try {
-      files.forEach((file, i) => {
-        const rawOrig = path.basename(file.originalname || `file_${Date.now()}`);
-        const ext = path.extname(rawOrig) || '.bin';
-        const baseClean = path
-          .basename(rawOrig, ext)
-          .replace(/[^a-zA-Z0-9._-]/g, '_')
-          .slice(0, 64).replace(/^\.+/, '') || 'file';
-
-        const { isMedia } = classifyFileExtension(rawOrig);
-        let filename = '';
-        let filepath = '';
-
-        if (!isMedia) {
-          // For Cloud File Manager non-media files, preserve readable filename
-          const candidate = `${baseClean}${ext}`;
-          if (!fs.existsSync(path.join(userFolder, candidate))) {
-            filename = candidate;
-            filepath = path.join(userFolder, candidate);
-          }
+  // --- UPLOAD (Supports Both Media & Non-Media Cloud Files + Optional Album + High-Volume Parallel Batches) ---
+  app.post(
+    '/upload',
+    (req: Request, res: Response, next) => {
+      upload.array('file[]')(req, res, (err: unknown) => {
+        if (err) {
+          const msg =
+            err instanceof multer.MulterError
+              ? `Limite upload raggiunto (${err.code}): riduci la dimensione del singolo blocco.`
+              : err instanceof Error
+              ? err.message
+              : 'Errore lettura multipart upload';
+          res.status(400).json({ error: msg });
+          return;
         }
-
-        if (!filename) {
-          while (true) {
-            const suffix = crypto.randomBytes(4).toString('hex');
-            filename = isMedia ? `${crypto.randomBytes(8).toString('hex')}${ext}` : `${baseClean}_${suffix}${ext}`;
-            filepath = path.join(userFolder, filename);
-            if (!fs.existsSync(filepath)) break;
-          }
-        }
-
-        const encrypted = encryptFile(file.buffer, sess.apiKey);
-        fs.writeFileSync(filepath, encrypted);
-
-        if (targetAlbum) {
-          albumsData.fileAlbums[filename] = targetAlbum;
-        }
-
-        if (timestamps[i]) {
-          const mtime = parseFloat(timestamps[i]) / 1000;
-          if (!Number.isNaN(mtime) && mtime > 0) {
-            try {
-              fs.utimesSync(filepath, mtime, mtime);
-            } catch {
-              // ignore utime errors
-            }
-          }
-        }
+        next();
       });
-
-      if (targetAlbum) {
-        saveUserAlbums(sess.username, albumsData);
+    },
+    (req: Request, res: Response) => {
+      const sess = getSession(req);
+      if (!sess) {
+        res.status(403).json({ error: 'Accesso negato' });
+        return;
+      }
+      const files = req.files as Express.Multer.File[] | undefined;
+      if (!files || files.length === 0) {
+        res.status(400).json({ error: 'Nessun file' });
+        return;
       }
 
-      res.json({
-        success: true,
-        message: `${files.length} file caricati.`,
-        mediaFiles: listMediaFiles(userFolder, sess.username),
-      });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      res.status(500).json({ error: `Errore durante il caricamento: ${msg}` });
+      const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+      fs.mkdirSync(userFolder, { recursive: true });
+
+      const rawTimestamps = req.body?.['timestamp[]'] || req.body?.timestamp;
+      const timestamps = Array.isArray(rawTimestamps)
+        ? rawTimestamps
+        : rawTimestamps
+        ? [rawTimestamps]
+        : [];
+
+      const rawAlbum = String(req.body?.album || '').trim();
+      const targetAlbum = rawAlbum && isValidAlbumName(rawAlbum) ? rawAlbum : '';
+      const skipList = req.body?.skipList === '1' || req.query?.skipList === '1';
+      const uploadedFilenames: string[] = [];
+
+      try {
+        files.forEach((file, i) => {
+          const rawOrig = path.basename(file.originalname || `file_${Date.now()}`);
+          const ext = path.extname(rawOrig) || '.bin';
+          const baseClean =
+            path
+              .basename(rawOrig, ext)
+              .replace(/[^a-zA-Z0-9._-]/g, '_')
+              .slice(0, 64)
+              .replace(/^\.+/, '') || 'file';
+
+          const { isMedia } = classifyFileExtension(rawOrig);
+          let filename = '';
+          let filepath = '';
+
+          if (!isMedia) {
+            // For Cloud File Manager non-media files, preserve readable filename
+            const candidate = `${baseClean}${ext}`;
+            if (!fs.existsSync(path.join(userFolder, candidate))) {
+              filename = candidate;
+              filepath = path.join(userFolder, candidate);
+            }
+          }
+
+          if (!filename) {
+            while (true) {
+              const suffix = crypto.randomBytes(4).toString('hex');
+              filename = isMedia ? `${crypto.randomBytes(8).toString('hex')}${ext}` : `${baseClean}_${suffix}${ext}`;
+              filepath = path.join(userFolder, filename);
+              if (!fs.existsSync(filepath)) break;
+            }
+          }
+
+          const encrypted = encryptFile(file.buffer, sess.apiKey);
+          fs.writeFileSync(filepath, encrypted);
+          // Release raw file buffer immediately to keep server heap low during 250+ file uploads
+          file.buffer = Buffer.alloc(0);
+          uploadedFilenames.push(filename);
+
+          if (timestamps[i]) {
+            const mtime = parseFloat(timestamps[i]) / 1000;
+            if (!Number.isNaN(mtime) && mtime > 0) {
+              try {
+                fs.utimesSync(filepath, mtime, mtime);
+              } catch {
+                // ignore utime errors
+              }
+            }
+          }
+        });
+
+        if (targetAlbum && uploadedFilenames.length > 0) {
+          const albumsData = loadUserAlbums(sess.username);
+          if (!albumsData.albums.includes(targetAlbum)) {
+            albumsData.albums.push(targetAlbum);
+            albumsData.albums.sort((a, b) => a.localeCompare(b, 'it'));
+          }
+          for (const fn of uploadedFilenames) {
+            albumsData.fileAlbums[fn] = targetAlbum;
+          }
+          saveUserAlbums(sess.username, albumsData);
+        }
+
+        res.json({
+          success: true,
+          uploadedCount: uploadedFilenames.length,
+          uploadedFilenames,
+          message: `${files.length} file caricati.`,
+          mediaFiles: skipList ? undefined : listMediaFiles(userFolder, sess.username),
+        });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        res.status(500).json({ error: `Errore durante il caricamento: ${msg}` });
+      }
     }
-  });
+  );
 
   // --- PHOTO EDITOR SAVE ENDPOINT (Supports "copy" and "overwrite" modes) ---
   app.post('/api/media/edit', upload.single('file'), (req: Request, res: Response) => {
