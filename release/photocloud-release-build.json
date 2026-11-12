@@ -1,19 +1,19 @@
 {
-  "apkFilename": "photocloud-release-v1.3.0-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.3.0-signed.apk",
+  "apkFilename": "photocloud-release-v1.3.1-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.3.1-signed.apk",
   "sha256": "f0aac0b2d0591af8fa28f0c5880a443091b52ac8c1aa1935746948cab08cd296",
   "sizeBytes": 12409161,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.3.0",
-  "versionCode": 27,
-  "changelog": "Release 1.3.0 — Hardening completo di sicurezza (rimozione keystore compromesso dal repository, pre-auth su upload/edit, verifica SHA-256 modello AI, permessi Android 13–14), upload e creazione ZIP su disco temporaneo a memoria costante, crittografia PBKDF2/AES-256-GCM asincrona con cache LRU, supporto RFC 9110 per HTTP Range (206/416), riallineamento indicatori spazio cloud e integrità APK V1/V2/V3.",
+  "versionName": "1.3.1",
+  "versionCode": 28,
+  "changelog": "Release 1.3.1 — Riscrittura completa del motore di visualizzazione (Lightbox 120Hz) ed editing unificato Foto + Video su Web e Android Nativo: pinch/wheel zoom su cursore, pan fluido, player video custom con scrub bar, -10s/+10s, velocità 0.5x–2x, mute e loop, Undo/Redo, Confronto Originale, filtri GPU 120fps, ritaglio manuale a 8 maniglie e taglio/esportazione video reale (MediaRecorder Web & MediaExtractor/MediaMuxer/MediaCodec hardware Android).",
   "features": [
-    "Hardening Sicurezza & Crittografia (v1.3.0): rimozione keystore dal repository, autenticazione preventiva prima dello streaming multipart, verifica SHA-256 per il modello AI TFLite e protezione endpoint di release",
-    "Architettura Upload & ZIP Zero-OOM: storage temporaneo su disco per upload multipli e archivi ZIP, con crittografia/decrittografia asincrona non bloccante e cache LRU PBKDF2",
-    "HTTP Byte-Range RFC 9110: supporto completo per range standard, suffix range (bytes=-N) e risposta 416 Range Not Satisfiable su /media e /api/ai-model",
-    "Indicatori Memoria Cloud & Cestino in Tempo Reale: sincronizzazione immediata di badge, popover, impostazioni e cestino dopo ogni upload, modifica o eliminazione",
-    "Controllo Completo dei Trasferimenti (Android & Web): Pausa/Riprendi, Annulla, scelta modalità diretta o .zip e cartelle di destinazione personalizzabili"
+    "Motore Lightbox 120Hz Foto & Video (Web & Android): zoom sul cursore (1x–5x), doppio tocco, pan fluido, swipe laterale/dismiss, HUD a scomparsa al tocco e barra miniature rapida",
+    "Player Video Integrato Responsivo: controllo scrub timecode, Play/Pausa centrale, salto -10s/+10s, selettore velocità (0.5x–2x), Muto e Loop su Web e Android",
+    "Studio Editing Unificato Foto & Video (v1.3.1): layout adattivo Desktop (Stage + Inspector laterale) e Mobile (Thumb-zone con tab Regola / Filtri / Ritaglia / Video)",
+    "Controlli Avanzati di Precisione: cronologia Undo/Redo (Ctrl+Z / Ctrl+Y), Confronto Originale istantaneo, anteprima colore GPU e griglia ritaglio manuale a 8 maniglie",
+    "Esportazione Video Reale Web & Android: taglio temporale (Trim Start/End), rimozione audio, filtri colore, rotazione, specchio e ritaglio con migrazione automatica del contenitore"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.3.0",
-  "publishedAt": "2026-11-12T08:55:43.642Z"
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.3.1",
+  "publishedAt": "2026-11-12T19:37:31.818Z"
 }

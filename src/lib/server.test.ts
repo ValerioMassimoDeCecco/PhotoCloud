@@ -106,13 +106,13 @@ test('server protects vaults, preserves collisions, and handles real media flows
     if (updateManifestResp.status === 404) {
       const missing = await updateManifestResp.json() as any;
       assert.equal(missing.error, 'Nessun APK di release disponibile sul server');
-      assert.equal(missing.versionName, '1.3.0');
+      assert.equal(missing.versionName, '1.3.1');
     } else {
       assert.equal(updateManifestResp.status, 200);
       const updateManifest = await updateManifestResp.json() as any;
-      assert.equal(updateManifest.versionCode, 27);
-      assert.equal(updateManifest.versionName, '1.3.0');
-      assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.3.0-signed.apk');
+      assert.equal(updateManifest.versionCode, 28);
+      assert.equal(updateManifest.versionName, '1.3.1');
+      assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.3.1-signed.apk');
       assert.equal(updateManifest.sha256.length, 64);
       assert.ok(updateManifest.sizeBytes > 10 * 1024 * 1024);
     }
@@ -278,6 +278,58 @@ test('server protects vaults, preserves collisions, and handles real media flows
     assert.ok(bobSession.albums.includes('Vacanze250'));
     assert.equal(bobSession.storageStats.mediaCount, totalPhotosToUpload);
     assert.equal(bobSession.storageStats.mediaBytes, totalPhotosToUpload * 1024);
+
+    // 9. Video /api/media/edit test: upload MP4, save edited WebM copy, and overwrite original MP4 -> WebM migration
+    const videoUploadForm = new FormData();
+    const fakeMp4Bytes = new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+    videoUploadForm.append('file[]', new Blob([fakeMp4Bytes], { type: 'video/mp4' }), 'clip_originale.mp4');
+    videoUploadForm.append('timestamp[]', String(Date.now()));
+    const upVidResp = await fetch(base + '/upload', {
+      method: 'POST',
+      headers: { Cookie: alice },
+      body: videoUploadForm,
+    });
+    assert.equal(upVidResp.status, 200);
+    const upVidData = await upVidResp.json() as any;
+    const uploadedMp4Name = upVidData.uploadedFilenames?.[0] as string;
+    assert.ok(uploadedMp4Name && uploadedMp4Name.endsWith('.mp4'));
+    const uploadedStem = uploadedMp4Name.replace(/\.mp4$/i, '');
+
+    const fakeWebmBytes = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x9f, 0x42, 0x86, 0x81, 0x01]);
+    const copyEditForm = new FormData();
+    copyEditForm.append('file', new Blob([fakeWebmBytes], { type: 'video/webm' }), `${uploadedStem}.webm`);
+    copyEditForm.append('originalFilename', uploadedMp4Name);
+    copyEditForm.append('mode', 'copy');
+    const copyEditResp = await fetch(base + '/api/media/edit', {
+      method: 'POST',
+      headers: { Cookie: alice },
+      body: copyEditForm,
+    });
+    assert.equal(copyEditResp.status, 200);
+    const copyEditJson = await copyEditResp.json() as any;
+    assert.equal(copyEditJson.success, true);
+    assert.equal(copyEditJson.isVideo, true);
+    assert.ok(copyEditJson.filename.endsWith('.webm'));
+    assert.notEqual(copyEditJson.filename, uploadedMp4Name);
+    assert.ok(copyEditJson.mediaFiles.some((f: any) => f.filename === uploadedMp4Name));
+    assert.ok(copyEditJson.mediaFiles.some((f: any) => f.filename === copyEditJson.filename));
+
+    const overwriteEditForm = new FormData();
+    overwriteEditForm.append('file', new Blob([fakeWebmBytes], { type: 'video/webm' }), `${uploadedStem}.webm`);
+    overwriteEditForm.append('originalFilename', uploadedMp4Name);
+    overwriteEditForm.append('mode', 'overwrite');
+    const owEditResp = await fetch(base + '/api/media/edit', {
+      method: 'POST',
+      headers: { Cookie: alice },
+      body: overwriteEditForm,
+    });
+    assert.equal(owEditResp.status, 200);
+    const owEditJson = await owEditResp.json() as any;
+    assert.equal(owEditJson.success, true);
+    assert.equal(owEditJson.isVideo, true);
+    assert.equal(owEditJson.filename, `${uploadedStem}.webm`);
+    assert.equal(owEditJson.mediaFiles.some((f: any) => f.filename === uploadedMp4Name), false);
+    assert.equal(owEditJson.mediaFiles.some((f: any) => f.filename === `${uploadedStem}.webm`), true);
   } finally {
     child.kill(); await once(child, 'exit').catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });

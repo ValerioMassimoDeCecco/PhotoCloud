@@ -207,8 +207,16 @@ export function renderGalleryTemplate(
       if (isImg) {
         mediaTag = `<img src="/media/${encodeURIComponent(item.filename)}" alt="${file}" loading="lazy">`;
       } else if (isVid) {
-        mediaTag = `<video preload="metadata">
-                        <source src="/media/${encodeURIComponent(item.filename)}#t=0.5" type="video/mp4">
+        const videoMime =
+          ext === 'webm'
+            ? 'video/webm'
+            : ext === 'mov'
+            ? 'video/quicktime'
+            : ext === 'mkv'
+            ? 'video/x-matroska'
+            : 'video/mp4';
+        mediaTag = `<video preload="metadata" muted playsinline>
+                        <source src="/media/${encodeURIComponent(item.filename)}#t=0.5" type="${videoMime}">
                     </video>
                     <div class="video-overlay"><span class="material-icons">play_circle</span></div>`;
       } else {
@@ -243,8 +251,8 @@ export function renderGalleryTemplate(
                 ${albumBadge}
                 <div class="media-actions">
                     ${
-                      isImg
-                        ? `<button type="button" class="btn icon edit-photo-btn" title="Modifica Foto" aria-label="Modifica ${file}" onclick="window.openPhotoEditor && window.openPhotoEditor(this.closest('[data-filename]').dataset.filename, event)">
+                      isImg || isVid
+                        ? `<button type="button" class="btn icon edit-photo-btn" title="${isVid ? 'Modifica Video' : 'Modifica Foto'}" aria-label="Modifica ${file}" onclick="window.openPhotoEditor && window.openPhotoEditor(this.closest('[data-filename]').dataset.filename, event)">
                             <span class="material-icons">tune</span>
                         </button>`
                         : ''

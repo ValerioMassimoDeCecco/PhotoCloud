@@ -45,7 +45,7 @@ const RELEASE_DIR = path.resolve(process.cwd(), 'release');
  * così non si può più annunciare una versione diversa da quella realmente compilata.
  */
 function readAndroidAppVersion(): { versionName: string; versionCode: number } {
-  const fallback = { versionName: '1.3.0', versionCode: 27 };
+  const fallback = { versionName: '1.3.1', versionCode: 28 };
   try {
     const gradlePath = path.resolve(APP_ROOT, 'android-app/app/build.gradle.kts');
     if (!fs.existsSync(gradlePath)) return fallback;
@@ -972,7 +972,7 @@ async function startServer() {
     }
   );
 
-  // --- PHOTO EDITOR SAVE ENDPOINT (Supports "copy" and "overwrite" modes) ---
+  // --- MEDIA EDITOR SAVE ENDPOINT (Supports Photos & Videos in "copy" and "overwrite" modes) ---
   app.post(
     '/api/media/edit',
     (req: Request, res: Response, next: NextFunction) => {
@@ -984,7 +984,7 @@ async function startServer() {
       upload.single('file')(req, res, (err: unknown) => {
         if (err) {
           cleanupUploadedFiles(req);
-          res.status(400).json({ error: 'File immagine non valido o troppo grande.' });
+          res.status(400).json({ error: 'File media non valido o troppo grande.' });
           return;
         }
         next();
@@ -1002,21 +1002,48 @@ async function startServer() {
         const originalFilename = isValidVaultFilename(rawOriginal) ? rawOriginal : '';
         const mode = String(req.body?.mode || 'copy').toLowerCase() === 'overwrite' ? 'overwrite' : 'copy';
 
-        let imageBuffer: Buffer | null = null;
+        let mediaBuffer: Buffer | null = null;
         if (req.file) {
           const uploadedBuf = readUploadedFileBuffer(req.file);
           if (uploadedBuf.length > 0) {
-            imageBuffer = uploadedBuf;
+            mediaBuffer = uploadedBuf;
           }
-        } else if (typeof req.body?.imageBase64 === 'string' && req.body.imageBase64.length > 0) {
-          const rawB64 = req.body.imageBase64.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
-          imageBuffer = Buffer.from(rawB64, 'base64');
+        } else {
+          const rawB64Input =
+            typeof req.body?.mediaBase64 === 'string' && req.body.mediaBase64.length > 0
+              ? req.body.mediaBase64
+              : typeof req.body?.imageBase64 === 'string' && req.body.imageBase64.length > 0
+              ? req.body.imageBase64
+              : '';
+          if (rawB64Input) {
+            const rawB64 = rawB64Input.replace(/^data:(image|video)\/[a-zA-Z0-9+.-]+;base64,/, '');
+            mediaBuffer = Buffer.from(rawB64, 'base64');
+          }
         }
 
-        if (!imageBuffer || imageBuffer.length === 0) {
-          res.status(400).json({ error: 'Immagine modificata non valida o vuota.' });
+        if (!mediaBuffer || mediaBuffer.length === 0) {
+          res.status(400).json({ error: 'File media modificato non valido o vuoto.' });
           return;
         }
+
+        const ALLOWED_EDIT_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.mp4', '.webm', '.mov', '.mkv']);
+        const VIDEO_EDIT_EXTS = new Set(['.mp4', '.webm', '.mov', '.mkv']);
+
+        const uploadedExt = req.file?.originalname ? path.extname(req.file.originalname).toLowerCase() : '';
+        const requestedExt = typeof req.body?.targetExtension === 'string'
+          ? (req.body.targetExtension.startsWith('.') ? req.body.targetExtension.toLowerCase() : `.${req.body.targetExtension.toLowerCase()}`)
+          : '';
+        const origExt = originalFilename ? path.extname(originalFilename).toLowerCase() : '';
+
+        const chosenExt = ALLOWED_EDIT_EXTS.has(requestedExt)
+          ? requestedExt
+          : ALLOWED_EDIT_EXTS.has(uploadedExt)
+          ? uploadedExt
+          : ALLOWED_EDIT_EXTS.has(origExt)
+          ? origExt
+          : '.jpg';
+
+        const isVideo = VIDEO_EDIT_EXTS.has(chosenExt) || VIDEO_EDIT_EXTS.has(origExt);
 
         const userFolder = path.join(UPLOAD_FOLDER, sess.username);
         const trashFolder = path.join(userFolder, 'trash');
@@ -1026,32 +1053,56 @@ async function startServer() {
 
         let targetFilename = '';
         let targetFilepath = '';
+        let replacedOldFilename = '';
 
         if (mode === 'overwrite' && originalFilename) {
           const candidatePath = path.resolve(safeUserFolder, originalFilename);
           if (candidatePath.startsWith(safeUserFolder + path.sep) && fs.existsSync(candidatePath)) {
-            targetFilename = originalFilename;
-            targetFilepath = candidatePath;
+            if (origExt && origExt !== chosenExt && VIDEO_EDIT_EXTS.has(chosenExt)) {
+              // Container changed (e.g. .mp4 -> .webm from browser recorder): write with accurate extension so MIME matches
+              const baseStem = path.basename(originalFilename, origExt).replace(/[^a-zA-Z0-9._-]/g, '_') || 'video';
+              targetFilename = `${baseStem}${chosenExt}`;
+              if (!isValidVaultFilename(targetFilename)) {
+                targetFilename = `${crypto.randomBytes(8).toString('hex')}${chosenExt}`;
+              }
+              targetFilepath = path.resolve(safeUserFolder, targetFilename);
+              replacedOldFilename = originalFilename;
+            } else {
+              targetFilename = originalFilename;
+              targetFilepath = candidatePath;
+            }
           }
         }
 
         if (!targetFilename) {
-          const ext = path.extname(originalFilename || '.jpg') || '.jpg';
-          const safeExt = ['.jpg', '.jpeg', '.png', '.webp'].includes(ext.toLowerCase()) ? ext : '.jpg';
           while (true) {
-            targetFilename = `${crypto.randomBytes(8).toString('hex')}${safeExt}`;
+            targetFilename = `${crypto.randomBytes(8).toString('hex')}${chosenExt}`;
             targetFilepath = path.join(safeUserFolder, targetFilename);
             if (!fs.existsSync(targetFilepath)) break;
           }
         }
 
-        const encrypted = await encryptFileAsync(imageBuffer, sess.apiKey);
+        const encrypted = await encryptFileAsync(mediaBuffer, sess.apiKey);
         await fs.promises.writeFile(targetFilepath, encrypted);
 
-        // Preserve album assignment if original photo belonged to an album
+        if (replacedOldFilename && replacedOldFilename !== targetFilename) {
+          const oldPath = path.resolve(safeUserFolder, replacedOldFilename);
+          if (oldPath.startsWith(safeUserFolder + path.sep) && fs.existsSync(oldPath)) {
+            try {
+              await fs.promises.unlink(oldPath);
+            } catch {
+              // ignore cleanup errors
+            }
+          }
+        }
+
+        // Preserve album assignment if original media belonged to an album
         const albumsData = loadUserAlbums(sess.username);
         if (originalFilename && albumsData.fileAlbums[originalFilename] && targetFilename !== originalFilename) {
           albumsData.fileAlbums[targetFilename] = albumsData.fileAlbums[originalFilename];
+          if (replacedOldFilename && albumsData.fileAlbums[replacedOldFilename]) {
+            delete albumsData.fileAlbums[replacedOldFilename];
+          }
           saveUserAlbums(sess.username, albumsData);
         }
 
@@ -1061,16 +1112,22 @@ async function startServer() {
         res.json({
           success: true,
           mode,
+          isVideo,
           filename: targetFilename,
+          previousFilename: originalFilename || undefined,
           message:
             mode === 'overwrite'
-              ? 'Foto originale aggiornata con successo.'
+              ? isVideo
+                ? 'Video originale aggiornato con successo.'
+                : 'Foto originale aggiornata con successo.'
+              : isVideo
+              ? 'Video modificato salvato come nuova copia.'
               : 'Foto modificata salvata come nuova copia.',
           mediaFiles: activeMediaFiles,
           storageStats: computeCloudStorageStats(activeMediaFiles, trashedMediaFiles),
         });
       } catch {
-        res.status(500).json({ error: 'Errore salvataggio foto modificata.' });
+        res.status(500).json({ error: 'Errore salvataggio media modificato.' });
       } finally {
         cleanupUploadedFiles(req);
       }

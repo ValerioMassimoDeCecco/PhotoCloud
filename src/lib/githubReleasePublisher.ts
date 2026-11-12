@@ -38,8 +38,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.3.0';
-const APK_FILENAME = 'photocloud-release-v1.3.0-signed.apk';
+const DEFAULT_TAG = 'v1.3.1';
+const APK_FILENAME = 'photocloud-release-v1.3.1-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
@@ -56,6 +56,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     // If gradle binary is not present in local container, use pre-built signed release APK
     const fallbackCandidates = [
       path.join(outputDir, APK_FILENAME),
+      path.join(outputDir, 'photocloud-release-v1.3.0-signed.apk'),
       path.join(outputDir, 'photocloud-release-v1.2.9-signed.apk'),
       path.join(outputDir, 'photocloud-release-v1.2.7-signed.apk'),
       path.join(outputDir, 'photocloud-release-v1.2.5-signed.apk'),
@@ -78,17 +79,17 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     sha256,
     sizeBytes: apkBuffer.length,
     applicationId: 'com.valerio.photocloud',
-    versionName: '1.3.0',
-    versionCode: 27,
-    changelog: 'Release 1.3.0 — Hardening completo di sicurezza (rimozione keystore compromesso dal repository, pre-auth su upload/edit, verifica SHA-256 modello AI, permessi Android 13–14), upload e creazione ZIP su disco temporaneo a memoria costante, crittografia PBKDF2/AES-256-GCM asincrona con cache LRU, supporto RFC 9110 per HTTP Range (206/416), riallineamento indicatori spazio cloud e integrità APK V1/V2/V3.',
+    versionName: '1.3.1',
+    versionCode: 28,
+    changelog: 'Release 1.3.1 — Riscrittura completa del motore di visualizzazione (Lightbox 120Hz) ed editing unificato Foto + Video su Web e Android Nativo: pinch/wheel zoom su cursore, pan fluido, player video custom con scrub bar, -10s/+10s, velocità 0.5x–2x, mute e loop, Undo/Redo, Confronto Originale, filtri GPU 120fps, ritaglio manuale a 8 maniglie e taglio/esportazione video reale (MediaRecorder Web & MediaExtractor/MediaMuxer/MediaCodec hardware Android).',
     features: [
-      'Hardening Sicurezza & Crittografia (v1.3.0): rimozione keystore dal repository, autenticazione preventiva prima dello streaming multipart, verifica SHA-256 per il modello AI TFLite e protezione endpoint di release',
-      'Architettura Upload & ZIP Zero-OOM: storage temporaneo su disco per upload multipli e archivi ZIP, con crittografia/decrittografia asincrona non bloccante e cache LRU PBKDF2',
-      'HTTP Byte-Range RFC 9110: supporto completo per range standard, suffix range (bytes=-N) e risposta 416 Range Not Satisfiable su /media e /api/ai-model',
-      'Indicatori Memoria Cloud & Cestino in Tempo Reale: sincronizzazione immediata di badge, popover, impostazioni e cestino dopo ogni upload, modifica o eliminazione',
-      'Controllo Completo dei Trasferimenti (Android & Web): Pausa/Riprendi, Annulla, scelta modalità diretta o .zip e cartelle di destinazione personalizzabili'
+      'Motore Lightbox 120Hz Foto & Video (Web & Android): zoom sul cursore (1x–5x), doppio tocco, pan fluido, swipe laterale/dismiss, HUD a scomparsa al tocco e barra miniature rapida',
+      'Player Video Integrato Responsivo: controllo scrub timecode, Play/Pausa centrale, salto -10s/+10s, selettore velocità (0.5x–2x), Muto e Loop su Web e Android',
+      'Studio Editing Unificato Foto & Video (v1.3.1): layout adattivo Desktop (Stage + Inspector laterale) e Mobile (Thumb-zone con tab Regola / Filtri / Ritaglia / Video)',
+      'Controlli Avanzati di Precisione: cronologia Undo/Redo (Ctrl+Z / Ctrl+Y), Confronto Originale istantaneo, anteprima colore GPU e griglia ritaglio manuale a 8 maniglie',
+      'Esportazione Video Reale Web & Android: taglio temporale (Trim Start/End), rimozione audio, filtri colore, rotazione, specchio e ritaglio con migrazione automatica del contenitore'
     ],
-    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.3.0',
+    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.3.1',
     publishedAt: new Date().toISOString(),
   }, null, 2));
   return { apkPath, apkBuffer, sha256, metadataPath };

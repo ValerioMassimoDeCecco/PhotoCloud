@@ -5,10 +5,16 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.RenderEffect
+import android.graphics.SurfaceTexture
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Base64
+import android.view.Surface
+import android.view.TextureView
 import android.view.WindowManager
 import android.widget.MediaController
 import android.widget.Toast
@@ -67,6 +73,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -80,7 +90,10 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Compare
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
@@ -92,9 +105,12 @@ import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lock
@@ -107,9 +123,14 @@ import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.RestoreFromTrash
+import androidx.compose.material.icons.filled.RotateLeft
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.UploadFile
@@ -131,6 +152,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -317,7 +339,7 @@ sealed class PendingTransferRequest {
 }
 
 /**
- * PhotoCloud 100% Native Android Client v1.3.0
+ * PhotoCloud 100% Native Android Client v1.3.1
  * - Drag-to-Select Multiple Media in LazyVerticalGrid & SelectionActionsPanel
  * - Lightbox Gesture Navigation with HorizontalPager, Swipe-to-Dismiss, Double-Tap Zoom & Coherent Slide Transitions
  * - Cloud File Manager for non-media files (PDF, ZIP, APK, Docs, Audio, Code, etc.)
@@ -6981,6 +7003,7 @@ fun NativeLightboxModal(
     )
     val currentItem = items.getOrNull(pagerState.currentPage) ?: items.first()
     var dismissOffsetY by remember { mutableFloatStateOf(0f) }
+    var hudVisible by remember { mutableStateOf(true) }
     var onDemandAiTags by remember(currentItem.filename) {
         mutableStateOf(aiCategoriesByFilename[currentItem.filename].orEmpty())
     }
@@ -7017,9 +7040,9 @@ fun NativeLightboxModal(
         }
     }
 
-    // Preload adjacent photos for 0ms swipe transitions
     LaunchedEffect(pagerState.currentPage, items.size) {
         dismissOffsetY = 0f
+        hudVisible = true
         val neighbors = listOf(pagerState.currentPage - 1, pagerState.currentPage + 1)
         for (idx in neighbors) {
             val neighbor = items.getOrNull(idx)
@@ -7093,7 +7116,6 @@ fun NativeLightboxModal(
                 label = "lightboxDismissY"
             )
 
-            // Coherent page transition calculation based on continuous HorizontalPager offset
             val pageOffset = (pagerState.currentPage - pageIndex) + pagerState.currentPageOffsetFraction
             val absPageOffset = abs(pageOffset).coerceIn(0f, 1f)
             val transitionScale = 1f - (absPageOffset * 0.12f)
@@ -7113,6 +7135,7 @@ fun NativeLightboxModal(
                     .pointerInput(pageIndex, media.isVideo) {
                         if (media.isVideo) return@pointerInput
                         detectTapGestures(
+                            onTap = { hudVisible = !hudVisible },
                             onDoubleTap = { tapOffset ->
                                 if (zoomScale > 1.05f) {
                                     zoomScale = 1f
@@ -7130,8 +7153,6 @@ fun NativeLightboxModal(
                         )
                     }
                     .pointerInput(pageIndex, media.isVideo) {
-                        // Per i video il touch va lasciato al player: lo swipe sulla seek bar
-                        // non deve essere rubato dal pinch/pan del lightbox.
                         if (media.isVideo) return@pointerInput
                         awaitEachGesture {
                             awaitFirstDown(requireUnconsumed = false)
@@ -7168,7 +7189,6 @@ fun NativeLightboxModal(
                                         val atHorizontalEdge = (nextX > maxX && panChange.x > 0f) || (nextX < -maxX && panChange.x < 0f)
                                         offsetX = nextX.coerceIn(-maxX, maxX)
                                         offsetY = nextY.coerceIn(-maxY, maxY)
-                                        // Only consume if not pushing past the horizontal edge, allowing pager swipe at edge
                                         if (!atHorizontalEdge || abs(panChange.y) > abs(panChange.x)) {
                                             event.changes.forEach { if (it.positionChanged()) it.consume() }
                                         }
@@ -7182,8 +7202,6 @@ fun NativeLightboxModal(
                                             dismissOffsetY += panChange.y
                                             event.changes.forEach { if (it.positionChanged()) it.consume() }
                                         }
-                                        // Horizontal 1-finger drag is left unconsumed so HorizontalPager
-                                        // handles smooth swipe navigation between photos!
                                     }
                                 }
                             } while (event.changes.any { it.pressed })
@@ -7202,32 +7220,227 @@ fun NativeLightboxModal(
             ) {
                 val loadedBitmap = bmp
                 if (media.isVideo) {
-                    // Le anteprime RAM dei video (v1.1.2) non devono MAI coprire il player:
-                    // i video passano sempre da VideoView + MediaController (play/pausa, seek, durata),
-                    // altrimenti si vede solo l'immagine statica senza alcun controllo.
                     val videoUrl = apiClient.getMediaUrl(media.filename, fromTrash)
                     val cookieHeader = apiClient.getCookieHeaderForCurrentServer()
-                    AndroidView(
-                        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.8f),
-                        factory = { ctx ->
-                            VideoView(ctx).apply {
-                                val controller = MediaController(ctx)
-                                controller.setAnchorView(this)
-                                setMediaController(controller)
-                                setVideoURI(
-                                    Uri.parse(videoUrl),
-                                    if (cookieHeader.isNotBlank()) mapOf("Cookie" to cookieHeader) else emptyMap()
-                                )
-                                setOnPreparedListener { mp ->
-                                    mp.isLooping = true
-                                    controller.show(3000)
-                                    if (autoplayVideos) {
-                                        start()
+                    var videoViewRef by remember { mutableStateOf<VideoView?>(null) }
+                    var mediaPlayerRef by remember { mutableStateOf<MediaPlayer?>(null) }
+                    var isPlaying by remember { mutableStateOf(autoplayVideos) }
+                    var isMuted by remember { mutableStateOf(false) }
+                    var isLooping by remember { mutableStateOf(true) }
+                    var playbackSpeed by remember { mutableFloatStateOf(1f) }
+                    var positionMs by remember { mutableLongStateOf(0L) }
+                    var durationMs by remember { mutableLongStateOf(0L) }
+                    var isScrubbing by remember { mutableStateOf(false) }
+
+                    LaunchedEffect(pagerState.currentPage, isPlaying, videoViewRef) {
+                        if (pagerState.currentPage != pageIndex) {
+                            videoViewRef?.pause()
+                            isPlaying = false
+                        } else {
+                            while (true) {
+                                val vv = videoViewRef
+                                if (vv != null && !isScrubbing) {
+                                    try {
+                                        val dur = vv.duration.toLong().coerceAtLeast(0L)
+                                        val pos = vv.currentPosition.toLong().coerceAtLeast(0L)
+                                        if (dur > 0L) durationMs = dur
+                                        positionMs = pos
+                                        isPlaying = vv.isPlaying
+                                    } catch (_: Exception) {
+                                    }
+                                }
+                                delay(200L)
+                            }
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = 86.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AndroidView(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .fillMaxHeight(0.76f)
+                                .clickable {
+                                    hudVisible = !hudVisible
+                                },
+                            factory = { ctx ->
+                                VideoView(ctx).apply {
+                                    val controller = MediaController(ctx)
+                                    controller.setAnchorView(this)
+                                    controller.visibility = android.view.View.GONE
+                                    setMediaController(controller)
+                                    setVideoURI(
+                                        Uri.parse(videoUrl),
+                                        if (cookieHeader.isNotBlank()) mapOf("Cookie" to cookieHeader) else emptyMap()
+                                    )
+                                    setOnPreparedListener { mp ->
+                                        mediaPlayerRef = mp
+                                        mp.isLooping = isLooping
+                                        durationMs = mp.duration.toLong().coerceAtLeast(0L)
+                                        if (isMuted) mp.setVolume(0f, 0f) else mp.setVolume(1f, 1f)
+                                        if (autoplayVideos && pagerState.currentPage == pageIndex) {
+                                            start()
+                                            isPlaying = true
+                                        }
+                                    }
+                                    setOnCompletionListener {
+                                        if (!isLooping) isPlaying = false
+                                    }
+                                    videoViewRef = this
+                                }
+                            }
+                        )
+
+                        // Custom 120Hz Material 3 Video Player HUD
+                        AnimatedVisibility(
+                            visible = hudVisible,
+                            enter = fadeIn(),
+                            exit = fadeOut(),
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(22.dp),
+                                color = Color(0xFF14161F).copy(alpha = 0.88f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.14f))
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = formatVideoDurationMs(positionMs),
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Slider(
+                                            value = if (durationMs > 0L) positionMs.toFloat().coerceIn(0f, durationMs.toFloat()) else 0f,
+                                            onValueChange = { next ->
+                                                isScrubbing = true
+                                                positionMs = next.toLong()
+                                            },
+                                            onValueChangeFinished = {
+                                                videoViewRef?.seekTo(positionMs.toInt())
+                                                isScrubbing = false
+                                            },
+                                            valueRange = 0f..(durationMs.coerceAtLeast(1L)).toFloat(),
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Text(
+                                            text = formatVideoDurationMs(durationMs),
+                                            color = Color.White.copy(alpha = 0.78f),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(onClick = {
+                                                val vv = videoViewRef ?: return@IconButton
+                                                if (vv.isPlaying) {
+                                                    vv.pause()
+                                                    isPlaying = false
+                                                } else {
+                                                    vv.start()
+                                                    isPlaying = true
+                                                }
+                                            }) {
+                                                Icon(
+                                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                    contentDescription = "Play/Pausa",
+                                                    tint = Color(0xFFA8C7FA)
+                                                )
+                                            }
+                                            IconButton(onClick = {
+                                                val vv = videoViewRef ?: return@IconButton
+                                                val target = (vv.currentPosition - 10_000).coerceAtLeast(0)
+                                                vv.seekTo(target)
+                                                positionMs = target.toLong()
+                                            }) {
+                                                Icon(Icons.Default.Replay10, contentDescription = "-10s", tint = Color.White)
+                                            }
+                                            IconButton(onClick = {
+                                                val vv = videoViewRef ?: return@IconButton
+                                                val target = (vv.currentPosition + 10_000).coerceAtMost(durationMs.toInt().coerceAtLeast(0))
+                                                vv.seekTo(target)
+                                                positionMs = target.toLong()
+                                            }) {
+                                                Icon(Icons.Default.Forward10, contentDescription = "+10s", tint = Color.White)
+                                            }
+                                        }
+
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            TextButton(
+                                                onClick = {
+                                                    val steps = listOf(1f, 1.25f, 1.5f, 2f, 0.5f)
+                                                    val nextSpeed = steps[(steps.indexOf(playbackSpeed) + 1) % steps.size]
+                                                    playbackSpeed = nextSpeed
+                                                    try {
+                                                        val mp = mediaPlayerRef
+                                                        if (mp != null) {
+                                                            mp.playbackParams = mp.playbackParams.setSpeed(nextSpeed)
+                                                        }
+                                                    } catch (_: Exception) {
+                                                    }
+                                                }
+                                            ) {
+                                                Text(
+                                                    text = "${playbackSpeed}x",
+                                                    color = Color.White,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                            IconButton(onClick = {
+                                                isMuted = !isMuted
+                                                try {
+                                                    val v = if (isMuted) 0f else 1f
+                                                    mediaPlayerRef?.setVolume(v, v)
+                                                } catch (_: Exception) {
+                                                }
+                                            }) {
+                                                Icon(
+                                                    imageVector = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                                                    contentDescription = "Audio",
+                                                    tint = if (isMuted) Color(0xFFF2B8B5) else Color.White
+                                                )
+                                            }
+                                            IconButton(onClick = {
+                                                isLooping = !isLooping
+                                                try {
+                                                    mediaPlayerRef?.isLooping = isLooping
+                                                } catch (_: Exception) {
+                                                }
+                                            }) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Repeat,
+                                                    contentDescription = "Loop",
+                                                    tint = if (isLooping) Color(0xFFA8C7FA) else Color.White.copy(alpha = 0.5f)
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                    )
+                    }
                 } else if (loadedBitmap != null) {
                     Image(
                         bitmap = loadedBitmap.asImageBitmap(),
@@ -7254,7 +7467,7 @@ fun NativeLightboxModal(
             }
         }
 
-        if (items.size > 1) {
+        if (hudVisible && items.size > 1) {
             if (pagerState.currentPage > 0) {
                 Surface(
                     onClick = {
@@ -7273,12 +7486,12 @@ fun NativeLightboxModal(
                     modifier = Modifier
                         .align(Alignment.CenterStart)
                         .padding(start = 12.dp)
-                        .size(42.dp)
+                        .size(44.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Default.ChevronLeft,
-                            contentDescription = "Foto precedente",
+                            contentDescription = "Media precedente",
                             tint = Color.White
                         )
                     }
@@ -7302,12 +7515,12 @@ fun NativeLightboxModal(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .padding(end = 12.dp)
-                        .size(42.dp)
+                        .size(44.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Default.ChevronRight,
-                            contentDescription = "Foto successiva",
+                            contentDescription = "Media successivo",
                             tint = Color.White
                         )
                     }
@@ -7315,46 +7528,65 @@ fun NativeLightboxModal(
             }
         }
 
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        AnimatedVisibility(
+            visible = hudVisible,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter)
         ) {
-            Surface(
-                shape = CircleShape,
-                color = Color.White.copy(alpha = 0.14f)
+            Row(
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "${pagerState.currentPage + 1} / ${items.size}",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                )
-            }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = CircleShape,
+                        color = Color.White.copy(alpha = 0.14f)
+                    ) {
+                        Text(
+                            text = "${pagerState.currentPage + 1} / ${items.size}",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                        )
+                    }
+                    Surface(
+                        shape = CircleShape,
+                        color = Color(0xFFA8C7FA).copy(alpha = 0.22f)
+                    ) {
+                        Text(
+                            text = if (currentItem.isVideo) "Video" else "Foto",
+                            color = Color(0xFFD3E3FD),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                        )
+                    }
+                }
 
-            Surface(
-                onClick = onClose,
-                shape = CircleShape,
-                color = Color.White.copy(alpha = 0.14f),
-                modifier = Modifier.size(44.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Chiudi",
-                        tint = Color.White
-                    )
+                Surface(
+                    onClick = onClose,
+                    shape = CircleShape,
+                    color = Color.White.copy(alpha = 0.14f),
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Chiudi",
+                            tint = Color.White
+                        )
+                    }
                 }
             }
         }
 
-        // AI Category Badges in Photo Detail / Lightbox View
-        if (onDemandAiTags.isNotEmpty() && !currentItem.isVideo) {
+        if (hudVisible && onDemandAiTags.isNotEmpty() && !currentItem.isVideo) {
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -7396,58 +7628,67 @@ fun NativeLightboxModal(
             }
         }
 
-        Surface(
-            shape = CircleShape,
-            color = Color(0xFF1C1C22).copy(alpha = 0.9f),
-            tonalElevation = 8.dp,
+        AnimatedVisibility(
+            visible = hudVisible,
+            enter = fadeIn() + slideInVertically { it / 2 },
+            exit = fadeOut() + slideOutVertically { it / 2 },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(bottom = 20.dp)
-                .height(56.dp)
+                .padding(bottom = 16.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.padding(horizontal = 12.dp)
+            Surface(
+                shape = CircleShape,
+                color = Color(0xFF1C1C22).copy(alpha = 0.92f),
+                tonalElevation = 8.dp,
+                modifier = Modifier.height(56.dp)
             ) {
-                if (!fromTrash && !currentItem.isVideo) {
-                    TextButton(
-                        onClick = { onEditPhoto(currentItem.filename) },
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFD0BCFF))
-                    ) {
-                        Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text("Modifica", fontWeight = FontWeight.SemiBold)
-                    }
-                }
-
-                TextButton(
-                    onClick = { onDownload(currentItem.filename) },
-                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp)
                 ) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("Salva", fontWeight = FontWeight.SemiBold)
-                }
-
-                if (fromTrash) {
-                    TextButton(
-                        onClick = { onRestore(currentItem.filename) },
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFA8C7FA))
-                    ) {
-                        Icon(Icons.Default.RestoreFromTrash, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(5.dp))
-                        Text("Ripristina", fontWeight = FontWeight.SemiBold)
+                    if (!fromTrash) {
+                        TextButton(
+                            onClick = { onEditPhoto(currentItem.filename) },
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFD0BCFF))
+                        ) {
+                            Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                text = if (currentItem.isVideo) "Modifica Video" else "Modifica",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
-                } else {
+
                     TextButton(
-                        onClick = { onMoveToTrash(currentItem.filename) },
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2B8B5))
+                        onClick = { onDownload(currentItem.filename) },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
                     ) {
-                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(5.dp))
-                        Text("Cestina", fontWeight = FontWeight.SemiBold)
+                        Text("Salva", fontWeight = FontWeight.SemiBold)
+                    }
+
+                    if (fromTrash) {
+                        TextButton(
+                            onClick = { onRestore(currentItem.filename) },
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFA8C7FA))
+                        ) {
+                            Icon(Icons.Default.RestoreFromTrash, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text("Ripristina", fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        TextButton(
+                            onClick = { onMoveToTrash(currentItem.filename) },
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2B8B5))
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text("Cestina", fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             }
@@ -7736,19 +7977,14 @@ fun renderGeometryPreviewBitmap(
     return android.graphics.Bitmap.createBitmap(transformed, cropX, cropY, cropW, cropH)
 }
 
-fun buildGpuComposeColorFilter(
+fun buildAndroidColorMatrix(
     brightness: Float,
     contrast: Float,
     saturation: Float,
     warmth: Float
-): androidx.compose.ui.graphics.ColorFilter? {
-    if (brightness == 0f && contrast == 0f && saturation == 0f && warmth == 0f) {
-        return null
-    }
+): android.graphics.ColorMatrix {
     val satFactor = ((100f + saturation) / 100f).coerceAtLeast(0f)
-    val satMatrix = android.graphics.ColorMatrix().apply {
-        setSaturation(satFactor)
-    }
+    val satMatrix = android.graphics.ColorMatrix().apply { setSaturation(satFactor) }
 
     val cFactor = ((100f + contrast) / 100f).coerceAtLeast(0f)
     val cScale = cFactor * cFactor
@@ -7766,11 +8002,42 @@ fun buildGpuComposeColorFilter(
         )
     )
     satMatrix.postConcat(adjustMatrix)
+    return satMatrix
+}
+
+fun buildGpuComposeColorFilter(
+    brightness: Float,
+    contrast: Float,
+    saturation: Float,
+    warmth: Float
+): androidx.compose.ui.graphics.ColorFilter? {
+    if (brightness == 0f && contrast == 0f && saturation == 0f && warmth == 0f) {
+        return null
+    }
+    val matrix = buildAndroidColorMatrix(brightness, contrast, saturation, warmth)
     return androidx.compose.ui.graphics.ColorFilter.colorMatrix(
-        androidx.compose.ui.graphics.ColorMatrix(satMatrix.array)
+        androidx.compose.ui.graphics.ColorMatrix(matrix.array)
     )
 }
 
+private data class AndroidEditorSnapshot(
+    val activePreset: String = "original",
+    val brightness: Float = 0f,
+    val contrast: Float = 0f,
+    val saturation: Float = 0f,
+    val warmth: Float = 0f,
+    val rotationDegrees: Int = 0,
+    val flipH: Boolean = false,
+    val flipV: Boolean = false,
+    val cropRatio: String = "free",
+    val cropRect: NormalizedAndroidCropRect = NormalizedAndroidCropRect(),
+    val showCropGrid: Boolean = true,
+    val trimStartMs: Long = 0L,
+    val trimEndMs: Long = 0L,
+    val muteAudio: Boolean = false
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NativePhotoEditorModal(
     apiClient: PhotoCloudApiClient,
@@ -7780,14 +8047,27 @@ fun NativePhotoEditorModal(
     onTransferUpdate: (TransferOperation) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val localCtx = LocalContext.current
+    val isVideo = remember(filename) {
+        val clean = filename.lowercase().substringBefore('?')
+        clean.endsWith(".mp4") || clean.endsWith(".mov") || clean.endsWith(".webm") || clean.endsWith(".mkv") || clean.endsWith(".avi")
+    }
+
     var sourceBitmap by remember(filename) {
         mutableStateOf(
-            apiClient.getCachedBitmap(filename, false)
+            if (isVideo) null
+            else apiClient.getCachedBitmap(filename, false)
                 ?: apiClient.getRamThumbnailBitmap(filename, false)
         )
     }
-    var isLoading by remember(filename) { mutableStateOf(sourceBitmap == null) }
+    var cachedVideoFile by remember(filename) { mutableStateOf<File?>(null) }
+    var videoMeta by remember(filename) { mutableStateOf(AndroidVideoMetadata(1280, 720, 0, 0L)) }
+    var isLoading by remember(filename) { mutableStateOf(isVideo || sourceBitmap == null) }
     var isSaving by remember { mutableStateOf(false) }
+    var exportProgress by remember { mutableFloatStateOf(0f) }
+
+    var activeTab by remember(isVideo) { mutableStateOf("adjust") }
+    var isComparingOriginal by remember { mutableStateOf(false) }
 
     var activePreset by remember { mutableStateOf("original") }
     var brightness by remember { mutableFloatStateOf(0f) }
@@ -7798,13 +8078,86 @@ fun NativePhotoEditorModal(
     var flipH by remember { mutableStateOf(false) }
     var flipV by remember { mutableStateOf(false) }
     var cropRatio by remember { mutableStateOf("free") }
-
-    // Manual Draggable Crop Grid is immediately open when entering photo edit mode
     var showCropGrid by remember { mutableStateOf(true) }
     var cropRect by remember { mutableStateOf(NormalizedAndroidCropRect(0f, 0f, 1f, 1f)) }
 
-    LaunchedEffect(filename) {
-        if (apiClient.getCachedBitmap(filename, false) == null) {
+    var trimStartMs by remember { mutableLongStateOf(0L) }
+    var trimEndMs by remember { mutableLongStateOf(0L) }
+    var muteAudio by remember { mutableStateOf(false) }
+    var videoPlaying by remember { mutableStateOf(true) }
+    var videoSpeed by remember { mutableFloatStateOf(1f) }
+    var currentVideoPosMs by remember { mutableLongStateOf(0L) }
+
+    val undoStack = remember { mutableStateListOf<AndroidEditorSnapshot>() }
+    val redoStack = remember { mutableStateListOf<AndroidEditorSnapshot>() }
+
+    fun captureSnapshot() = AndroidEditorSnapshot(
+        activePreset = activePreset,
+        brightness = brightness,
+        contrast = contrast,
+        saturation = saturation,
+        warmth = warmth,
+        rotationDegrees = rotationDegrees,
+        flipH = flipH,
+        flipV = flipV,
+        cropRatio = cropRatio,
+        cropRect = cropRect,
+        showCropGrid = showCropGrid,
+        trimStartMs = trimStartMs,
+        trimEndMs = trimEndMs,
+        muteAudio = muteAudio
+    )
+
+    fun restoreSnapshot(snap: AndroidEditorSnapshot) {
+        activePreset = snap.activePreset
+        brightness = snap.brightness
+        contrast = snap.contrast
+        saturation = snap.saturation
+        warmth = snap.warmth
+        rotationDegrees = snap.rotationDegrees
+        flipH = snap.flipH
+        flipV = snap.flipV
+        cropRatio = snap.cropRatio
+        cropRect = snap.cropRect
+        showCropGrid = snap.showCropGrid
+        trimStartMs = snap.trimStartMs
+        trimEndMs = snap.trimEndMs
+        muteAudio = snap.muteAudio
+    }
+
+    fun pushUndoSnapshot() {
+        undoStack.add(captureSnapshot())
+        if (undoStack.size > 30) undoStack.removeAt(0)
+        redoStack.clear()
+    }
+
+    fun performUndo() {
+        if (undoStack.isEmpty()) return
+        val prev = undoStack.removeAt(undoStack.lastIndex)
+        redoStack.add(captureSnapshot())
+        restoreSnapshot(prev)
+    }
+
+    fun performRedo() {
+        if (redoStack.isEmpty()) return
+        val next = redoStack.removeAt(redoStack.lastIndex)
+        undoStack.add(captureSnapshot())
+        restoreSnapshot(next)
+    }
+
+    LaunchedEffect(filename, isVideo) {
+        if (isVideo) {
+            isLoading = true
+            val file = apiClient.downloadFileToCache(filename, false, onTransferUpdate)
+            if (file != null && file.exists()) {
+                val meta = withContext(Dispatchers.IO) { readAndroidVideoMetadata(file) }
+                cachedVideoFile = file
+                videoMeta = meta
+                trimStartMs = 0L
+                trimEndMs = meta.durationMs
+            }
+            isLoading = false
+        } else if (apiClient.getCachedBitmap(filename, false) == null) {
             if (sourceBitmap == null) isLoading = true
             val fullBmp = apiClient.loadMediaBitmap(filename, false)
             if (fullBmp != null) {
@@ -7814,7 +8167,49 @@ fun NativePhotoEditorModal(
         }
     }
 
-    // Lightweight 1080px preview source bitmap created once per photo for 0ms interactive rotation & flip
+    // Video MediaPlayer holder for live GPU-filtered TextureView playback
+    var editorMediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    DisposableEffect(cachedVideoFile) {
+        onDispose {
+            try {
+                editorMediaPlayer?.release()
+            } catch (_: Exception) {
+            }
+            editorMediaPlayer = null
+        }
+    }
+
+    LaunchedEffect(editorMediaPlayer, muteAudio) {
+        val v = if (muteAudio) 0f else 1f
+        try {
+            editorMediaPlayer?.setVolume(v, v)
+        } catch (_: Exception) {
+        }
+    }
+
+    LaunchedEffect(editorMediaPlayer, videoSpeed) {
+        try {
+            val mp = editorMediaPlayer ?: return@LaunchedEffect
+            mp.playbackParams = mp.playbackParams.setSpeed(videoSpeed)
+        } catch (_: Exception) {
+        }
+    }
+
+    LaunchedEffect(editorMediaPlayer, trimStartMs, trimEndMs, videoPlaying) {
+        val mp = editorMediaPlayer ?: return@LaunchedEffect
+        while (true) {
+            try {
+                val pos = mp.currentPosition.toLong().coerceAtLeast(0L)
+                currentVideoPosMs = pos
+                if (trimEndMs > trimStartMs + 150L && (pos >= trimEndMs || pos < trimStartMs)) {
+                    mp.seekTo(trimStartMs.toInt())
+                }
+            } catch (_: Exception) {
+            }
+            delay(120L)
+        }
+    }
+
     val previewSourceBitmap = remember(sourceBitmap) {
         val src = sourceBitmap ?: return@remember null
         val maxEdge = 1080
@@ -7830,48 +8225,45 @@ fun NativePhotoEditorModal(
         }
     }
 
-    // Stage bitmap only depends on geometry (rotation, flip, and crop when grid is hidden).
-    // Dragging cropRect while showCropGrid == true or moving color sliders does NOT re-allocate stageBitmap!
-    val effectiveCropKey = if (showCropGrid) NormalizedAndroidCropRect(0f, 0f, 1f, 1f) else cropRect
+    val effBrightness = if (isComparingOriginal) 0f else brightness
+    val effContrast = if (isComparingOriginal) 0f else contrast
+    val effSaturation = if (isComparingOriginal) 0f else saturation
+    val effWarmth = if (isComparingOriginal) 0f else warmth
+    val effRot = if (isComparingOriginal) 0 else rotationDegrees
+    val effFlipH = if (isComparingOriginal) false else flipH
+    val effFlipV = if (isComparingOriginal) false else flipV
+    val effCropGrid = if (isComparingOriginal) false else showCropGrid
+
+    val effectiveCropKey = if (effCropGrid) NormalizedAndroidCropRect(0f, 0f, 1f, 1f) else cropRect
     val stageBitmap = remember(
         previewSourceBitmap,
-        rotationDegrees,
-        flipH,
-        flipV,
-        showCropGrid,
+        effRot,
+        effFlipH,
+        effFlipV,
+        effCropGrid,
         effectiveCropKey
     ) {
         val previewSrc = previewSourceBitmap ?: return@remember null
         renderGeometryPreviewBitmap(
             source = previewSrc,
-            rotationDegrees = rotationDegrees,
-            flipH = flipH,
-            flipV = flipV,
+            rotationDegrees = effRot,
+            flipH = effFlipH,
+            flipV = effFlipV,
             cropRect = effectiveCropKey,
-            applyCrop = !showCropGrid
+            applyCrop = !effCropGrid
         )
     }
 
-    val stageImageBitmap = remember(stageBitmap) {
-        stageBitmap?.asImageBitmap()
+    val stageImageBitmap = remember(stageBitmap) { stageBitmap?.asImageBitmap() }
+    val gpuColorFilter = remember(effBrightness, effContrast, effSaturation, effWarmth) {
+        buildGpuComposeColorFilter(effBrightness, effContrast, effSaturation, effWarmth)
     }
 
-    // GPU-accelerated ColorFilter (0.0ms on presets and sliders)
-    val gpuColorFilter = remember(brightness, contrast, saturation, warmth) {
-        buildGpuComposeColorFilter(brightness, contrast, saturation, warmth)
-    }
-
-    // Full-resolution output dimensions for the header resolution badge
-    val fullRotatedWidthPx = remember(sourceBitmap, rotationDegrees) {
-        val src = sourceBitmap ?: return@remember 0
-        val normRot = ((rotationDegrees % 360) + 360) % 360
-        if (normRot == 90 || normRot == 270) src.height else src.width
-    }
-    val fullRotatedHeightPx = remember(sourceBitmap, rotationDegrees) {
-        val src = sourceBitmap ?: return@remember 0
-        val normRot = ((rotationDegrees % 360) + 360) % 360
-        if (normRot == 90 || normRot == 270) src.width else src.height
-    }
+    val baseWidthPx = if (isVideo) videoMeta.width else (sourceBitmap?.width ?: 0)
+    val baseHeightPx = if (isVideo) videoMeta.height else (sourceBitmap?.height ?: 0)
+    val normRot = ((effRot % 360) + 360) % 360
+    val fullRotatedWidthPx = if (normRot == 90 || normRot == 270) baseHeightPx else baseWidthPx
+    val fullRotatedHeightPx = if (normRot == 90 || normRot == 270) baseWidthPx else baseHeightPx
 
     val croppedWidthPx = remember(fullRotatedWidthPx, cropRect) {
         if (fullRotatedWidthPx <= 0) 0
@@ -7883,6 +8275,7 @@ fun NativePhotoEditorModal(
     }
 
     fun resetEdits() {
+        pushUndoSnapshot()
         activePreset = "original"
         brightness = 0f
         contrast = 0f
@@ -7894,11 +8287,72 @@ fun NativePhotoEditorModal(
         cropRatio = "free"
         cropRect = NormalizedAndroidCropRect(0f, 0f, 1f, 1f)
         showCropGrid = true
+        trimStartMs = 0L
+        trimEndMs = videoMeta.durationMs
+        muteAudio = false
+        videoSpeed = 1f
     }
 
-    fun saveEditedPhoto(overwrite: Boolean) {
-        val src = sourceBitmap ?: return
+    fun saveEditedMedia(overwrite: Boolean) {
         if (isSaving) return
+        if (isVideo) {
+            val srcFile = cachedVideoFile ?: return
+            isSaving = true
+            exportProgress = 0f
+            try {
+                editorMediaPlayer?.pause()
+                videoPlaying = false
+            } catch (_: Exception) {
+            }
+            val params = AndroidVideoEditParams(
+                brightness = brightness,
+                contrast = contrast,
+                saturation = saturation,
+                warmth = warmth,
+                rotationDegrees = rotationDegrees,
+                flipH = flipH,
+                flipV = flipV,
+                cropRect = cropRect,
+                trimStartMs = trimStartMs,
+                trimEndMs = trimEndMs,
+                muteAudio = muteAudio
+            )
+            scope.launch {
+                val stem = filename.substringBeforeLast('.', filename)
+                val tempOut = File(localCtx.cacheDir, "edit_${System.currentTimeMillis()}_$stem.mp4")
+                try {
+                    val exportedOk = exportEditedVideoToFile(srcFile, tempOut, params) { pct ->
+                        exportProgress = pct
+                    }
+                    if (!exportedOk) {
+                        isSaving = false
+                        Toast.makeText(localCtx, "Errore durante l'esportazione video", Toast.LENGTH_LONG).show()
+                        return@launch
+                    }
+                    val (ok, msg) = apiClient.uploadEditedMediaFile(
+                        originalFilename = filename,
+                        editedFile = tempOut,
+                        mimeType = "video/mp4",
+                        overwrite = overwrite,
+                        onTransferUpdate = onTransferUpdate
+                    )
+                    isSaving = false
+                    if (ok) {
+                        onSaved(msg)
+                    } else {
+                        Toast.makeText(localCtx, msg, Toast.LENGTH_LONG).show()
+                    }
+                } finally {
+                    try {
+                        tempOut.delete()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            return
+        }
+
+        val src = sourceBitmap ?: return
         isSaving = true
         val b = brightness
         val c = contrast
@@ -7939,6 +8393,8 @@ fun NativePhotoEditorModal(
         }
     }
 
+    val mediaReady = if (isVideo) cachedVideoFile != null else stageBitmap != null
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = Color(0xFF0A0A0F)
@@ -7949,21 +8405,21 @@ fun NativePhotoEditorModal(
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
-            // Header
+            // Compact Studio Header with Undo / Redo / Originale / Reset
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.weight(1f)
                 ) {
                     Surface(
-                        onClick = onClose,
+                        onClick = { if (!isSaving) onClose() },
                         shape = CircleShape,
                         color = Color.White.copy(alpha = 0.12f),
                         modifier = Modifier.size(40.dp)
@@ -7974,13 +8430,20 @@ fun NativePhotoEditorModal(
                     }
                     Column {
                         Text(
-                            text = "Modifica Foto",
+                            text = if (isVideo) "Studio Video" else "Studio Foto",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
                         Text(
-                            text = if (croppedWidthPx > 0) "$croppedWidthPx × $croppedHeightPx px • Trascina griglia per ritagliare" else filename,
+                            text = if (croppedWidthPx > 0) {
+                                if (isVideo) {
+                                    val clipLenSec = ((trimEndMs - trimStartMs).coerceAtLeast(0L) / 1000f)
+                                    "$croppedWidthPx × $croppedHeightPx • ${String.format(Locale.US, "%.1f", clipLenSec)}s"
+                                } else {
+                                    "$croppedWidthPx × $croppedHeightPx px"
+                                }
+                            } else filename,
                             style = MaterialTheme.typography.labelSmall,
                             color = Color(0xFFA8C7FA),
                             maxLines = 1,
@@ -7989,57 +8452,159 @@ fun NativePhotoEditorModal(
                     }
                 }
 
-                TextButton(
-                    onClick = { resetEdits() },
-                    enabled = !isSaving
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Reset", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { performUndo() },
+                        enabled = !isSaving && undoStack.isNotEmpty()
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Undo,
+                            contentDescription = "Annulla",
+                            tint = if (undoStack.isNotEmpty()) Color.White else Color.White.copy(alpha = 0.3f)
+                        )
+                    }
+                    IconButton(
+                        onClick = { performRedo() },
+                        enabled = !isSaving && redoStack.isNotEmpty()
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Redo,
+                            contentDescription = "Ripristina",
+                            tint = if (redoStack.isNotEmpty()) Color.White else Color.White.copy(alpha = 0.3f)
+                        )
+                    }
+                    IconButton(
+                        onClick = { isComparingOriginal = !isComparingOriginal },
+                        enabled = !isSaving && mediaReady
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Compare,
+                            contentDescription = "Confronta Originale",
+                            tint = if (isComparingOriginal) Color(0xFFA8C7FA) else Color.White
+                        )
+                    }
+                    IconButton(
+                        onClick = { resetEdits() },
+                        enabled = !isSaving
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Reset", tint = Color.White)
+                    }
                 }
             }
 
-            // Live Image Preview Stage + Interactive Draggable Manual Crop Grid Overlay
-            var stageSize by remember { mutableStateOf(IntSize.Zero) }
+            // Live Stage (Photo OR Video) + Interactive 8-Handle Crop Overlay
             var activeDragHandle by remember { mutableStateOf<AndroidCropHandle?>(null) }
 
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .padding(horizontal = 14.dp, vertical = 4.dp)
                     .clip(RoundedCornerShape(22.dp))
-                    .background(Color(0xFF14141C))
-                    .onSizeChanged { stageSize = it },
+                    .background(Color(0xFF14141C)),
                 contentAlignment = Alignment.Center
             ) {
                 if (isLoading) {
-                    CircularProgressIndicator(color = Color.White)
-                } else if (stageBitmap != null && stageImageBitmap != null) {
-                    val bmpW = stageBitmap.width.coerceAtLeast(1)
-                    val bmpH = stageBitmap.height.coerceAtLeast(1)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CircularProgressIndicator(color = Color.White)
+                        Text(
+                            text = if (isVideo) "Download video per editing..." else "Caricamento foto HD...",
+                            color = Color.White.copy(alpha = 0.78f),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                } else if (mediaReady) {
+                    val bmpW = fullRotatedWidthPx.coerceAtLeast(1)
+                    val bmpH = fullRotatedHeightPx.coerceAtLeast(1)
 
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(14.dp),
+                            .padding(12.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Image(
-                            bitmap = stageImageBitmap,
-                            contentDescription = "Anteprima Modifica",
-                            contentScale = ContentScale.Fit,
-                            colorFilter = gpuColorFilter,
-                            modifier = Modifier.fillMaxSize()
-                        )
+                        if (isVideo && cachedVideoFile != null) {
+                            val gpuAndroidRenderEffect = remember(effBrightness, effContrast, effSaturation, effWarmth) {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                    if (effBrightness == 0f && effContrast == 0f && effSaturation == 0f && effWarmth == 0f) {
+                                        null
+                                    } else {
+                                        val mat = buildAndroidColorMatrix(effBrightness, effContrast, effSaturation, effWarmth)
+                                        RenderEffect.createColorFilterEffect(ColorMatrixColorFilter(mat)).asComposeRenderEffect()
+                                    }
+                                } else null
+                            }
 
-                        if (showCropGrid) {
+                            AndroidView(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        rotationZ = effRot.toFloat()
+                                        scaleX = if (effFlipH) -1f else 1f
+                                        scaleY = if (effFlipV) -1f else 1f
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                            renderEffect = gpuAndroidRenderEffect
+                                        }
+                                    },
+                                factory = { ctx ->
+                                    TextureView(ctx).apply {
+                                        surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                                            override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+                                                val file = cachedVideoFile ?: return
+                                                try {
+                                                    val mp = MediaPlayer().apply {
+                                                        setDataSource(file.absolutePath)
+                                                        setSurface(Surface(surfaceTexture))
+                                                        isLooping = true
+                                                        prepareAsync()
+                                                        setOnPreparedListener { readyMp ->
+                                                            editorMediaPlayer = readyMp
+                                                            val vol = if (muteAudio) 0f else 1f
+                                                            readyMp.setVolume(vol, vol)
+                                                            readyMp.seekTo(trimStartMs.toInt())
+                                                            readyMp.start()
+                                                            videoPlaying = true
+                                                        }
+                                                    }
+                                                    editorMediaPlayer = mp
+                                                } catch (_: Exception) {
+                                                }
+                                            }
+                                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                                            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                                                try {
+                                                    editorMediaPlayer?.release()
+                                                } catch (_: Exception) {
+                                                }
+                                                editorMediaPlayer = null
+                                                return true
+                                            }
+                                            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                                        }
+                                    }
+                                }
+                            )
+                        } else if (stageImageBitmap != null) {
+                            Image(
+                                bitmap = stageImageBitmap,
+                                contentDescription = "Anteprima Modifica",
+                                contentScale = ContentScale.Fit,
+                                colorFilter = gpuColorFilter,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        if (effCropGrid) {
                             Canvas(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .pointerInput(bmpW, bmpH, cropRatio) {
                                         detectDragGestures(
                                             onDragStart = { touchOffset ->
+                                                pushUndoSnapshot()
                                                 val cw = size.width.toFloat()
                                                 val ch = size.height.toFloat()
                                                 if (cw <= 0f || ch <= 0f) return@detectDragGestures
@@ -8067,7 +8632,6 @@ fun NativePhotoEditorModal(
                                                     hypot(touchOffset.x - cMidX, touchOffset.y - cBottom) <= hitRadius || (abs(touchOffset.y - cBottom) <= hitRadius * 0.7f && touchOffset.x in cLeft..cRight) -> AndroidCropHandle.S
                                                     hypot(touchOffset.x - cLeft, touchOffset.y - cMidY) <= hitRadius || (abs(touchOffset.x - cLeft) <= hitRadius * 0.7f && touchOffset.y in cTop..cBottom) -> AndroidCropHandle.W
                                                     hypot(touchOffset.x - cRight, touchOffset.y - cMidY) <= hitRadius || (abs(touchOffset.x - cRight) <= hitRadius * 0.7f && touchOffset.y in cTop..cBottom) -> AndroidCropHandle.E
-                                                    touchOffset.x in cLeft..cRight && touchOffset.y in cTop..cBottom -> AndroidCropHandle.MOVE
                                                     else -> AndroidCropHandle.MOVE
                                                 }
                                             },
@@ -8082,13 +8646,11 @@ fun NativePhotoEditorModal(
                                                 val fitW = (if (imgAspect > boxAspect) cw else ch * imgAspect).coerceAtLeast(1f)
                                                 val fitH = (if (imgAspect > boxAspect) cw / imgAspect else ch).coerceAtLeast(1f)
 
-                                                val dxNorm = dragAmount.x / fitW
-                                                val dyNorm = dragAmount.y / fitH
                                                 cropRect = dragAndroidCropRect(
                                                     start = cropRect,
                                                     handle = handle,
-                                                    dxNorm = dxNorm,
-                                                    dyNorm = dyNorm,
+                                                    dxNorm = dragAmount.x / fitW,
+                                                    dyNorm = dragAmount.y / fitH,
                                                     cropRatio = cropRatio,
                                                     imgW = bmpW,
                                                     imgH = bmpH
@@ -8116,16 +8678,11 @@ fun NativePhotoEditorModal(
                                 val cHeight = (cBottom - cTop).coerceAtLeast(1f)
 
                                 val scrimColor = Color(0xAA06070C)
-                                // Top scrim
                                 drawRect(color = scrimColor, topLeft = Offset(offX, offY), size = Size(fitW, (cTop - offY).coerceAtLeast(0f)))
-                                // Bottom scrim
                                 drawRect(color = scrimColor, topLeft = Offset(offX, cBottom), size = Size(fitW, (offY + fitH - cBottom).coerceAtLeast(0f)))
-                                // Left scrim
                                 drawRect(color = scrimColor, topLeft = Offset(offX, cTop), size = Size((cLeft - offX).coerceAtLeast(0f), cHeight))
-                                // Right scrim
                                 drawRect(color = scrimColor, topLeft = Offset(cRight, cTop), size = Size((offX + fitW - cRight).coerceAtLeast(0f), cHeight))
 
-                                // Rule of Thirds 3x3 Grid Lines
                                 val gridColor = Color.White.copy(alpha = 0.45f)
                                 val thirdW = cWidth / 3f
                                 val thirdH = cHeight / 3f
@@ -8134,7 +8691,6 @@ fun NativePhotoEditorModal(
                                 drawLine(gridColor, Offset(cLeft, cTop + thirdH), Offset(cRight, cTop + thirdH), strokeWidth = 1.dp.toPx())
                                 drawLine(gridColor, Offset(cLeft, cTop + thirdH * 2f), Offset(cRight, cTop + thirdH * 2f), strokeWidth = 1.dp.toPx())
 
-                                // Outer white crop border
                                 drawRect(
                                     color = Color.White,
                                     topLeft = Offset(cLeft, cTop),
@@ -8142,7 +8698,6 @@ fun NativePhotoEditorModal(
                                     style = Stroke(width = 2.dp.toPx())
                                 )
 
-                                // 4 Corner Handles (Material You Accent #A8C7FA)
                                 val handleRadius = 8.dp.toPx()
                                 val accentColor = Color(0xFFA8C7FA)
                                 listOf(
@@ -8154,252 +8709,396 @@ fun NativePhotoEditorModal(
                                     drawCircle(color = Color(0xFF041E49), radius = handleRadius + 2.dp.toPx(), center = corner)
                                     drawCircle(color = accentColor, radius = handleRadius, center = corner)
                                 }
+                            }
+                        }
 
-                                // 4 Edge Pill Handles
-                                val edgeW = 24.dp.toPx()
-                                val edgeThick = 6.dp.toPx()
-                                val cMidX = (cLeft + cRight) / 2f
-                                val cMidY = (cTop + cBottom) / 2f
-                                drawRoundRect(
-                                    color = Color.White,
-                                    topLeft = Offset(cMidX - edgeW / 2f, cTop - edgeThick / 2f),
-                                    size = Size(edgeW, edgeThick),
-                                    cornerRadius = CornerRadius(edgeThick, edgeThick)
-                                )
-                                drawRoundRect(
-                                    color = Color.White,
-                                    topLeft = Offset(cMidX - edgeW / 2f, cBottom - edgeThick / 2f),
-                                    size = Size(edgeW, edgeThick),
-                                    cornerRadius = CornerRadius(edgeThick, edgeThick)
-                                )
-                                drawRoundRect(
-                                    color = Color.White,
-                                    topLeft = Offset(cLeft - edgeThick / 2f, cMidY - edgeW / 2f),
-                                    size = Size(edgeThick, edgeW),
-                                    cornerRadius = CornerRadius(edgeThick, edgeThick)
-                                )
-                                drawRoundRect(
-                                    color = Color.White,
-                                    topLeft = Offset(cRight - edgeThick / 2f, cMidY - edgeW / 2f),
-                                    size = Size(edgeThick, edgeW),
-                                    cornerRadius = CornerRadius(edgeThick, edgeThick)
+                        if (isComparingOriginal) {
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xCC041E49),
+                                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp)
+                            ) {
+                                Text(
+                                    text = "ORIGINALE",
+                                    color = Color(0xFFA8C7FA),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                                 )
                             }
                         }
                     }
                 } else {
                     Text(
-                        text = "Impossibile caricare la foto per la modifica",
+                        text = "Impossibile caricare il media per la modifica",
                         color = Color.White.copy(alpha = 0.7f)
                     )
                 }
+
+                if (isSaving && isVideo) {
+                    Surface(
+                        shape = CircleShape,
+                        color = Color(0xEE0D1220),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFA8C7FA).copy(alpha = 0.45f)),
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                progress = { exportProgress.coerceIn(0f, 1f) },
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.5.dp,
+                                color = Color(0xFFA8C7FA)
+                            )
+                            Text(
+                                text = "Esportazione video: ${(exportProgress * 100).toInt()}%",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
             }
 
-            // Scrollable Controls Sheet
+            // Tabbed Material 3 Thumb-Zone Controls Sheet
             Surface(
                 shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 tonalElevation = 6.dp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 390.dp)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 18.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // 1. Transform & Interactive Manual Crop Grid
+                    // Category Tabs Row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = "RITAGLIO MANUALE TRASCINABILE & RUOTA",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        FilterChip(
-                            selected = showCropGrid,
-                            onClick = { showCropGrid = !showCropGrid },
-                            label = {
-                                Text(
-                                    if (showCropGrid) "Griglia Attiva" else "Mostra Griglia",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            },
-                            shape = CircleShape
-                        )
+                        val tabs = buildList {
+                            add("adjust" to "Regola")
+                            add("filters" to "Filtri")
+                            add("crop" to "Ritaglia")
+                            if (isVideo) add("video" to "Video")
+                        }
+                        tabs.forEach { (tabId, tabLabel) ->
+                            val selected = activeTab == tabId
+                            FilterChip(
+                                selected = selected,
+                                onClick = { activeTab = tabId },
+                                label = { Text(tabLabel, fontWeight = FontWeight.SemiBold) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = when (tabId) {
+                                            "filters" -> Icons.Default.AutoAwesome
+                                            "crop" -> Icons.Default.Crop
+                                            "video" -> Icons.Default.ContentCut
+                                            else -> Icons.Default.Tune
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                },
+                                shape = CircleShape,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
 
-                    Row(
+                    // Active Tab Pane
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .heightIn(max = 220.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf(
-                            "free" to "Libero (Manuale)",
-                            "1:1" to "1:1 Quadrato",
-                            "4:5" to "4:5 Ritratto",
-                            "4:3" to "4:3 Foto",
-                            "16:9" to "16:9 Cinema"
-                        ).forEach { (ratioKey, ratioLabel) ->
-                            FilterChip(
-                                selected = cropRatio == ratioKey,
-                                onClick = {
-                                    cropRatio = ratioKey
-                                    showCropGrid = true
-                                    val bmp = stageBitmap
-                                    if (bmp != null && ratioKey != "free") {
-                                        cropRect = fitAndroidAspectCropRect(bmp.width, bmp.height, ratioKey)
+                        when (activeTab) {
+                            "filters" -> {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    ANDROID_PHOTO_PRESETS.forEach { preset ->
+                                        FilterChip(
+                                            selected = activePreset == preset.id,
+                                            onClick = {
+                                                pushUndoSnapshot()
+                                                activePreset = preset.id
+                                                brightness = preset.brightness
+                                                contrast = preset.contrast
+                                                saturation = preset.saturation
+                                                warmth = preset.warmth
+                                            },
+                                            label = { Text(preset.label, fontWeight = FontWeight.SemiBold) },
+                                            shape = CircleShape
+                                        )
                                     }
-                                },
-                                label = { Text(ratioLabel) },
-                                shape = CircleShape
-                            )
+                                }
+                            }
+                            "crop" -> {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    FilterChip(
+                                        selected = showCropGrid,
+                                        onClick = {
+                                            pushUndoSnapshot()
+                                            showCropGrid = !showCropGrid
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.GridOn, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                        label = { Text("Griglia") },
+                                        shape = CircleShape
+                                    )
+                                    listOf(
+                                        "free" to "Libero",
+                                        "1:1" to "1:1",
+                                        "4:5" to "4:5",
+                                        "4:3" to "4:3",
+                                        "16:9" to "16:9"
+                                    ).forEach { (ratioKey, ratioLabel) ->
+                                        FilterChip(
+                                            selected = cropRatio == ratioKey,
+                                            onClick = {
+                                                pushUndoSnapshot()
+                                                cropRatio = ratioKey
+                                                showCropGrid = true
+                                                if (ratioKey != "free") {
+                                                    cropRect = fitAndroidAspectCropRect(fullRotatedWidthPx.coerceAtLeast(1), fullRotatedHeightPx.coerceAtLeast(1), ratioKey)
+                                                } else {
+                                                    cropRect = NormalizedAndroidCropRect(0f, 0f, 1f, 1f)
+                                                }
+                                            },
+                                            label = { Text(ratioLabel) },
+                                            shape = CircleShape
+                                        )
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            pushUndoSnapshot()
+                                            rotationDegrees = (rotationDegrees - 90 + 360) % 360
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.RotateLeft, contentDescription = "-90°", modifier = Modifier.size(18.dp))
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            pushUndoSnapshot()
+                                            rotationDegrees = (rotationDegrees + 90) % 360
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.RotateRight, contentDescription = "+90°", modifier = Modifier.size(18.dp))
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            pushUndoSnapshot()
+                                            flipH = !flipH
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Flip, contentDescription = "Specchia Orizzontale", modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("O")
+                                    }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            pushUndoSnapshot()
+                                            flipV = !flipV
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Flip, contentDescription = "Specchia Verticale", modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("V")
+                                    }
+                                }
+                            }
+                            "video" -> {
+                                val maxDur = videoMeta.durationMs.coerceAtLeast(500L)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val mp = editorMediaPlayer ?: return@FilledTonalButton
+                                            if (videoPlaying) {
+                                                mp.pause()
+                                                videoPlaying = false
+                                            } else {
+                                                mp.start()
+                                                videoPlaying = true
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = if (videoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                            contentDescription = "Anteprima",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(if (videoPlaying) "Pausa" else "Play")
+                                    }
+                                    FilterChip(
+                                        selected = muteAudio,
+                                        onClick = {
+                                            pushUndoSnapshot()
+                                            muteAudio = !muteAudio
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = if (muteAudio) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        },
+                                        label = { Text(if (muteAudio) "Muto" else "Audio") },
+                                        shape = CircleShape
+                                    )
+                                    FilterChip(
+                                        selected = videoSpeed != 1f,
+                                        onClick = {
+                                            val steps = listOf(1f, 1.25f, 1.5f, 2f, 0.5f)
+                                            videoSpeed = steps[(steps.indexOf(videoSpeed) + 1) % steps.size]
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                        label = { Text("${videoSpeed}x") },
+                                        shape = CircleShape
+                                    )
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Inizio: ${formatVideoDurationMs(trimStartMs, true)}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "Fine: ${formatVideoDurationMs(trimEndMs, true)}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+
+                                RangeSlider(
+                                    value = trimStartMs.toFloat().coerceIn(0f, maxDur.toFloat())..trimEndMs.toFloat().coerceIn(0f, maxDur.toFloat()),
+                                    onValueChange = { range ->
+                                        val minGap = minOf(300L, maxDur / 5)
+                                        val s = range.start.toLong().coerceIn(0L, maxDur - minGap)
+                                        val e = range.endInclusive.toLong().coerceIn(s + minGap, maxDur)
+                                        trimStartMs = s
+                                        trimEndMs = e
+                                    },
+                                    onValueChangeFinished = {
+                                        try {
+                                            editorMediaPlayer?.seekTo(trimStartMs.toInt())
+                                        } catch (_: Exception) {
+                                        }
+                                    },
+                                    valueRange = 0f..maxDur.toFloat()
+                                )
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            pushUndoSnapshot()
+                                            trimStartMs = currentVideoPosMs.coerceIn(0L, (trimEndMs - 250L).coerceAtLeast(0L))
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Inizio qui", fontWeight = FontWeight.SemiBold)
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            pushUndoSnapshot()
+                                            trimEndMs = currentVideoPosMs.coerceIn((trimStartMs + 250L).coerceAtMost(maxDur), maxDur)
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Fine qui", fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                            }
+                            else -> {
+                                EditorSliderControl(
+                                    label = "Luminosità",
+                                    value = brightness,
+                                    onValueChange = {
+                                        activePreset = "custom"
+                                        brightness = it
+                                    }
+                                )
+                                EditorSliderControl(
+                                    label = "Contrasto",
+                                    value = contrast,
+                                    onValueChange = {
+                                        activePreset = "custom"
+                                        contrast = it
+                                    }
+                                )
+                                EditorSliderControl(
+                                    label = "Saturazione",
+                                    value = saturation,
+                                    onValueChange = {
+                                        activePreset = "custom"
+                                        saturation = it
+                                    }
+                                )
+                                EditorSliderControl(
+                                    label = "Calore",
+                                    value = warmth,
+                                    onValueChange = {
+                                        activePreset = "custom"
+                                        warmth = it
+                                    }
+                                )
+                            }
                         }
                     }
 
+                    // Bottom Save Bar
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        FilledTonalButton(
-                            onClick = {
-                                rotationDegrees = (rotationDegrees - 90 + 360) % 360
-                                val bmp = stageBitmap
-                                if (bmp != null && cropRatio != "free") {
-                                    cropRect = fitAndroidAspectCropRect(bmp.height, bmp.width, cropRatio)
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
-                            Text("-90°", fontWeight = FontWeight.Bold)
-                        }
-                        FilledTonalButton(
-                            onClick = {
-                                rotationDegrees = (rotationDegrees + 90) % 360
-                                val bmp = stageBitmap
-                                if (bmp != null && cropRatio != "free") {
-                                    cropRect = fitAndroidAspectCropRect(bmp.height, bmp.width, cropRatio)
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
-                            Text("+90°", fontWeight = FontWeight.Bold)
-                        }
-                        FilledTonalButton(
-                            onClick = { flipH = !flipH },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
-                            Text("Specchia O.", fontWeight = FontWeight.Bold, maxLines = 1)
-                        }
-                        FilledTonalButton(
-                            onClick = { flipV = !flipV },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
-                            Text("Specchia V.", fontWeight = FontWeight.Bold, maxLines = 1)
-                        }
-                    }
-
-                    // 2. Filter Presets
-                    Text(
-                        text = "FILTRI RAPIDI",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        ANDROID_PHOTO_PRESETS.forEach { preset ->
-                            FilterChip(
-                                selected = activePreset == preset.id,
-                                onClick = {
-                                    activePreset = preset.id
-                                    brightness = preset.brightness
-                                    contrast = preset.contrast
-                                    saturation = preset.saturation
-                                    warmth = preset.warmth
-                                },
-                                label = { Text(preset.label, fontWeight = FontWeight.SemiBold) },
-                                shape = CircleShape
-                            )
-                        }
-                    }
-
-                    // 3. Fine Adjustments Sliders
-                    Text(
-                        text = "REGOLAZIONI FINE",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-
-                    EditorSliderControl(
-                        label = "Luminosità",
-                        value = brightness,
-                        onValueChange = {
-                            activePreset = "custom"
-                            brightness = it
-                        }
-                    )
-                    EditorSliderControl(
-                        label = "Contrasto",
-                        value = contrast,
-                        onValueChange = {
-                            activePreset = "custom"
-                            contrast = it
-                        }
-                    )
-                    EditorSliderControl(
-                        label = "Saturazione",
-                        value = saturation,
-                        onValueChange = {
-                            activePreset = "custom"
-                            saturation = it
-                        }
-                    )
-                    EditorSliderControl(
-                        label = "Calore",
-                        value = warmth,
-                        onValueChange = {
-                            activePreset = "custom"
-                            warmth = it
-                        }
-                    )
-
-                    // 4. Save Actions (Overwrite or Save Copy)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         OutlinedButton(
-                            onClick = { saveEditedPhoto(overwrite = true) },
-                            enabled = !isSaving && stageBitmap != null,
+                            onClick = { saveEditedMedia(overwrite = true) },
+                            enabled = !isSaving && mediaReady,
                             shape = CircleShape,
                             modifier = Modifier.weight(1f).height(48.dp)
                         ) {
                             Text("Sovrascrivi", fontWeight = FontWeight.Bold)
                         }
                         Button(
-                            onClick = { saveEditedPhoto(overwrite = false) },
-                            enabled = !isSaving && stageBitmap != null,
+                            onClick = { saveEditedMedia(overwrite = false) },
+                            enabled = !isSaving && mediaReady,
                             shape = CircleShape,
                             modifier = Modifier.weight(1f).height(48.dp)
                         ) {

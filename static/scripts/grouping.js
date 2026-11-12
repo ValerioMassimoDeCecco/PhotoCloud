@@ -123,9 +123,17 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (info.isVid) {
             const video = document.createElement('video');
             video.preload = 'metadata';
+            video.muted = true;
+            video.playsInline = true;
             const source = document.createElement('source');
             source.src = `/media/${encodeURIComponent(filename)}#t=0.5`;
-            source.type = 'video/mp4';
+            source.type = info.ext === 'webm'
+                ? 'video/webm'
+                : info.ext === 'mov'
+                ? 'video/quicktime'
+                : info.ext === 'mkv'
+                ? 'video/x-matroska'
+                : 'video/mp4';
             video.appendChild(source);
             card.appendChild(video);
 
@@ -168,11 +176,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const actions = document.createElement('div');
         actions.className = 'media-actions';
 
-        if (info.isImg) {
+        if (info.isImg || info.isVid) {
             const editBtn = document.createElement('button');
             editBtn.type = 'button';
             editBtn.className = 'btn icon edit-photo-btn';
-            editBtn.title = 'Modifica Foto';
+            editBtn.title = info.isVid ? 'Modifica Video' : 'Modifica Foto';
             editBtn.setAttribute('aria-label', `Modifica ${filename}`);
             editBtn.innerHTML = '<span class="material-icons">tune</span>';
             editBtn.addEventListener('click', (ev) => {

@@ -370,3 +370,179 @@ export function transformRgbPixel(
 
   return [clampByte(nr), clampByte(ng), clampByte(nb)];
 }
+
+export interface VideoTrimRange {
+  trimStartSec: number;
+  trimEndSec: number;
+  trimmedDurationSec: number;
+}
+
+export interface VideoEditState extends PhotoEditState {
+  trimStartSec: number;
+  trimEndSec: number;
+  durationSec: number;
+  muted: boolean;
+  volume: number; // 0..1
+  playbackRate: number; // 0.5..2.0
+}
+
+export const DEFAULT_VIDEO_EDIT_STATE: VideoEditState = {
+  ...DEFAULT_PHOTO_EDIT_STATE,
+  trimStartSec: 0,
+  trimEndSec: 0,
+  durationSec: 0,
+  muted: false,
+  volume: 1,
+  playbackRate: 1,
+};
+
+export function clampTrimRange(
+  startSec: number,
+  endSec: number,
+  durationSec: number,
+  minClipSec = 0.25
+): VideoTrimRange {
+  const safeDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 0;
+  if (safeDuration <= 0) {
+    return { trimStartSec: 0, trimEndSec: 0, trimmedDurationSec: 0 };
+  }
+  const minSpan = Math.min(safeDuration, Math.max(0.05, minClipSec));
+  let start = Number.isFinite(startSec) ? Math.max(0, Math.min(safeDuration - minSpan, startSec)) : 0;
+  let end = Number.isFinite(endSec) ? Math.max(start + minSpan, Math.min(safeDuration, endSec)) : safeDuration;
+  if (end - start < minSpan) {
+    if (start + minSpan <= safeDuration) {
+      end = start + minSpan;
+    } else {
+      start = Math.max(0, end - minSpan);
+    }
+  }
+  const trimmedDurationSec = Math.max(0, Number((end - start).toFixed(3)));
+  return {
+    trimStartSec: Number(start.toFixed(3)),
+    trimEndSec: Number(end.toFixed(3)),
+    trimmedDurationSec,
+  };
+}
+
+export function formatMediaDuration(seconds: number, withTenths = false): string {
+  const safe = Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  const hrs = Math.floor(safe / 3600);
+  const mins = Math.floor((safe % 3600) / 60);
+  const secsFloat = safe % 60;
+  const secs = Math.floor(secsFloat);
+  const tenths = Math.min(9, Math.floor((secsFloat - secs) * 10));
+
+  const mm = String(mins).padStart(2, '0');
+  const ss = String(secs).padStart(2, '0');
+  const suffix = withTenths ? `.${tenths}` : '';
+  if (hrs > 0) {
+    return `${hrs}:${mm}:${ss}${suffix}`;
+  }
+  return `${mm}:${ss}${suffix}`;
+}
+
+export function buildCssFilterString(
+  state: Pick<PhotoEditState, 'brightness' | 'contrast' | 'saturation' | 'warmth'>
+): string {
+  if (
+    state.brightness === 0 &&
+    state.contrast === 0 &&
+    state.saturation === 0 &&
+    state.warmth === 0
+  ) {
+    return 'none';
+  }
+  const bVal = Math.max(0.15, Math.min(2.2, 1 + state.brightness / 120));
+  const cVal = Math.max(0.2, Math.min(2.4, Math.pow((state.contrast + 100) / 100, 1.35)));
+  const sVal = Math.max(0, Math.min(2.5, (state.saturation + 100) / 100));
+  const parts: string[] = [
+    `brightness(${bVal.toFixed(3)})`,
+    `contrast(${cVal.toFixed(3)})`,
+    `saturate(${sVal.toFixed(3)})`,
+  ];
+  if (state.warmth > 0) {
+    const sepiaAmt = Math.min(0.65, (state.warmth / 100) * 0.52);
+    parts.push(`sepia(${sepiaAmt.toFixed(3)})`);
+  } else if (state.warmth < 0) {
+    const hueShift = Math.max(-28, (state.warmth / 100) * 24);
+    parts.push(`hue-rotate(${hueShift.toFixed(1)}deg)`);
+  }
+  return parts.join(' ');
+}
+
+export interface ZoomPanState {
+  scale: number;
+  panX: number;
+  panY: number;
+}
+
+export function clampZoomPan(
+  scale: number,
+  panX: number,
+  panY: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  minScale = 1,
+  maxScale = 5
+): ZoomPanState {
+  const safeScale = Number.isFinite(scale)
+    ? Math.max(minScale, Math.min(maxScale, scale))
+    : minScale;
+  if (safeScale <= 1.01) {
+    return { scale: 1, panX: 0, panY: 0 };
+  }
+  const maxX = Math.max(0, ((viewportWidth || 0) * (safeScale - 1)) / 2);
+  const maxY = Math.max(0, ((viewportHeight || 0) * (safeScale - 1)) / 2);
+  return {
+    scale: Number(safeScale.toFixed(4)),
+    panX: Math.max(-maxX, Math.min(maxX, Number.isFinite(panX) ? panX : 0)),
+    panY: Math.max(-maxY, Math.min(maxY, Number.isFinite(panY) ? panY : 0)),
+  };
+}
+
+export interface EditHistoryStack<T> {
+  past: T[];
+  present: T;
+  future: T[];
+}
+
+export function createEditHistory<T>(initial: T): EditHistoryStack<T> {
+  return { past: [], present: initial, future: [] };
+}
+
+export function pushEditSnapshot<T>(
+  history: EditHistoryStack<T>,
+  next: T,
+  maxEntries = 30
+): EditHistoryStack<T> {
+  const nextPast = [...history.past, history.present];
+  if (nextPast.length > maxEntries) {
+    nextPast.splice(0, nextPast.length - maxEntries);
+  }
+  return {
+    past: nextPast,
+    present: next,
+    future: [],
+  };
+}
+
+export function undoEditSnapshot<T>(history: EditHistoryStack<T>): EditHistoryStack<T> {
+  if (history.past.length === 0) return history;
+  const previous = history.past[history.past.length - 1];
+  return {
+    past: history.past.slice(0, -1),
+    present: previous,
+    future: [history.present, ...history.future],
+  };
+}
+
+export function redoEditSnapshot<T>(history: EditHistoryStack<T>): EditHistoryStack<T> {
+  if (history.future.length === 0) return history;
+  const next = history.future[0];
+  return {
+    past: [...history.past, history.present],
+    present: next,
+    future: history.future.slice(1),
+  };
+}
+

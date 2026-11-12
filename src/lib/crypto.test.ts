@@ -523,10 +523,12 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(mainActivityKt.includes('val autoScrollJob = scope.launch'));
   assert.equal(mainActivityKt.includes('detectDragGesturesAfterLongPress('), false, 'Conflicting dual pointerInput detector call must be removed');
 
-  // 5. Release APK v1.3.0, historical APKs preserved, metadata, and Gradle configuration
+  // 5. Release APK v1.3.1, historical APKs preserved, metadata, and Gradle configuration
+  const apkV131Path = path.resolve(process.cwd(), 'release/photocloud-release-v1.3.1-signed.apk');
+  assert.ok(fs.existsSync(apkV131Path), 'Signed release APK v1.3.1 must exist');
+  assert.ok(fs.statSync(apkV131Path).size > 10 * 1024 * 1024, 'Signed release APK v1.3.1 should be > 10MB');
   const apkV130Path = path.resolve(process.cwd(), 'release/photocloud-release-v1.3.0-signed.apk');
-  assert.ok(fs.existsSync(apkV130Path), 'Signed release APK v1.3.0 must exist');
-  assert.ok(fs.statSync(apkV130Path).size > 10 * 1024 * 1024, 'Signed release APK v1.3.0 should be > 10MB');
+  assert.ok(fs.existsSync(apkV130Path), 'Historical signed APK v1.3.0 must remain preserved');
   const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.2.5-signed.apk');
   assert.ok(fs.existsSync(apkPath));
   assert.ok(fs.statSync(apkPath).size > 10 * 1024 * 1024, 'Signed release APK v1.2.5 should be > 10MB');
@@ -536,8 +538,8 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.1.3-signed.apk')));
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.3.0"'));
-  assert.ok(appBuildGradle.includes('versionCode = 27'));
+  assert.ok(appBuildGradle.includes('versionName = "1.3.1"'));
+  assert.ok(appBuildGradle.includes('versionCode = 28'));
   assert.equal(appBuildGradle.includes('photocloud_release_2026'), false, 'No hardcoded keystore password in build.gradle.kts');
   assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
   assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
@@ -545,7 +547,7 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.3.0');
+  assert.equal(pkgJson.version, '1.3.1');
 
   // 6. Multi-platform interactive CLI scripts (photocloud.bat & photocloud.sh)
   const batPath = path.resolve(process.cwd(), 'photocloud.bat');
@@ -588,8 +590,8 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   const baseConfig = {
     appName: 'PhotoCloud "Vault" <Test>',
     packageName: 'com.valerio.photocloud',
-    versionName: '1.3.0',
-    versionCode: 27,
+    versionName: '1.3.1',
+    versionCode: 28,
     serverUrl: 'http://10.0.2.2:3000',
     minSdk: 26,
     targetSdk: 35,
@@ -615,7 +617,7 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   assert.ok(!manifestXml.includes('android:label="PhotoCloud "Vault"'));
 
   const gradleKts = generateAppBuildGradleKts(baseConfig);
-  assert.ok(gradleKts.includes('versionName = "1.3.0"'));
+  assert.ok(gradleKts.includes('versionName = "1.3.1"'));
   assert.equal(gradleKts.includes('photocloud_release_2026'), false);
 
   const mainKt = generateMainActivityKt(baseConfig);
@@ -929,13 +931,13 @@ test('Release v1.2.9: Pause/Resume & Delete transfers, Pre-Transfer Choice Modal
   const selectionJs = fs.readFileSync(path.resolve(process.cwd(), 'static/scripts/selection.js'), 'utf-8');
   assert.ok(selectionJs.includes('window.startOrPromptDownload = function'));
 
-  // Verify v1.3.0 APK ZIP structure integrity, AI model SHA-256 verification, and Room indexing SQL
+  // Verify v1.3.1 APK ZIP structure integrity, AI model SHA-256 verification, and Room indexing SQL
   const JSZip = (await import('jszip')).default;
-  const apkV130Bytes = fs.readFileSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.3.0-signed.apk'));
-  const loadedApkZip = await JSZip.loadAsync(apkV130Bytes);
-  assert.ok(loadedApkZip.file('AndroidManifest.xml'), 'v1.3.0 APK must be a valid ZIP archive containing AndroidManifest.xml');
-  assert.ok(loadedApkZip.file('classes.dex'), 'v1.3.0 APK must contain classes.dex');
-  assert.ok(loadedApkZip.file('META-INF/MANIFEST.MF'), 'v1.3.0 APK must contain V1 signature manifest');
+  const apkV131Bytes = fs.readFileSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.3.1-signed.apk'));
+  const loadedApkZip = await JSZip.loadAsync(apkV131Bytes);
+  assert.ok(loadedApkZip.file('AndroidManifest.xml'), 'v1.3.1 APK must be a valid ZIP archive containing AndroidManifest.xml');
+  assert.ok(loadedApkZip.file('classes.dex'), 'v1.3.1 APK must contain classes.dex');
+  assert.ok(loadedApkZip.file('META-INF/MANIFEST.MF'), 'v1.3.1 APK must contain V1 signature manifest');
 
   const aiManagerKt = fs.readFileSync(
     path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/AiModelDownloadManager.kt'),
@@ -951,6 +953,107 @@ test('Release v1.2.9: Pause/Resume & Delete transfers, Pre-Transfer Choice Modal
   );
   assert.ok(photoAiDbKt.includes('COUNT(*) AS totalCount'));
 });
+
+test('v1.3.1 Unified Photo & Video Viewer + Editor Engine (Math, Web & Android Native)', async () => {
+  const {
+    clampTrimRange,
+    formatMediaDuration,
+    buildCssFilterString,
+    clampZoomPan,
+    createEditHistory,
+    pushEditSnapshot,
+    undoEditSnapshot,
+    redoEditSnapshot,
+  } = await import('./photoEditorMath');
+
+  // 1. Video Trim Range clamping & duration formatting
+  const trimmed = clampTrimRange(-2, 99, 12.5, 0.25);
+  assert.equal(trimmed.trimStartSec, 0);
+  assert.equal(trimmed.trimEndSec, 12.5);
+  assert.equal(trimmed.trimmedDurationSec, 12.5);
+
+  const crossed = clampTrimRange(8, 8.05, 10, 0.5);
+  assert.ok(crossed.trimEndSec - crossed.trimStartSec >= 0.49);
+  assert.equal(formatMediaDuration(65.4, true), '01:05.4');
+  assert.equal(formatMediaDuration(3661, false), '1:01:01');
+
+  // 2. GPU CSS Filter string builder
+  assert.equal(buildCssFilterString({ brightness: 0, contrast: 0, saturation: 0, warmth: 0 }), 'none');
+  const warmFilter = buildCssFilterString({ brightness: 12, contrast: 20, saturation: 30, warmth: 40 });
+  assert.ok(warmFilter.includes('brightness('));
+  assert.ok(warmFilter.includes('contrast('));
+  assert.ok(warmFilter.includes('saturate('));
+  assert.ok(warmFilter.includes('sepia('));
+
+  // 3. Zoom & Pan bounds clamping
+  const z1 = clampZoomPan(0.5, 200, -100, 800, 600);
+  assert.deepEqual(z1, { scale: 1, panX: 0, panY: 0 });
+  const z2 = clampZoomPan(3, 5000, -5000, 800, 600);
+  assert.equal(z2.scale, 3);
+  assert.equal(z2.panX, 800);
+  assert.equal(z2.panY, -600);
+
+  // 4. Immutable Undo/Redo History Stack
+  let stack = createEditHistory({ brightness: 0 });
+  stack = pushEditSnapshot(stack, { brightness: 15 });
+  stack = pushEditSnapshot(stack, { brightness: 35 });
+  assert.equal(stack.present.brightness, 35);
+  stack = undoEditSnapshot(stack);
+  assert.equal(stack.present.brightness, 15);
+  stack = undoEditSnapshot(stack);
+  assert.equal(stack.present.brightness, 0);
+  stack = redoEditSnapshot(stack);
+  assert.equal(stack.present.brightness, 15);
+
+  // 5. Web Templates & Scripts support BOTH Photo and Video Lightbox + Editor
+  const baseHtml = fs.readFileSync(path.resolve(process.cwd(), 'templates/base.html'), 'utf-8');
+  assert.ok(baseHtml.includes('id="lightbox-video-controls"'));
+  assert.ok(baseHtml.includes('id="lightbox-filmstrip"'));
+  assert.ok(baseHtml.includes('id="photo-editor-video"'));
+  assert.ok(baseHtml.includes('id="editor-tab-video-btn"'));
+  assert.ok(baseHtml.includes('id="editor-undo-btn"'));
+  assert.ok(baseHtml.includes('id="editor-compare-btn"'));
+  assert.ok(baseHtml.includes('id="slider-trim-start"'));
+  assert.ok(baseHtml.includes('id="slider-trim-end"'));
+
+  const lightboxJs = fs.readFileSync(path.resolve(process.cwd(), 'static/scripts/lightbox.js'), 'utf-8');
+  assert.ok(lightboxJs.includes('Modifica Video'));
+  assert.ok(lightboxJs.includes('setZoomCenteredAt'));
+  assert.ok(lightboxJs.includes('renderFilmstrip'));
+
+  const editorJs = fs.readFileSync(path.resolve(process.cwd(), 'static/scripts/photo-editor.js'), 'utf-8');
+  assert.ok(editorJs.includes('exportEditedVideoBlob'));
+  assert.ok(editorJs.includes('undoEdit'));
+  assert.ok(editorJs.includes('redoEdit'));
+  assert.ok(editorJs.includes('schedulePreviewRender'));
+  assert.equal(editorJs.includes('window.location.reload()'), false);
+
+  // 6. Android Native Media Editor Engine & Compose Modals
+  const mediaEngineKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/AndroidMediaEditorEngine.kt'),
+    'utf-8'
+  );
+  assert.ok(mediaEngineKt.includes('suspend fun exportEditedVideoToFile'));
+  assert.ok(mediaEngineKt.includes('MediaExtractor'));
+  assert.ok(mediaEngineKt.includes('MediaMuxer'));
+  assert.ok(mediaEngineKt.includes('MediaCodec.createEncoderByType'));
+
+  const apiClientKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt'),
+    'utf-8'
+  );
+  assert.ok(apiClientKt.includes('suspend fun uploadEditedMediaFile'));
+
+  const mainActivityKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
+    'utf-8'
+  );
+  assert.ok(mainActivityKt.includes('"Modifica Video"'));
+  assert.ok(mainActivityKt.includes('RangeSlider('));
+  assert.ok(mainActivityKt.includes('TextureView(ctx)'));
+  assert.ok(mainActivityKt.includes('exportEditedVideoToFile'));
+});
+
 
 
 

@@ -1636,6 +1636,141 @@ class PhotoCloudApiClient(
         }
     }
 
+    /**
+     * Streams an edited media file (video or photo) directly from disk to /api/media/edit
+     * with live progress speed tracking and cache invalidation.
+     */
+    suspend fun uploadEditedMediaFile(
+        originalFilename: String,
+        editedFile: File,
+        mimeType: String,
+        overwrite: Boolean,
+        onTransferUpdate: (TransferOperation) -> Unit = {}
+    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        if (!editedFile.exists() || editedFile.length() <= 0L) {
+            return@withContext Pair(false, "File elaborato vuoto o non trovato")
+        }
+
+        val opId = "edit_media_${System.currentTimeMillis()}"
+        val opTitle = if (overwrite) "Sovrascrivi: $originalFilename" else "Nuova copia: $originalFilename"
+        val totalBytes = editedFile.length().coerceAtLeast(1L)
+        val startMs = System.currentTimeMillis()
+        val modeStr = if (overwrite) "overwrite" else "copy"
+        val uploadName = editedFile.name.ifBlank { originalFilename }
+
+        onTransferUpdate(
+            TransferOperation(
+                id = opId,
+                title = opTitle,
+                isUpload = true,
+                transferredBytes = 0L,
+                totalBytes = totalBytes,
+                speedBytesPerSec = 0L,
+                status = TransferStatus.RUNNING,
+                detail = "Preparazione caricamento media..."
+            )
+        )
+
+        try {
+            val fileReqBody = editedFile.asRequestBody(mimeType.toMediaTypeOrNull())
+            val multipart = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", uploadName, fileReqBody)
+                .addFormDataPart("originalFilename", originalFilename)
+                .addFormDataPart("mode", modeStr)
+                .build()
+
+            var lastEmit = 0L
+            val progressBody = ProgressRequestBody(multipart) { written, _ ->
+                val now = System.currentTimeMillis()
+                if (now - lastEmit >= 120L || written >= totalBytes) {
+                    lastEmit = now
+                    val done = written.coerceAtMost(totalBytes)
+                    val elapsed = max(0.15, (now - startMs) / 1000.0)
+                    val speed = (done / elapsed).toLong()
+                    onTransferUpdate(
+                        TransferOperation(
+                            id = opId,
+                            title = opTitle,
+                            isUpload = true,
+                            transferredBytes = done,
+                            totalBytes = totalBytes,
+                            speedBytesPerSec = speed,
+                            status = TransferStatus.RUNNING,
+                            detail = "Crittografia AES-256 e invio..."
+                        )
+                    )
+                }
+            }
+
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/media/edit")
+                .post(progressBody)
+                .build()
+
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val err = resp.body?.string() ?: "Errore salvataggio (${resp.code})"
+                    onTransferUpdate(
+                        TransferOperation(
+                            id = opId,
+                            title = opTitle,
+                            isUpload = true,
+                            transferredBytes = 0L,
+                            totalBytes = totalBytes,
+                            speedBytesPerSec = 0L,
+                            status = TransferStatus.ERROR,
+                            detail = err
+                        )
+                    )
+                    return@withContext Pair(false, err)
+                }
+            }
+
+            if (overwrite) {
+                bitmapCache.remove("false:$originalFilename")
+                try {
+                    diskCacheFile(originalFilename, false).delete()
+                } catch (_: Exception) {
+                }
+            }
+
+            val elapsed = max(0.15, (System.currentTimeMillis() - startMs) / 1000.0)
+            val speed = (totalBytes / elapsed).toLong()
+            onTransferUpdate(
+                TransferOperation(
+                    id = opId,
+                    title = opTitle,
+                    isUpload = true,
+                    transferredBytes = totalBytes,
+                    totalBytes = totalBytes,
+                    speedBytesPerSec = speed,
+                    status = TransferStatus.COMPLETED,
+                    detail = if (overwrite) "Media originale aggiornato" else "Salvata nuova copia"
+                )
+            )
+
+            Pair(
+                true,
+                if (overwrite) "Media aggiornato con successo" else "Nuova copia salvata nell'archivio"
+            )
+        } catch (e: Exception) {
+            onTransferUpdate(
+                TransferOperation(
+                    id = opId,
+                    title = opTitle,
+                    isUpload = true,
+                    transferredBytes = 0L,
+                    totalBytes = totalBytes,
+                    speedBytesPerSec = 0L,
+                    status = TransferStatus.ERROR,
+                    detail = e.localizedMessage ?: "Errore di rete"
+                )
+            )
+            Pair(false, "Errore salvataggio media: ${e.localizedMessage}")
+        }
+    }
+
     private data class PreparedUploadUri(
         val uri: Uri,
         val displayName: String,

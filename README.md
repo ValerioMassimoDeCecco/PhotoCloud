@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.3.0)
+# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.3.1)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -7,6 +7,18 @@
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > La firma release di `android-app/app/build.gradle.kts` richiede le variabili d'ambiente `PHOTOCLOUD_KEYSTORE_PATH`, `PHOTOCLOUD_KEYSTORE_PASSWORD`, `PHOTOCLOUD_KEY_ALIAS` e `PHOTOCLOUD_KEY_PASSWORD` (nessun keystore o password è committato nel repository). Gli upload temporanei e gli archivi ZIP esportati transitano su disco in `temp_uploads/` e vengono rimossi automaticamente dopo il completamento/download. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow GitHub Actions.
+
+---
+
+## ⚡ Novità Principali della Release `v1.3.1` (`versionCode 28`) — Motore Riscritto 120Hz di Visualizzazione & Editing Foto + Video
+
+### 1. Lightbox Media Viewer 120Hz Foto & Video (`lightbox.js`, `base.html`, `MainActivity.kt`)
+- **Zoom & Pan di Precisione**: pinch-to-zoom multi-touch su mobile, zoom a cursore con rotellina mouse (`1x`–`5x`), doppio tocco/doppio click (`1x ↔ 2.5x`), pan fluido vincolato ai bordi, swipe laterale e swipe verso il basso per chiudere, tocco sull'area media per nascondere/mostrare l'HUD e barra filmstrip rapida.
+- **Player Video Custom Responsivo**: scrub bar con timecode, pulsante Play/Pausa centrale, salto rapido `-10s` / `+10s`, selettore velocità (`0.5x–2x`), Muto, Loop e pulsante **Modifica Video** abilitato su entrambi i client Web e Android.
+
+### 2. Studio Editing Unificato Foto & Video (`photo-editor.js`, `AndroidMediaEditorEngine.kt`, `server.ts`)
+- **Layout Adattivo Desktop & Mobile**: su desktop area preview con inspector laterale; su mobile vista compatta con tab inferiori (`Regola`, `Filtri`, `Ritaglia`, `Video`) ottimizzati per l'uso con una sola mano (`≥ 44px`).
+- **Strumenti Non-Distruttivi & Esportazione Reale**: cronologia **Undo / Redo** (`Ctrl+Z` / `Ctrl+Y`), confronto istantaneo **Originale**, filtri GPU 120fps, ritaglio manuale a 8 maniglie + rotazione/specchio e **editing video completo** (Trim `Inizio` / `Fine` con cursori dedicati, rimozione audio, velocità clip, anteprima video GPU dal vivo ed esportazione reale tramite `Canvas + MediaRecorder` su Web e `MediaExtractor + MediaMuxer / MediaCodec` su Android, con migrazione automatica estensione su `/api/media/edit`).
 
 ---
 
