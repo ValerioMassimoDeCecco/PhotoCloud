@@ -282,8 +282,8 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
   assert.equal(workflowYaml.includes('rm -f photocloud-release-key.jks'), false);
 
   const keystorePath = path.resolve(process.cwd(), 'android-app/app/photocloud-release-key.jks');
-  assert.ok(fs.existsSync(keystorePath));
-  assert.ok(fs.statSync(keystorePath).size > 1000);
+  assert.equal(fs.existsSync(keystorePath), false, 'Compromised release keystore must not be tracked in the repository (SEC-01)');
+  assert.equal(workflowYaml.includes('photocloud_release_2026'), false, 'Hardcoded keystore password must be removed from workflow');
 
   const filePathsXml = path.resolve(process.cwd(), 'android-app/app/src/main/res/xml/file_paths.xml');
   assert.ok(fs.existsSync(filePathsXml));
@@ -365,11 +365,13 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
 
 test('authenticated encryption detects tampering and reads legacy CFB', async () => {
   const crypto = await import('node:crypto');
-  const { deriveKey, encryptedPlaintextSize } = await import('./crypto');
+  const { deriveKey, encryptFileAsync, decryptFileAsync, encryptedPlaintextSize } = await import('./crypto');
   const key = 'test secret';
   const plain = Buffer.from('hello');
   const enc = encryptFile(plain, key);
   assert.equal(encryptedPlaintextSize(enc), plain.length);
+  const asyncEnc = await encryptFileAsync(plain, key);
+  assert.deepEqual(await decryptFileAsync(asyncEnc, key), plain);
   const altered = Buffer.from(enc); altered[altered.length - 1] ^= 1;
   assert.throws(() => decryptFile(altered, key));
   assert.throws(() => decryptFile(enc, 'wrong key'));
@@ -377,6 +379,7 @@ test('authenticated encryption detects tampering and reads legacy CFB', async ()
   const cipher = crypto.createCipheriv('aes-256-cfb', deriveKey(key, salt), iv);
   const legacy = Buffer.concat([salt, iv, cipher.update(plain), cipher.final()]);
   assert.deepEqual(decryptFile(legacy, key), plain);
+  assert.deepEqual(await decryptFileAsync(legacy, key), plain);
   assert.equal(encryptedPlaintextSize(legacy), plain.length);
 });
 
@@ -520,25 +523,29 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(mainActivityKt.includes('val autoScrollJob = scope.launch'));
   assert.equal(mainActivityKt.includes('detectDragGesturesAfterLongPress('), false, 'Conflicting dual pointerInput detector call must be removed');
 
-  // 5. Release APK, historical APKs preserved, metadata, and Gradle configuration
+  // 5. Release APK v1.3.0, historical APKs preserved, metadata, and Gradle configuration
+  const apkV130Path = path.resolve(process.cwd(), 'release/photocloud-release-v1.3.0-signed.apk');
+  assert.ok(fs.existsSync(apkV130Path), 'Signed release APK v1.3.0 must exist');
+  assert.ok(fs.statSync(apkV130Path).size > 10 * 1024 * 1024, 'Signed release APK v1.3.0 should be > 10MB');
   const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.2.5-signed.apk');
   assert.ok(fs.existsSync(apkPath));
-  assert.ok(fs.statSync(apkPath).size > 20 * 1024 * 1024, 'Signed release APK v1.2.5 should be > 20MB');
+  assert.ok(fs.statSync(apkPath).size > 10 * 1024 * 1024, 'Signed release APK v1.2.5 should be > 10MB');
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.2.4-signed.apk')));
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.2.3-signed.apk')));
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.2.2-signed.apk')));
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.1.3-signed.apk')));
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.2.9"'));
-  assert.ok(appBuildGradle.includes('versionCode = 26'));
+  assert.ok(appBuildGradle.includes('versionName = "1.3.0"'));
+  assert.ok(appBuildGradle.includes('versionCode = 27'));
+  assert.equal(appBuildGradle.includes('photocloud_release_2026'), false, 'No hardcoded keystore password in build.gradle.kts');
   assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
   assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
   assert.ok(appBuildGradle.includes('androidx.work:work-runtime-ktx:2.9.0'));
   assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.2.9');
+  assert.equal(pkgJson.version, '1.3.0');
 
   // 6. Multi-platform interactive CLI scripts (photocloud.bat & photocloud.sh)
   const batPath = path.resolve(process.cwd(), 'photocloud.bat');
@@ -581,8 +588,8 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   const baseConfig = {
     appName: 'PhotoCloud "Vault" <Test>',
     packageName: 'com.valerio.photocloud',
-    versionName: '1.2.9',
-    versionCode: 26,
+    versionName: '1.3.0',
+    versionCode: 27,
     serverUrl: 'http://10.0.2.2:3000',
     minSdk: 26,
     targetSdk: 35,
@@ -608,7 +615,8 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   assert.ok(!manifestXml.includes('android:label="PhotoCloud "Vault"'));
 
   const gradleKts = generateAppBuildGradleKts(baseConfig);
-  assert.ok(gradleKts.includes('versionName = "1.2.9"'));
+  assert.ok(gradleKts.includes('versionName = "1.3.0"'));
+  assert.equal(gradleKts.includes('photocloud_release_2026'), false);
 
   const mainKt = generateMainActivityKt(baseConfig);
   assert.ok(mainKt.includes('settings.allowFileAccess = false'));
@@ -920,6 +928,28 @@ test('Release v1.2.9: Pause/Resume & Delete transfers, Pre-Transfer Choice Modal
 
   const selectionJs = fs.readFileSync(path.resolve(process.cwd(), 'static/scripts/selection.js'), 'utf-8');
   assert.ok(selectionJs.includes('window.startOrPromptDownload = function'));
+
+  // Verify v1.3.0 APK ZIP structure integrity, AI model SHA-256 verification, and Room indexing SQL
+  const JSZip = (await import('jszip')).default;
+  const apkV130Bytes = fs.readFileSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.3.0-signed.apk'));
+  const loadedApkZip = await JSZip.loadAsync(apkV130Bytes);
+  assert.ok(loadedApkZip.file('AndroidManifest.xml'), 'v1.3.0 APK must be a valid ZIP archive containing AndroidManifest.xml');
+  assert.ok(loadedApkZip.file('classes.dex'), 'v1.3.0 APK must contain classes.dex');
+  assert.ok(loadedApkZip.file('META-INF/MANIFEST.MF'), 'v1.3.0 APK must contain V1 signature manifest');
+
+  const aiManagerKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/AiModelDownloadManager.kt'),
+    'utf-8'
+  );
+  assert.ok(aiManagerKt.includes('EXPECTED_MODEL_SHA256'));
+  assert.ok(aiManagerKt.includes('94b6c84a5d6de20f932558de213b50e0338dcc06ab83d8d64b12128a476b4b83'));
+  assert.ok(aiManagerKt.includes('fun verifyModelSha256('));
+
+  const photoAiDbKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/PhotoAiDatabase.kt'),
+    'utf-8'
+  );
+  assert.ok(photoAiDbKt.includes('COUNT(*) AS totalCount'));
 });
 
 

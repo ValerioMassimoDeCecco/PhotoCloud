@@ -66,7 +66,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ onOpenAndroi
                 <h4>1. Pacchetto Release Android (.APK + Progetto Android Studio)</h4>
                 <p>
                   Usa la scheda <strong>Android Release</strong> integrata per compilare e scaricare
-                  il pacchetto <code>photocloud-release-v1.0.0-signed.apk</code> firmato o il
+                  il pacchetto <code>photocloud-release-v1.3.0-signed.apk</code> firmato o il
                   progetto completo Kotlin + Jetpack Compose pronto per Android Studio.
                 </p>
                 {onOpenAndroidStudio && (

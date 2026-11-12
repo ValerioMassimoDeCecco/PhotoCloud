@@ -64,19 +64,6 @@ export function App() {
           return;
         }
       }
-
-      // Support ?autostart=1 or automatic mobile preview session so the user immediately sees their local PhotoCloud Android app + release builder working
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('login') !== '1') {
-        const demoResp = await fetch('/api/demo-login', { method: 'POST' });
-        if (demoResp.ok) {
-          const demoData = await demoResp.json();
-          setAuthenticated(true);
-          setUsername(demoData.username);
-          setMediaFiles(demoData.mediaFiles || []);
-          setTrashedFiles(demoData.trashedFiles || []);
-        }
-      }
     } catch {
       // ignore network error
     }

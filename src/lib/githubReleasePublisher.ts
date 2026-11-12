@@ -38,8 +38,8 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.2.9';
-const APK_FILENAME = 'photocloud-release-v1.2.9-signed.apk';
+const DEFAULT_TAG = 'v1.3.0';
+const APK_FILENAME = 'photocloud-release-v1.3.0-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
@@ -56,10 +56,10 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     // If gradle binary is not present in local container, use pre-built signed release APK
     const fallbackCandidates = [
       path.join(outputDir, APK_FILENAME),
-      path.join(outputDir, 'photocloud-release-v1.2.8-signed.apk'),
+      path.join(outputDir, 'photocloud-release-v1.2.9-signed.apk'),
       path.join(outputDir, 'photocloud-release-v1.2.7-signed.apk'),
-      path.join(outputDir, 'photocloud-release-v1.2.6-signed.apk'),
       path.join(outputDir, 'photocloud-release-v1.2.5-signed.apk'),
+      path.join(outputDir, 'photocloud-release-v1.2.3-signed.apk'),
     ];
     const existingFallback = fallbackCandidates.find((candidate) => fs.existsSync(candidate));
     if (existingFallback) {
@@ -78,17 +78,17 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     sha256,
     sizeBytes: apkBuffer.length,
     applicationId: 'com.valerio.photocloud',
-    versionName: '1.2.9',
-    versionCode: 26,
-    changelog: 'Release 1.2.9 — Pausa/Riprendi ed Eliminazione dei singoli trasferimenti in tempo reale, scelta all\'inizio di ogni trasferimento tra trasferimento diretto nella memoria o creazione di archivio .zip, e configurazione della modalità e directory di scaricamento per Foto, Video e File (default automatico in base al tipo oppure cartella specifica/personalizzata).',
+    versionName: '1.3.0',
+    versionCode: 27,
+    changelog: 'Release 1.3.0 — Hardening completo di sicurezza (rimozione keystore compromesso dal repository, pre-auth su upload/edit, verifica SHA-256 modello AI, permessi Android 13–14), upload e creazione ZIP su disco temporaneo a memoria costante, crittografia PBKDF2/AES-256-GCM asincrona con cache LRU, supporto RFC 9110 per HTTP Range (206/416), riallineamento indicatori spazio cloud e integrità APK V1/V2/V3.',
     features: [
-      'Controllo completo dei trasferimenti in tempo reale (Android & Web): pulsanti Pausa / Riprendi ed Elimina / Annulla su ogni operazione di upload o download attiva',
-      'Scelta all\'inizio di ogni trasferimento (Modale Pre-Trasferimento configurabile): decidi se trasferire tutti i media direttamente nella memoria (file singoli in parallelo) oppure creare un archivio .zip',
-      'Modalità e Directory di Scaricamento configurabili per Foto, Video e File: default automatico in base al tipo (Pictures/PhotoCloud per foto, Movies/PhotoCloud per video, Download/PhotoCloud per file) oppure cartella specifica/SAF personalizzata',
-      'Motore di caricamento/scaricamento streaming Zero-OOM per selezioni massive (250+ foto) con trasferimenti paralleli configurabili (1–16)',
-      'Indicatori Memoria Usata Totale del Cloud (Header, Impostazioni e Cestino) e compatibilità completa Tema Originale + Liquid Glass'
+      'Hardening Sicurezza & Crittografia (v1.3.0): rimozione keystore dal repository, autenticazione preventiva prima dello streaming multipart, verifica SHA-256 per il modello AI TFLite e protezione endpoint di release',
+      'Architettura Upload & ZIP Zero-OOM: storage temporaneo su disco per upload multipli e archivi ZIP, con crittografia/decrittografia asincrona non bloccante e cache LRU PBKDF2',
+      'HTTP Byte-Range RFC 9110: supporto completo per range standard, suffix range (bytes=-N) e risposta 416 Range Not Satisfiable su /media e /api/ai-model',
+      'Indicatori Memoria Cloud & Cestino in Tempo Reale: sincronizzazione immediata di badge, popover, impostazioni e cestino dopo ogni upload, modifica o eliminazione',
+      'Controllo Completo dei Trasferimenti (Android & Web): Pausa/Riprendi, Annulla, scelta modalità diretta o .zip e cartelle di destinazione personalizzabili'
     ],
-    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.2.9',
+    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.3.0',
     publishedAt: new Date().toISOString(),
   }, null, 2));
   return { apkPath, apkBuffer, sha256, metadataPath };
@@ -149,7 +149,6 @@ export async function triggerGitHubActionsBuild(options?: {
     'android-app/gradle.properties',
     'android-app/gradle/wrapper/gradle-wrapper.properties',
     'android-app/app/build.gradle.kts',
-    'android-app/app/photocloud-release-key.jks',
     'android-app/app/proguard-rules.pro',
     'android-app/app/src/main/AndroidManifest.xml',
     'android-app/app/src/main/res/xml/file_paths.xml',

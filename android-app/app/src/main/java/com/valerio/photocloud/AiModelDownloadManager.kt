@@ -63,10 +63,12 @@ object AiModelDownloadManager {
     const val MODEL_FILENAME = "efficientnet_lite4.tflite"
     const val PART_FILENAME = "efficientnet_lite4.tflite.part"
 
-    // Expected size of the official MediaPipe EfficientNet-Lite float32 TFLite model (~24.2 MB)
-    const val EXPECTED_MODEL_SIZE_BYTES = 25_383_495L
+    // Expected size and SHA-256 of the official MediaPipe EfficientNet-Lite float32 TFLite model (~24.3 MB)
+    const val EXPECTED_MODEL_SIZE_BYTES = 24_325_765L
     const val MIN_VALID_MODEL_BYTES = 5_000_000L
     const val REQUIRED_FREE_STORAGE_BYTES = 40_000_000L
+    const val EXPECTED_MODEL_SHA256 =
+        "94b6c84a5d6de20f932558de213b50e0338dcc06ab83d8d64b12128a476b4b83"
 
     const val OFFICIAL_MODEL_URL =
         "https://storage.googleapis.com/mediapipe-models/image_classifier/efficientnet_lite2/float32/latest/efficientnet_lite2.tflite"
@@ -113,6 +115,25 @@ object AiModelDownloadManager {
     fun isModelInstalled(context: Context): Boolean {
         val file = getInstalledModelFile(context)
         return file.exists() && file.isFile && file.length() >= MIN_VALID_MODEL_BYTES
+    }
+
+    fun verifyModelSha256(file: File): Boolean {
+        if (!file.exists() || !file.isFile || file.length() < MIN_VALID_MODEL_BYTES) return false
+        return try {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            file.inputStream().buffered(64 * 1024).use { input ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val r = input.read(buf)
+                    if (r <= 0) break
+                    digest.update(buf, 0, r)
+                }
+            }
+            val hex = digest.digest().joinToString("") { "%02x".format(it) }
+            hex.equals(EXPECTED_MODEL_SHA256, ignoreCase = true)
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     fun getAvailableInternalStorageBytes(context: Context): Long {
@@ -277,7 +298,7 @@ object AiModelDownloadManager {
 
                     if (!isActive) break
 
-                    if (partFile.exists() && partFile.length() >= MIN_VALID_MODEL_BYTES) {
+                    if (partFile.exists() && partFile.length() >= MIN_VALID_MODEL_BYTES && verifyModelSha256(partFile)) {
                         val finalFile = getInstalledModelFile(appCtx)
                         if (finalFile.exists()) {
                             finalFile.delete()
@@ -302,7 +323,10 @@ object AiModelDownloadManager {
                         PhotoAiIndexingWorker.enqueueIndexing(appCtx, forceReindex = false)
                         return@launch
                     } else {
-                        lastError = "File modello AI incompleto o corrotto"
+                        if (partFile.exists() && partFile.length() >= EXPECTED_MODEL_SIZE_BYTES) {
+                            try { partFile.delete() } catch (_: Throwable) {}
+                        }
+                        lastError = "File modello AI incompleto o checksum SHA-256 non valido"
                     }
                 } catch (ce: CancellationException) {
                     throw ce

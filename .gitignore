@@ -7,8 +7,15 @@ users.txt
 # Ignora tutto dentro flask_session/
 flask_session/
 
-# Ignora tutto dentro temp_zips/
+# Ignora tutto dentro temp_zips/ e temp_uploads/
 temp_zips/
+temp_uploads/
+
+# Android Keystores & Signing Secrets (NEVER commit)
+*.jks
+*.keystore
+android-app/app/*.jks
+android-app/app/*.keystore
 
 # Python cache
 __pycache__/
@@ -17,4 +24,7 @@ __pycache__/
 # Node / build output
 node_modules/
 dist/
+android-app/.gradle/
+android-app/build/
 android-app/app/build/
+android-app/local.properties

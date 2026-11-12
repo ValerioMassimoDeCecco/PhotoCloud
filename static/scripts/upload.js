@@ -1180,7 +1180,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const filename = list[idx];
                 const dirInfo = window.resolveCategoryTargetDirectory(filename, dirModeOverride);
                 const endpoint = fromTrash
-                    ? `/trash/media/${encodeURIComponent(filename)}`
+                    ? `/media/${encodeURIComponent(filename)}?from_trash=true&download=true`
                     : `/media/${encodeURIComponent(filename)}?download=true`;
 
                 let doneThisFile = false;

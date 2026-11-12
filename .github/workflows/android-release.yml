@@ -81,26 +81,24 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Versione sorgente: v$VERSION_NAME (versionCode $VERSION_CODE)"
 
-      - name: Verify Persistent Release Keystore (RSA-2048 from v1.0.4)
+      - name: Provision Release Keystore from GitHub Secrets
         working-directory: ./android-app/app
         env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ secrets.PHOTOCLOUD_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
+          PHOTOCLOUD_KEYSTORE_PASSWORD: ${{ secrets.PHOTOCLOUD_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          PHOTOCLOUD_KEY_ALIAS: ${{ secrets.PHOTOCLOUD_KEY_ALIAS || secrets.KEY_ALIAS }}
+          PHOTOCLOUD_KEY_PASSWORD: ${{ secrets.PHOTOCLOUD_KEY_PASSWORD || secrets.KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > photocloud-release-key.jks
-          elif [ ! -f photocloud-release-key.jks ]; then
-            keytool -genkeypair -v \
-              -keystore photocloud-release-key.jks \
-              -alias photocloud-release-key \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass "${KEYSTORE_PASSWORD:-photocloud_release_2026}" \
-              -keypass "${KEY_PASSWORD:-photocloud_release_2026}" \
-              -dname "CN=ValerioMassimoDeCecco, OU=PhotoCloud, O=PhotoCloud, L=Rome, S=RM, C=IT"
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$PHOTOCLOUD_KEYSTORE_PASSWORD" ] || [ -z "$PHOTOCLOUD_KEY_ALIAS" ] || [ -z "$PHOTOCLOUD_KEY_PASSWORD" ]; then
+            echo "::error::Secret di firma mancanti (PHOTOCLOUD_KEYSTORE_BASE64, PHOTOCLOUD_KEYSTORE_PASSWORD, PHOTOCLOUD_KEY_ALIAS, PHOTOCLOUD_KEY_PASSWORD)."
+            exit 1
           fi
-          keytool -list -v \
-            -keystore photocloud-release-key.jks \
-            -alias photocloud-release-key \
-            -storepass "${KEYSTORE_PASSWORD:-photocloud_release_2026}"
+          echo "$KEYSTORE_BASE64" | base64 -d > release-signing.jks
+          keytool -list \
+            -keystore release-signing.jks \
+            -alias "$PHOTOCLOUD_KEY_ALIAS" \
+            -storepass "$PHOTOCLOUD_KEYSTORE_PASSWORD" > /dev/null
 
       - name: Determine and validate Release Tag
         id: release_meta
@@ -127,6 +125,11 @@ jobs:
 
       - name: Build Signed Release APK with Gradle
         working-directory: ./android-app
+        env:
+          PHOTOCLOUD_KEYSTORE_PATH: release-signing.jks
+          PHOTOCLOUD_KEYSTORE_PASSWORD: ${{ secrets.PHOTOCLOUD_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          PHOTOCLOUD_KEY_ALIAS: ${{ secrets.PHOTOCLOUD_KEY_ALIAS || secrets.KEY_ALIAS }}
+          PHOTOCLOUD_KEY_PASSWORD: ${{ secrets.PHOTOCLOUD_KEY_PASSWORD || secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
           gradle assembleRelease --no-daemon --stacktrace

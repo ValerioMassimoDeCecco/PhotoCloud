@@ -2,8 +2,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { MediaItem } from '../types';
 
+const TEMPLATE_CACHE = new Map<string, { mtimeMs: number; content: string }>();
+
 function readTemplate(filename: string): string {
-  return fs.readFileSync(path.resolve(process.cwd(), 'templates', filename), 'utf-8');
+  const fullPath = path.resolve(process.cwd(), 'templates', filename);
+  try {
+    const stat = fs.statSync(fullPath);
+    const cached = TEMPLATE_CACHE.get(fullPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs) {
+      return cached.content;
+    }
+    const content = fs.readFileSync(fullPath, 'utf-8');
+    TEMPLATE_CACHE.set(fullPath, { mtimeMs: stat.mtimeMs, content });
+    return content;
+  } catch {
+    return fs.readFileSync(fullPath, 'utf-8');
+  }
 }
 
 function escapeHtml(str: string): string {
@@ -133,7 +147,7 @@ function renderWithBase(stylesBlock: string, contentBlock: string, scriptsBlock:
   return base;
 }
 
-export function renderLoginTemplate(): string {
+export function renderLoginTemplate(errorMessage?: string): string {
   const raw = readTemplate('login.html');
   const stylesMatch = raw.match(/\{%\s*block styles\s*%\}([\s\S]*?)\{%\s*endblock\s*%\}/);
   const contentMatch = raw.match(/\{%\s*block content\s*%\}([\s\S]*?)\{%\s*endblock\s*%\}/);
@@ -143,7 +157,16 @@ export function renderLoginTemplate(): string {
     /\{\{\s*url_for\('static',\s*filename='([^']+)'\)\s*\}\}/g,
     '/static/$1'
   );
-  const content = contentMatch?.[1] || '';
+  const safeErrorBanner = errorMessage
+    ? `<div role="alert" style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.35);color:#ef4444;padding:10px 14px;border-radius:10px;margin-bottom:14px;font-size:14px;">${errorMessage
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')}</div>`
+    : '';
+  const content = (contentMatch?.[1] || '').replace(
+    '<div class="auth-tabs">',
+    `${safeErrorBanner}<div class="auth-tabs">`
+  );
   const scripts = scriptsMatch?.[1] || '';
 
   return renderWithBase(styles, content, scripts);

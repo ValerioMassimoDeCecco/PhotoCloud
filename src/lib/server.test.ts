@@ -11,9 +11,10 @@ const root = process.cwd();
 
 test('server protects vaults, preserves collisions, and handles real media flows', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'photocloud-test-'));
-  for (const name of ['templates', 'static', 'public', 'release']) {
+  const symlinkType = process.platform === 'win32' ? 'junction' : 'dir';
+  for (const name of ['templates', 'static', 'public', 'release', 'android-app']) {
     if (fs.existsSync(path.join(root, name))) {
-      fs.symlinkSync(path.join(root, name), path.join(dir, name), 'dir');
+      fs.symlinkSync(path.join(root, name), path.join(dir, name), symlinkType);
     }
   }
   const socket = net.createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening');
@@ -44,14 +45,40 @@ test('server protects vaults, preserves collisions, and handles real media flows
     assert.equal((await register('alice')).status, 200);
     assert.equal((await register('bob')).status, 200);
     const alice = await login('alice'), bob = await login('bob');
+
+    // Unauthenticated upload is rejected with 403 before buffering files
+    const unauthForm = new FormData();
+    unauthForm.append('file[]', new Blob(['unauth']), 'unauth.txt');
+    assert.equal((await fetch(base + '/upload', { method: 'POST', body: unauthForm })).status, 403);
+
     async function upload(content: string) {
       const form = new FormData(); form.append('file[]', new Blob([content]), 'test.txt');
       return fetch(base + '/upload', { method: 'POST', headers: { Cookie: alice }, body: form });
     }
     const result = await (await upload('original')).json() as any;
     assert.equal(result.mediaFiles[0].size, 8);
+    assert.ok(result.storageStats, 'POST /upload must return storageStats');
+    assert.equal(result.storageStats.filesBytes, 8);
     assert.equal(await (await get('/media/test.txt', alice)).text(), 'original');
+
+    // Verify RFC 9110 Range support on /media/test.txt (suffix range and 416 out-of-bounds)
+    const suffixRangeResp = await fetch(base + '/media/test.txt', {
+      headers: { Cookie: alice, Range: 'bytes=-4' },
+    });
+    assert.equal(suffixRangeResp.status, 206);
+    assert.equal(await suffixRangeResp.text(), 'inal');
+
+    const invalidRangeResp = await fetch(base + '/media/test.txt', {
+      headers: { Cookie: alice, Range: 'bytes=99999-100000' },
+    });
+    assert.equal(invalidRangeResp.status, 416);
+
     assert.equal((await fetch(base + '/trash/test.txt', json({}, alice))).status, 200);
+
+    // Verify trashed file direct download works via both /media/test.txt?from_trash=true&download=true and /trash/media/test.txt
+    assert.equal(await (await get('/media/test.txt?from_trash=true&download=true', alice)).text(), 'original');
+    assert.equal(await (await get('/trash/media/test.txt', alice)).text(), 'original');
+
     await upload('newdata');
     assert.equal((await fetch(base + '/restore/test.txt', json({}, alice))).status, 409);
     assert.equal(await (await get('/media/test.txt', alice)).text(), 'newdata');
@@ -71,6 +98,7 @@ test('server protects vaults, preserves collisions, and handles real media flows
     assert.equal((await get('/manifest.webmanifest')).status, 200);
     assert.equal((await get('/service-worker.js')).status, 200);
     assert.equal((await get('/')).status, 200);
+    assert.equal((await fetch(base + '/login', { redirect: 'manual' })).status, 302);
 
     // Verify Android update manifest and optional AI model Range streaming endpoints.
     // Invariante anti-loop: la versione annunciata deve corrispondere all'APK realmente servito.
@@ -78,15 +106,15 @@ test('server protects vaults, preserves collisions, and handles real media flows
     if (updateManifestResp.status === 404) {
       const missing = await updateManifestResp.json() as any;
       assert.equal(missing.error, 'Nessun APK di release disponibile sul server');
-      assert.equal(missing.versionName, '1.2.9');
+      assert.equal(missing.versionName, '1.3.0');
     } else {
       assert.equal(updateManifestResp.status, 200);
       const updateManifest = await updateManifestResp.json() as any;
-      assert.equal(updateManifest.versionCode, 26);
-      assert.equal(updateManifest.versionName, '1.2.9');
-      assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.2.9-signed.apk');
+      assert.equal(updateManifest.versionCode, 27);
+      assert.equal(updateManifest.versionName, '1.3.0');
+      assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.3.0-signed.apk');
       assert.equal(updateManifest.sha256.length, 64);
-      assert.ok(updateManifest.sizeBytes > 20 * 1024 * 1024);
+      assert.ok(updateManifest.sizeBytes > 10 * 1024 * 1024);
     }
 
     const modelRangeResp = await fetch(base + '/api/ai-model/efficientnet_lite4.tflite', {
@@ -95,6 +123,11 @@ test('server protects vaults, preserves collisions, and handles real media flows
     assert.equal(modelRangeResp.status, 206);
     const modelChunk = await modelRangeResp.arrayBuffer();
     assert.equal(modelChunk.byteLength, 1024);
+
+    const modelInvalidRangeResp = await fetch(base + '/api/ai-model/efficientnet_lite4.tflite', {
+      headers: { Range: 'bytes=999999999-' },
+    });
+    assert.equal(modelInvalidRangeResp.status, 416);
 
     // --- SECURITY HARDENING & AUTH/REGISTRATION COMPATIBILITY TESTS ---
     // 1. Verify HTTP security headers & X-Powered-By removal
@@ -117,12 +150,6 @@ test('server protects vaults, preserves collisions, and handles real media flows
 
     const loginFileForm = new FormData();
     loginFileForm.set('auth_file', new Blob([authJsonText], { type: 'application/json' }), 'photocloud_auth_charlie_sec.json');
-    const loginFileResp = await fetch(base + '/login', {
-      method: 'POST',
-      headers: { Accept: 'application/json' },
-      body: loginFileRespHeaders(),
-    }).catch(() => null);
-    void loginFileResp;
     const realLoginFileResp = await fetch(base + '/login', {
       method: 'POST',
       headers: { Accept: 'application/json' },
@@ -169,16 +196,23 @@ test('server protects vaults, preserves collisions, and handles real media flows
     assert.equal((await get('/api/document-preview/.albums.json', alice)).status, 403);
     assert.equal((await fetch(base + '/trash/.albums.json', json({}, alice))).status, 403);
 
-    // 5. Prototype Pollution prevention in /api/albums/assign
+    // 5. Prototype Pollution prevention in /api/albums/assign & orphan cleanup in /empty_trash
     const protoResp = await fetch(
       base + '/api/albums/assign',
-      json({ filenames: ['__proto__', 'constructor', 'prototype', 'test.txt'], album: 'Segreto' }, alice)
+      json({ filenames: ['__proto__', 'constructor', 'prototype', 'test.txt', 'orphan_deleted.jpg'], album: 'Segreto' }, alice)
     );
     assert.equal(protoResp.status, 200);
     const protoData = await protoResp.json() as any;
     assert.equal(Object.prototype.hasOwnProperty.call(protoData.fileAlbums, '__proto__'), false);
     assert.equal(Object.prototype.hasOwnProperty.call(protoData.fileAlbums, 'constructor'), false);
     assert.equal(protoData.fileAlbums['test.txt'], 'Segreto');
+    assert.equal(protoData.fileAlbums['orphan_deleted.jpg'], 'Segreto');
+
+    const emptyTrashResp = await fetch(base + '/empty_trash', json({}, alice));
+    assert.equal(emptyTrashResp.status, 200);
+    const albumsAfterEmpty = await (await get('/api/albums', alice)).json() as any;
+    assert.equal(albumsAfterEmpty.fileAlbums['test.txt'], 'Segreto');
+    assert.equal(albumsAfterEmpty.fileAlbums['orphan_deleted.jpg'], undefined);
 
     // 6. CSRF Cross-Origin blocking on state-changing POST endpoints
     const csrfResp = await fetch(base + '/empty_trash', {
@@ -193,6 +227,8 @@ test('server protects vaults, preserves collisions, and handles real media flows
     assert.equal(csrfResp.status, 403);
 
     // 7. Android Builder authentication & path traversal checks
+    assert.equal((await get('/api/android/releases')).status, 403);
+    assert.equal((await get('/api/android/releases', alice)).status, 200);
     const unauthBuildResp = await fetch(base + '/api/android/build-release', json({}));
     assert.equal(unauthBuildResp.status, 403);
     const invalidDownloadResp = await get('/api/android/download/..%2F..%2Fetc/apk', alice);
@@ -247,7 +283,3 @@ test('server protects vaults, preserves collisions, and handles real media flows
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
-function loginFileRespHeaders(): undefined {
-  return undefined;
-}

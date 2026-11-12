@@ -13,22 +13,47 @@ android {
         applicationId = "com.valerio.photocloud"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "1.2.9"
+        versionCode = 27
+        versionName = "1.3.0"
 
-        buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:5000\"")
+        buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:3000\"")
     }
 
     androidResources {
         noCompress += "tflite"
     }
 
+    val releaseKeystorePath = System.getenv("PHOTOCLOUD_KEYSTORE_PATH")
+        ?: System.getenv("KEYSTORE_PATH")
+        ?: (findProperty("PHOTOCLOUD_KEYSTORE_PATH") as String?)
+        ?: ""
+    val releaseStorePassword = System.getenv("PHOTOCLOUD_KEYSTORE_PASSWORD")
+        ?: System.getenv("KEYSTORE_PASSWORD")
+        ?: (findProperty("PHOTOCLOUD_KEYSTORE_PASSWORD") as String?)
+        ?: ""
+    val releaseKeyAlias = System.getenv("PHOTOCLOUD_KEY_ALIAS")
+        ?: System.getenv("KEY_ALIAS")
+        ?: (findProperty("PHOTOCLOUD_KEY_ALIAS") as String?)
+        ?: ""
+    val releaseKeyPassword = System.getenv("PHOTOCLOUD_KEY_PASSWORD")
+        ?: System.getenv("KEY_PASSWORD")
+        ?: (findProperty("PHOTOCLOUD_KEY_PASSWORD") as String?)
+        ?: ""
+    val hasReleaseSigningCredentials =
+        releaseKeystorePath.isNotBlank() &&
+            file(releaseKeystorePath).exists() &&
+            releaseStorePassword.isNotBlank() &&
+            releaseKeyAlias.isNotBlank() &&
+            releaseKeyPassword.isNotBlank()
+
     signingConfigs {
         create("release") {
-            storeFile = file("photocloud-release-key.jks")
-            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "photocloud_release_2026"
-            keyAlias = "photocloud-release-key"
-            keyPassword = System.getenv("KEY_PASSWORD") ?: "photocloud_release_2026"
+            if (hasReleaseSigningCredentials) {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
             enableV1Signing = true
             enableV2Signing = true
             enableV3Signing = true
@@ -39,7 +64,9 @@ android {
         release {
             isMinifyEnabled = false
             isShrinkResources = false
-            signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseSigningCredentials) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -48,6 +75,19 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             isDebuggable = true
+        }
+    }
+
+    gradle.taskGraph.whenReady {
+        val requiresSignedRelease = allTasks.any { task ->
+            val n = task.name.lowercase()
+            (n.contains("assemblerelease") || n.contains("bundlerelease") || n.contains("packagerelease")) &&
+                !n.contains("compile")
+        }
+        if (requiresSignedRelease && !hasReleaseSigningCredentials) {
+            throw GradleException(
+                "Credenziali di firma release mancanti. Configura PHOTOCLOUD_KEYSTORE_PATH, PHOTOCLOUD_KEYSTORE_PASSWORD, PHOTOCLOUD_KEY_ALIAS e PHOTOCLOUD_KEY_PASSWORD."
+            )
         }
     }
 

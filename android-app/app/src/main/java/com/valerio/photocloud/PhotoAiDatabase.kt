@@ -71,7 +71,7 @@ interface PhotoAiDao {
     @Query(
         """
         SELECT
-            COALESCE(SUM(CASE WHEN isAnalyzed = 0 THEN 1 ELSE 0 END), 0) AS totalCount,
+            COUNT(*) AS totalCount,
             COALESCE(SUM(CASE WHEN isAnalyzed = 1 THEN 1 ELSE 0 END), 0) AS analyzedCount
         FROM photo_ai_categories
         WHERE uriString LIKE 'cloud://%'

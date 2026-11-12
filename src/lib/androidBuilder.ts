@@ -115,12 +115,20 @@ android {
         buildConfigField("boolean", "ENABLE_OFFLINE_CACHE", "${Boolean(config.enableOfflineCache)}")
     }
 
+    val releaseKeystorePath = System.getenv("PHOTOCLOUD_KEYSTORE_PATH") ?: System.getenv("KEYSTORE_PATH") ?: ""
+    val releaseStorePassword = System.getenv("PHOTOCLOUD_KEYSTORE_PASSWORD") ?: System.getenv("KEYSTORE_PASSWORD") ?: ""
+    val releaseKeyAlias = System.getenv("PHOTOCLOUD_KEY_ALIAS") ?: "${safeAlias}"
+    val releaseKeyPassword = System.getenv("PHOTOCLOUD_KEY_PASSWORD") ?: System.getenv("KEY_PASSWORD") ?: ""
+    val hasSigningSecrets = releaseKeystorePath.isNotBlank() && file(releaseKeystorePath).exists() && releaseStorePassword.isNotBlank() && releaseKeyPassword.isNotBlank()
+
     signingConfigs {
         create("release") {
-            storeFile = file("photocloud-release-key.jks")
-            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "photocloud_release_2026"
-            keyAlias = "${safeAlias}"
-            keyPassword = System.getenv("KEY_PASSWORD") ?: "photocloud_release_2026"
+            if (hasSigningSecrets) {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
             enableV1Signing = true
             enableV2Signing = true
             enableV3Signing = true
@@ -131,7 +139,9 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            if (hasSigningSecrets) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

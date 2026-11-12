@@ -317,7 +317,7 @@ sealed class PendingTransferRequest {
 }
 
 /**
- * PhotoCloud 100% Native Android Client v1.2.9
+ * PhotoCloud 100% Native Android Client v1.3.0
  * - Drag-to-Select Multiple Media in LazyVerticalGrid & SelectionActionsPanel
  * - Lightbox Gesture Navigation with HorizontalPager, Swipe-to-Dismiss, Double-Tap Zoom & Coherent Slide Transitions
  * - Cloud File Manager for non-media files (PDF, ZIP, APK, Docs, Audio, Code, etc.)

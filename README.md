@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.2.9)
+# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.3.0)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -6,7 +6,28 @@
 
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
-> Il keystore e la password predefinita sono stati pubblicati: la chiave di firma va considerata compromessa. Generarne una nuova e conservarla fuori dalla repository; cambiare firma può impedire l’aggiornamento diretto delle installazioni esistenti. Gli ZIP esportati restano temporaneamente in chiaro nella memoria del server (fino al download o per un’ora); eventuali ZIP lasciati dalle versioni precedenti in `temp_zips/` vanno rimossi manualmente. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow manuale. L’app web servita da Express è quella basata su template; il frontend React nella repository è sperimentale e non è collegato al server.
+> La firma release di `android-app/app/build.gradle.kts` richiede le variabili d'ambiente `PHOTOCLOUD_KEYSTORE_PATH`, `PHOTOCLOUD_KEYSTORE_PASSWORD`, `PHOTOCLOUD_KEY_ALIAS` e `PHOTOCLOUD_KEY_PASSWORD` (nessun keystore o password è committato nel repository). Gli upload temporanei e gli archivi ZIP esportati transitano su disco in `temp_uploads/` e vengono rimossi automaticamente dopo il completamento/download. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow GitHub Actions.
+
+---
+
+## ⚡ Novità Principali della Release `v1.3.0` (`versionCode 27`) — Hardening Sicurezza, Upload/ZIP su Disco, Crittografia Asincrona & Integrità APK V1/V2/V3
+
+### 1. Hardening Completo di Sicurezza & Firma Android (`build.gradle.kts`, `AndroidManifest.xml`, `AiModelDownloadManager.kt`, `server.ts`)
+- **Rimozione Keystore Compromesso dal Repository (`SEC-01`)**: rimossi keystore e password hardcoded da `build.gradle.kts`, `androidBuilder.ts`, `githubReleasePublisher.ts` e `.github/workflows/android-release.yml`, con guard Gradle che richiede i segreti di firma per i task di release.
+- **Pre-Autenticazione prima dello Streaming Multipart (`SEC-02`)**: `POST /upload` e `POST /api/media/edit` verificano la sessione prima di invocare Multer, rifiutando con `403` richieste non autenticate a costo zero di disco/RAM.
+- **Verifica Integrità SHA-256 Modello AI (`SEC-03`)**: `AiModelDownloadManager.kt` verifica sia la dimensione reale (`24.325.765` byte) sia il digest `SHA-256` (`94b6c84a5d6de20f932558de213b50e0338dcc06ab83d8d64b12128a476b4b83`) prima di attivare `efficientnet_lite4.tflite`.
+- **Permessi Media Android 13–14 & Manifest Hardening (`SEC-05 / COMPAT-01`)**: aggiunti `READ_MEDIA_VISUAL_USER_SELECTED` (Android 14+), `READ_EXTERNAL_STORAGE` (`maxSdkVersion="32"`) e `android:exported="false"` per `.MainActivity`.
+
+### 2. Performance & Memoria Costante (`crypto.ts`, `server.ts`, `templateRenderer.ts`)
+- **Upload & Archivi ZIP su Disco Temporaneo (`PERF-01 / PERF-04`)**: sostituito `multer.memoryStorage()` con `multer.diskStorage` su `temp_uploads/` con pulizia automatica in `finally`, ed eliminata la ritenzione di interi buffer ZIP in RAM (`ZIP_TASKS` streamma da disco e rimuove il file al termine).
+- **PBKDF2 / AES-256-GCM Asincroni + Cache LRU (`PERF-02`)**: introdotti `deriveKeyAsync`, `encryptFileAsync` e `decryptFileAsync` con cache LRU limitata per non bloccare mai l'event loop Node.js durante upload, anteprime documenti, download media, ricerca duplicati ed esportazioni ZIP.
+- **HTTP Byte-Range RFC 9110 (`PERF-03 / API-02`)**: supporto per range standard, suffix range (`bytes=-N`) e risposta `416 Range Not Satisfiable` su `/media/:filename` e `/api/ai-model/efficientnet_lite4.tflite`.
+
+### 3. Correzioni Funzionali Web, Android & APK (`grouping.js`, `upload.js`, `PhotoAiDatabase.kt`, `release/`)
+- **Sincronizzazione Indicatori Spazio Cloud (`BUG-01`)**: `POST /upload` e `POST /api/media/edit` restituiscono `storageStats` aggiornati e `updateCloudStorageIndicators` aggiorna istantaneamente badge header, popover, card Impostazioni e banner Cestino.
+- **Download Diretto dal Cestino (`BUG-02`) & Pulizia Album (`DATA-02`)**: supportati `/media/:filename?from_trash=true&download=true` e `/trash/media/:filename`; `POST /empty_trash` rimuove i riferimenti orfani in `.albums.json`.
+- **Progresso Indicizzazione AI Room (`BUG-04`)**: corretto il conteggio `totalCount` in `PhotoAiDatabase.observeIndexingProgress()`.
+- **Integrità APK Firmato V1/V2/V3 (`REL-01`)**: `release/photocloud-release-v1.3.0-signed.apk` è un archivio ZIP/APK integro senza padding zero in coda, verificato con `unzip -t` e allineato a `photocloud-release-build.json` e `output-metadata.json`.
 
 ---
 

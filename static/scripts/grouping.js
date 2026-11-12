@@ -502,14 +502,73 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     }
 
-    function updateCloudStorageIndicators() {
-        const stats = computeClientCloudStorageStats();
+    function normalizeCloudStorageStats(raw) {
+        if (!raw || typeof raw !== 'object') {
+            return computeClientCloudStorageStats();
+        }
+        const mediaBytes = Math.max(0, Number(raw.mediaBytes) || 0);
+        const filesBytes = Math.max(0, Number(raw.filesBytes) || 0);
+        const activeTotalBytes = Math.max(
+            0,
+            Number(raw.activeTotalBytes ?? raw.activeBytes ?? (mediaBytes + filesBytes)) || 0
+        );
+        const trashBytes = Math.max(0, Number(raw.trashBytes) || 0);
+        const grandTotalBytes = Math.max(
+            0,
+            Number(raw.grandTotalBytes ?? (activeTotalBytes + trashBytes)) || 0
+        );
+        const mediaCount = Math.max(0, Number(raw.mediaCount) || 0);
+        const filesCount = Math.max(0, Number(raw.filesCount) || 0);
+        const trashCount = Math.max(0, Number(raw.trashCount) || 0);
+        const denom = grandTotalBytes > 0 ? grandTotalBytes : 1;
+        const mediaPercent = raw.mediaPercent !== undefined
+            ? Number(raw.mediaPercent)
+            : raw.mediaPct !== undefined
+            ? Number(raw.mediaPct)
+            : grandTotalBytes > 0 ? Math.round((mediaBytes / denom) * 1000) / 10 : 0;
+        const filesPercent = raw.filesPercent !== undefined
+            ? Number(raw.filesPercent)
+            : raw.filesPct !== undefined
+            ? Number(raw.filesPct)
+            : grandTotalBytes > 0 ? Math.round((filesBytes / denom) * 1000) / 10 : 0;
+        const trashPercent = raw.trashPercent !== undefined
+            ? Number(raw.trashPercent)
+            : raw.trashPct !== undefined
+            ? Number(raw.trashPct)
+            : grandTotalBytes > 0 ? Math.max(0, Math.round((100 - mediaPercent - filesPercent) * 10) / 10) : 0;
+
+        return {
+            mediaBytes,
+            filesBytes,
+            activeTotalBytes,
+            trashBytes,
+            grandTotalBytes,
+            mediaCount,
+            filesCount,
+            trashCount,
+            mediaPercent,
+            filesPercent,
+            trashPercent,
+            mediaFormatted: raw.mediaFormatted || formatBytesHuman(mediaBytes),
+            filesFormatted: raw.filesFormatted || formatBytesHuman(filesBytes),
+            activeTotalFormatted: raw.activeTotalFormatted || raw.activeFormatted || formatBytesHuman(activeTotalBytes),
+            trashFormatted: raw.trashFormatted || formatBytesHuman(trashBytes),
+            grandTotalFormatted: raw.grandTotalFormatted || formatBytesHuman(grandTotalBytes)
+        };
+    }
+
+    function updateCloudStorageIndicators(externalStats) {
+        const stats = normalizeCloudStorageStats(externalStats);
 
         // 1. Header compact badge
         const badgeEl = document.getElementById('cloud-storage-header-badge');
         const badgeTextEl = document.getElementById('cloud-storage-badge-text');
+        const headerValEl = document.getElementById('cloud-storage-header-value');
         if (badgeTextEl) {
             badgeTextEl.textContent = stats.activeTotalFormatted;
+        }
+        if (headerValEl) {
+            headerValEl.textContent = stats.activeTotalFormatted;
         }
         if (badgeEl) {
             badgeEl.dataset.activeBytes = String(stats.activeTotalBytes);
@@ -518,67 +577,102 @@ document.addEventListener('DOMContentLoaded', () => {
             badgeEl.dataset.trashBytes = String(stats.trashBytes);
             badgeEl.dataset.grandTotalBytes = String(stats.grandTotalBytes);
 
-            let dotEl = badgeEl.querySelector('.cloud-storage-trash-dot');
+            let dotEl = badgeEl.querySelector('.cloud-storage-trash-dot, .storage-trash-dot');
             if (stats.trashBytes > 0) {
                 if (!dotEl) {
                     dotEl = document.createElement('span');
                     dotEl.className = 'cloud-storage-trash-dot';
                     badgeEl.appendChild(dotEl);
                 }
+                dotEl.style.display = 'inline-block';
                 dotEl.title = `Cestino: ${stats.trashFormatted}`;
             } else if (dotEl) {
                 dotEl.remove();
             }
         }
 
-        // 2. Header Popover breakdown
-        const popActive = document.getElementById('popover-storage-active');
-        const popGrand = document.getElementById('popover-storage-grand-total');
+        // 2. Header Popover breakdown (both current templateRenderer IDs and legacy IDs)
+        const setTxt = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val;
+        };
+        setTxt('popover-storage-active-bytes', stats.activeTotalFormatted);
+        setTxt('popover-storage-active', stats.activeTotalFormatted);
+        setTxt('popover-storage-grand-total-bytes', stats.grandTotalFormatted);
+        setTxt('popover-storage-grand-total', stats.grandTotalFormatted);
+
         const popBarMedia = document.getElementById('popover-bar-media');
         const popBarFiles = document.getElementById('popover-bar-files');
         const popBarTrash = document.getElementById('popover-bar-trash');
-        const popCatMedia = document.getElementById('popover-cat-media-size');
-        const popCatFiles = document.getElementById('popover-cat-files-size');
-        const popCatTrash = document.getElementById('popover-cat-trash-size');
-        const popTrashBtn = document.getElementById('popover-open-trash-btn');
-
-        if (popActive) popActive.textContent = stats.activeTotalFormatted;
-        if (popGrand) popGrand.textContent = stats.grandTotalFormatted;
         if (popBarMedia) popBarMedia.style.width = `${stats.mediaPercent}%`;
         if (popBarFiles) popBarFiles.style.width = `${stats.filesPercent}%`;
         if (popBarTrash) popBarTrash.style.width = `${stats.trashPercent}%`;
-        if (popCatMedia) popCatMedia.textContent = `${stats.mediaFormatted} (${stats.mediaPercent}%)`;
-        if (popCatFiles) popCatFiles.textContent = `${stats.filesFormatted} (${stats.filesPercent}%)`;
-        if (popCatTrash) popCatTrash.textContent = `${stats.trashFormatted} (${stats.trashPercent}%)`;
+
+        setTxt('popover-cat-media-count', `(${stats.mediaCount})`);
+        setTxt('popover-cat-media-bytes', stats.mediaFormatted);
+        setTxt('popover-cat-media-pct', `${stats.mediaPercent}%`);
+        setTxt('popover-cat-media-size', `${stats.mediaFormatted} (${stats.mediaPercent}%)`);
+
+        setTxt('popover-cat-files-count', `(${stats.filesCount})`);
+        setTxt('popover-cat-files-bytes', stats.filesFormatted);
+        setTxt('popover-cat-files-pct', `${stats.filesPercent}%`);
+        setTxt('popover-cat-files-size', `${stats.filesFormatted} (${stats.filesPercent}%)`);
+
+        setTxt('popover-cat-trash-count', `(${stats.trashCount})`);
+        setTxt('popover-cat-trash-bytes', stats.trashFormatted);
+        setTxt('popover-cat-trash-pct', `${stats.trashPercent}%`);
+        setTxt('popover-cat-trash-size', `${stats.trashFormatted} (${stats.trashPercent}%)`);
+
+        const popTrashBtn = document.getElementById('popover-open-trash-btn');
         if (popTrashBtn) popTrashBtn.style.display = stats.trashBytes > 0 ? 'inline-flex' : 'none';
 
-        // 3. Settings Modal Cloud Storage Card
-        const setActive = document.getElementById('settings-storage-active-value');
-        const setGrand = document.getElementById('settings-storage-grand-total-value');
+        // 3. Settings Modal Cloud Storage Card (templates/base.html IDs + legacy IDs)
+        setTxt('settings-storage-active-val', stats.activeTotalFormatted);
+        setTxt('settings-storage-active-value', stats.activeTotalFormatted);
+        setTxt('settings-storage-total-badge', `Totale: ${stats.grandTotalFormatted}`);
+        setTxt('settings-storage-grand-total-value', stats.grandTotalFormatted);
+        setTxt(
+            'settings-storage-active-sub',
+            `di ${stats.grandTotalFormatted} totali nel Cloud (${stats.mediaCount + stats.filesCount} file attivi)`
+        );
+
         const setBarMedia = document.getElementById('settings-storage-bar-media');
         const setBarFiles = document.getElementById('settings-storage-bar-files');
         const setBarTrash = document.getElementById('settings-storage-bar-trash');
-        const setMediaSize = document.getElementById('settings-cat-media-size');
-        const setMediaPct = document.getElementById('settings-cat-media-pct');
-        const setFilesSize = document.getElementById('settings-cat-files-size');
-        const setFilesPct = document.getElementById('settings-cat-files-pct');
-        const setTrashSize = document.getElementById('settings-cat-trash-size');
-        const setTrashPct = document.getElementById('settings-cat-trash-pct');
-
-        if (setActive) setActive.textContent = stats.activeTotalFormatted;
-        if (setGrand) setGrand.textContent = stats.grandTotalFormatted;
         if (setBarMedia) setBarMedia.style.width = `${stats.mediaPercent}%`;
         if (setBarFiles) setBarFiles.style.width = `${stats.filesPercent}%`;
         if (setBarTrash) setBarTrash.style.width = `${stats.trashPercent}%`;
-        if (setMediaSize) setMediaSize.textContent = stats.mediaFormatted;
-        if (setMediaPct) setMediaPct.textContent = `${stats.mediaPercent}% • ${stats.mediaCount} elementi`;
-        if (setFilesSize) setFilesSize.textContent = stats.filesFormatted;
-        if (setFilesPct) setFilesPct.textContent = `${stats.filesPercent}% • ${stats.filesCount} elementi`;
-        if (setTrashSize) setTrashSize.textContent = stats.trashFormatted;
-        if (setTrashPct) setTrashPct.textContent = `${stats.trashPercent}% • ${stats.trashCount} elementi`;
 
-        // 4. Trash Recoverable Storage Banner inside #pane-trash
-        const existingBanner = paneTrash.querySelector('#trash-recoverable-storage-banner');
+        setTxt('settings-storage-media-bytes', stats.mediaFormatted);
+        setTxt('settings-storage-media-pct', `${stats.mediaPercent}%`);
+        setTxt('settings-storage-media-count', `${stats.mediaCount} elementi`);
+        setTxt('settings-cat-media-size', stats.mediaFormatted);
+        setTxt('settings-cat-media-pct', `${stats.mediaPercent}% • ${stats.mediaCount} elementi`);
+
+        setTxt('settings-storage-files-bytes', stats.filesFormatted);
+        setTxt('settings-storage-files-pct', `${stats.filesPercent}%`);
+        setTxt('settings-storage-files-count', `${stats.filesCount} elementi`);
+        setTxt('settings-cat-files-size', stats.filesFormatted);
+        setTxt('settings-cat-files-pct', `${stats.filesPercent}% • ${stats.filesCount} elementi`);
+
+        setTxt('settings-storage-trash-bytes', stats.trashFormatted);
+        setTxt('settings-storage-trash-pct', `${stats.trashPercent}%`);
+        setTxt('settings-storage-trash-count', `${stats.trashCount} elementi`);
+        setTxt('settings-cat-trash-size', stats.trashFormatted);
+        setTxt('settings-cat-trash-pct', `${stats.trashPercent}% • ${stats.trashCount} elementi`);
+
+        // 4. Trash Recoverable Storage Banner inside #pane-trash or standalone /trash
+        setTxt('trash-banner-recoverable-bytes', stats.trashFormatted);
+        setTxt('trash-recoverable-size-value', stats.trashFormatted);
+        setTxt('trash-banner-item-count', String(stats.trashCount));
+        setTxt('trash-banner-pct-badge', `${stats.trashPercent}% del Cloud`);
+
+        const trashBarTrash = document.getElementById('trash-banner-bar-trash');
+        const trashBarActive = document.getElementById('trash-banner-bar-active');
+        if (trashBarTrash) trashBarTrash.style.width = `${stats.trashPercent}%`;
+        if (trashBarActive) trashBarActive.style.width = `${Math.max(0, 100 - stats.trashPercent)}%`;
+
+        const existingBanner = paneTrash ? paneTrash.querySelector('#trash-recoverable-storage-banner') : null;
         if (stats.trashCount > 0 && existingBanner) {
             const sizeSpan = existingBanner.querySelector('#trash-banner-size');
             const metaSpan = existingBanner.querySelector('#trash-banner-meta');
@@ -594,6 +688,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (segTrash) segTrash.style.width = `${stats.trashPercent}%`;
         }
     }
+    window.updateCloudStorageIndicators = updateCloudStorageIndicators;
 
     function renderTrashPaneDom() {
         paneTrash.innerHTML = '';
