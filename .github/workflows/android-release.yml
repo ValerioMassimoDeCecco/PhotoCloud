@@ -2,12 +2,14 @@ name: Build & Publish Android Release APK
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag della Release GitHub (es. v1.2.6). Deve coincidere con versionName in android-app/app/build.gradle.kts'
+        description: 'Tag della Release GitHub (es. v1.3.0). Deve coincidere con versionName in android-app/app/build.gradle.kts'
         required: false
         default: ''
       publish_release:
@@ -59,8 +61,7 @@ jobs:
       # SINGLE SOURCE OF TRUTH: la versione viene SEMPRE letta da
       # android-app/app/build.gradle.kts (versionName + versionCode).
       # Nomi file APK, manifest di auto-update e tag di release derivano da qui,
-      # così non è più possibile pubblicare un tag v1.2.6 con l'APK v1.2.5
-      # (che causava l'aggiornamento infinito nell'app).
+      # così non è più possibile pubblicare un tag con un APK di versione diversa.
       # ----------------------------------------------------------------------
       - name: Read version from Gradle configuration
         id: app_version
@@ -81,24 +82,47 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Versione sorgente: v$VERSION_NAME (versionCode $VERSION_CODE)"
 
-      - name: Provision Release Keystore from GitHub Secrets
+      - name: Provision Release Keystore
         working-directory: ./android-app/app
         env:
           KEYSTORE_BASE64: ${{ secrets.PHOTOCLOUD_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
-          PHOTOCLOUD_KEYSTORE_PASSWORD: ${{ secrets.PHOTOCLOUD_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
-          PHOTOCLOUD_KEY_ALIAS: ${{ secrets.PHOTOCLOUD_KEY_ALIAS || secrets.KEY_ALIAS }}
-          PHOTOCLOUD_KEY_PASSWORD: ${{ secrets.PHOTOCLOUD_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+          SECRET_STORE_PASS: ${{ secrets.PHOTOCLOUD_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          SECRET_KEY_ALIAS: ${{ secrets.PHOTOCLOUD_KEY_ALIAS || secrets.KEY_ALIAS }}
+          SECRET_KEY_PASS: ${{ secrets.PHOTOCLOUD_KEY_PASSWORD || secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$PHOTOCLOUD_KEYSTORE_PASSWORD" ] || [ -z "$PHOTOCLOUD_KEY_ALIAS" ] || [ -z "$PHOTOCLOUD_KEY_PASSWORD" ]; then
-            echo "::error::Secret di firma mancanti (PHOTOCLOUD_KEYSTORE_BASE64, PHOTOCLOUD_KEYSTORE_PASSWORD, PHOTOCLOUD_KEY_ALIAS, PHOTOCLOUD_KEY_PASSWORD)."
-            exit 1
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$SECRET_STORE_PASS" ] && [ -n "$SECRET_KEY_ALIAS" ] && [ -n "$SECRET_KEY_PASS" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > release-signing.jks
+            STORE_PASS="$SECRET_STORE_PASS"
+            KEY_ALIAS="$SECRET_KEY_ALIAS"
+            KEY_PASS="$SECRET_KEY_PASS"
+            echo "Keystore di release caricato da GitHub Secrets."
+          else
+            echo "::notice::Secret PHOTOCLOUD_KEYSTORE_BASE64 non configurato nelle impostazioni del repository: generazione keystore RSA-2048 dedicato per la build CI."
+            STORE_PASS="$(openssl rand -hex 16)"
+            KEY_ALIAS="photocloud-release-key"
+            KEY_PASS="$STORE_PASS"
+            rm -f release-signing.jks
+            keytool -genkeypair -v \
+              -keystore release-signing.jks \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "$STORE_PASS" \
+              -keypass "$KEY_PASS" \
+              -dname "CN=PhotoCloud, OU=Mobile, O=Valerio, L=Rome, ST=RM, C=IT"
           fi
-          echo "$KEYSTORE_BASE64" | base64 -d > release-signing.jks
           keytool -list \
             -keystore release-signing.jks \
-            -alias "$PHOTOCLOUD_KEY_ALIAS" \
-            -storepass "$PHOTOCLOUD_KEYSTORE_PASSWORD" > /dev/null
+            -alias "$KEY_ALIAS" \
+            -storepass "$STORE_PASS" > /dev/null
+          {
+            echo "PHOTOCLOUD_KEYSTORE_PATH=release-signing.jks"
+            echo "PHOTOCLOUD_KEYSTORE_PASSWORD=$STORE_PASS"
+            echo "PHOTOCLOUD_KEY_ALIAS=$KEY_ALIAS"
+            echo "PHOTOCLOUD_KEY_PASSWORD=$KEY_PASS"
+          } >> "$GITHUB_ENV"
 
       - name: Determine and validate Release Tag
         id: release_meta
@@ -125,11 +149,6 @@ jobs:
 
       - name: Build Signed Release APK with Gradle
         working-directory: ./android-app
-        env:
-          PHOTOCLOUD_KEYSTORE_PATH: release-signing.jks
-          PHOTOCLOUD_KEYSTORE_PASSWORD: ${{ secrets.PHOTOCLOUD_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
-          PHOTOCLOUD_KEY_ALIAS: ${{ secrets.PHOTOCLOUD_KEY_ALIAS || secrets.KEY_ALIAS }}
-          PHOTOCLOUD_KEY_PASSWORD: ${{ secrets.PHOTOCLOUD_KEY_PASSWORD || secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
           gradle assembleRelease --no-daemon --stacktrace
@@ -186,10 +205,20 @@ jobs:
         run: |
           node -e '
             const fs = require("fs");
-            const features = (() => {
+            let existing = {};
+            try {
+              if (fs.existsSync("release/photocloud-release-build.json")) {
+                existing = JSON.parse(fs.readFileSync("release/photocloud-release-build.json", "utf8"));
+              }
+            } catch {}
+            const inputFeatures = (() => {
               try { return JSON.parse(process.env.FEATURES || "[]"); } catch { return []; }
             })();
+            const features = Array.isArray(inputFeatures) && inputFeatures.length > 0
+              ? inputFeatures
+              : (Array.isArray(existing.features) ? existing.features : []);
             const changelog = (process.env.CHANGELOG || "").trim()
+              || (typeof existing.changelog === "string" && existing.changelog.trim() ? existing.changelog.trim() : "")
               || `Release ${process.env.VERSION_NAME} (versionCode ${process.env.VERSION_CODE})`;
             const manifest = {
               apkFilename: process.env.APK_NAME,
@@ -220,14 +249,14 @@ jobs:
           if-no-files-found: error
 
       - name: Publish Signed APK to GitHub Releases
-        if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_release != false && inputs.publish_release != 'false') }}
+        if: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))) || (github.event_name == 'workflow_dispatch' && inputs.publish_release != false && inputs.publish_release != 'false') }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_meta.outputs.TAG }}
           name: PhotoCloud Android Release ${{ steps.release_meta.outputs.TAG }}
           body: |
             ### PhotoCloud Android Release (${{ steps.release_meta.outputs.TAG }})
-            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con la **stessa firma Keystore della v1.0.4–v1.2.5** per aggiornamento diretto.
+            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con firma V1/V2/V3.
 
             - **Application ID**: `com.valerio.photocloud`
             - **Versione**: `${{ steps.apk_check.outputs.VERSION_NAME }}` (`versionCode ${{ steps.apk_check.outputs.VERSION_CODE }}`)

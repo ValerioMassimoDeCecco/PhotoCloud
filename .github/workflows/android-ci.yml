@@ -48,6 +48,42 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Prepare CI Signing Keystore
+        working-directory: ./android-app/app
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PHOTOCLOUD_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
+          SECRET_STORE_PASS: ${{ secrets.PHOTOCLOUD_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          SECRET_KEY_ALIAS: ${{ secrets.PHOTOCLOUD_KEY_ALIAS || secrets.KEY_ALIAS }}
+          SECRET_KEY_PASS: ${{ secrets.PHOTOCLOUD_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$SECRET_STORE_PASS" ] && [ -n "$SECRET_KEY_ALIAS" ] && [ -n "$SECRET_KEY_PASS" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > release-signing.jks
+            STORE_PASS="$SECRET_STORE_PASS"
+            KEY_ALIAS="$SECRET_KEY_ALIAS"
+            KEY_PASS="$SECRET_KEY_PASS"
+          else
+            STORE_PASS="$(openssl rand -hex 16)"
+            KEY_ALIAS="photocloud-release-key"
+            KEY_PASS="$STORE_PASS"
+            rm -f release-signing.jks
+            keytool -genkeypair -v \
+              -keystore release-signing.jks \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "$STORE_PASS" \
+              -keypass "$KEY_PASS" \
+              -dname "CN=PhotoCloud, OU=Mobile, O=Valerio, L=Rome, ST=RM, C=IT"
+          fi
+          {
+            echo "PHOTOCLOUD_KEYSTORE_PATH=release-signing.jks"
+            echo "PHOTOCLOUD_KEYSTORE_PASSWORD=$STORE_PASS"
+            echo "PHOTOCLOUD_KEY_ALIAS=$KEY_ALIAS"
+            echo "PHOTOCLOUD_KEY_PASSWORD=$KEY_PASS"
+          } >> "$GITHUB_ENV"
+
       - name: Verify Release Kotlin Compilation & Release APK Build
         working-directory: ./android-app
         run: |
