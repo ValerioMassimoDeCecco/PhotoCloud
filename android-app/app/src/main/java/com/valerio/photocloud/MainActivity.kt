@@ -5,15 +5,10 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
-import android.graphics.RenderEffect
-import android.graphics.SurfaceTexture
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Base64
-import android.view.Surface
 import android.view.TextureView
 import android.view.WindowManager
 import android.widget.MediaController
@@ -8533,7 +8528,9 @@ fun NativePhotoEditorModal(
                                         null
                                     } else {
                                         val mat = buildAndroidColorMatrix(effBrightness, effContrast, effSaturation, effWarmth)
-                                        RenderEffect.createColorFilterEffect(ColorMatrixColorFilter(mat)).asComposeRenderEffect()
+                                        android.graphics.RenderEffect
+                                            .createColorFilterEffect(android.graphics.ColorMatrixColorFilter(mat))
+                                            .asComposeRenderEffect()
                                     }
                                 } else null
                             }
@@ -8552,12 +8549,12 @@ fun NativePhotoEditorModal(
                                 factory = { ctx ->
                                     TextureView(ctx).apply {
                                         surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                                            override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+                                            override fun onSurfaceTextureAvailable(surfaceTexture: android.graphics.SurfaceTexture, width: Int, height: Int) {
                                                 val file = cachedVideoFile ?: return
                                                 try {
                                                     val mp = MediaPlayer().apply {
                                                         setDataSource(file.absolutePath)
-                                                        setSurface(Surface(surfaceTexture))
+                                                        setSurface(android.view.Surface(surfaceTexture))
                                                         isLooping = true
                                                         prepareAsync()
                                                         setOnPreparedListener { readyMp ->
@@ -8573,8 +8570,8 @@ fun NativePhotoEditorModal(
                                                 } catch (_: Exception) {
                                                 }
                                             }
-                                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
-                                            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                                            override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {}
+                                            override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
                                                 try {
                                                     editorMediaPlayer?.release()
                                                 } catch (_: Exception) {
@@ -8582,7 +8579,7 @@ fun NativePhotoEditorModal(
                                                 editorMediaPlayer = null
                                                 return true
                                             }
-                                            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                                            override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
                                         }
                                     }
                                 }
@@ -9004,8 +9001,10 @@ fun NativePhotoEditorModal(
                                     )
                                 }
 
+                                val safeEndFloat = trimEndMs.toFloat().coerceIn(0f, maxDur.toFloat())
+                                val safeStartFloat = trimStartMs.toFloat().coerceIn(0f, safeEndFloat)
                                 RangeSlider(
-                                    value = trimStartMs.toFloat().coerceIn(0f, maxDur.toFloat())..trimEndMs.toFloat().coerceIn(0f, maxDur.toFloat()),
+                                    value = safeStartFloat..safeEndFloat,
                                     onValueChange = { range ->
                                         val minGap = minOf(300L, maxDur / 5)
                                         val s = range.start.toLong().coerceIn(0L, maxDur - minGap)

@@ -1043,6 +1043,10 @@ test('v1.3.1 Unified Photo & Video Viewer + Editor Engine (Math, Web & Android N
     'utf-8'
   );
   assert.ok(apiClientKt.includes('suspend fun uploadEditedMediaFile'));
+  assert.ok(
+    apiClientKt.includes('import okhttp3.RequestBody.Companion.asRequestBody'),
+    'PhotoCloudApiClient.kt must import okhttp3.RequestBody.Companion.asRequestBody'
+  );
 
   const mainActivityKt = fs.readFileSync(
     path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
@@ -1052,6 +1056,16 @@ test('v1.3.1 Unified Photo & Video Viewer + Editor Engine (Math, Web & Android N
   assert.ok(mainActivityKt.includes('RangeSlider('));
   assert.ok(mainActivityKt.includes('TextureView(ctx)'));
   assert.ok(mainActivityKt.includes('exportEditedVideoToFile'));
+  assert.equal(
+    /^import android\.view\.Surface\s*$/m.test(mainActivityKt),
+    false,
+    'MainActivity.kt must not import android.view.Surface at top level because it shadows androidx.compose.material3.Surface'
+  );
+  assert.equal(
+    /^import android\.graphics\.(Color|ColorMatrix|Matrix|Rect|Canvas|Path)\s*$/m.test(mainActivityKt),
+    false,
+    'MainActivity.kt must qualify android.graphics.* classes instead of shadowing Compose wildcard imports'
+  );
 });
 
 
