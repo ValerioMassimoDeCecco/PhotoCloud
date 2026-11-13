@@ -1,19 +1,19 @@
 {
-  "apkFilename": "photocloud-release-v1.3.1-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.3.1-signed.apk",
+  "apkFilename": "photocloud-release-v1.3.2-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.3.2-signed.apk",
   "sha256": "f0aac0b2d0591af8fa28f0c5880a443091b52ac8c1aa1935746948cab08cd296",
   "sizeBytes": 12409161,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.3.1",
-  "versionCode": 28,
-  "changelog": "Release 1.3.1 — Riscrittura completa del motore di visualizzazione (Lightbox 120Hz) ed editing unificato Foto + Video su Web e Android Nativo: pinch/wheel zoom su cursore, pan fluido, player video custom con scrub bar, -10s/+10s, velocità 0.5x–2x, mute e loop, Undo/Redo, Confronto Originale, filtri GPU 120fps, ritaglio manuale a 8 maniglie e taglio/esportazione video reale (MediaRecorder Web & MediaExtractor/MediaMuxer/MediaCodec hardware Android).",
+  "versionName": "1.3.2",
+  "versionCode": 29,
+  "changelog": "Release 1.3.2 — Riscrittura completa del motore di Pinch-to-Zoom (Web & Android Nativo): risposta istantanea 1:1 alle dita a 120Hz senza lag di animazione, ancoraggio matematico esatto al punto medio focale (zero scivolamenti), transizione fluida 1↔2 dita senza salti di centroide, blocco intelligente di HorizontalPager durante zoom/pinch e ritaglio dei bordi basato sulle proporzioni reali del media.",
   "features": [
-    "Motore Lightbox 120Hz Foto & Video (Web & Android): zoom sul cursore (1x–5x), doppio tocco, pan fluido, swipe laterale/dismiss, HUD a scomparsa al tocco e barra miniature rapida",
-    "Player Video Integrato Responsivo: controllo scrub timecode, Play/Pausa centrale, salto -10s/+10s, selettore velocità (0.5x–2x), Muto e Loop su Web e Android",
-    "Studio Editing Unificato Foto & Video (v1.3.1): layout adattivo Desktop (Stage + Inspector laterale) e Mobile (Thumb-zone con tab Regola / Filtri / Ritaglia / Video)",
-    "Controlli Avanzati di Precisione: cronologia Undo/Redo (Ctrl+Z / Ctrl+Y), Confronto Originale istantaneo, anteprima colore GPU e griglia ritaglio manuale a 8 maniglie",
-    "Esportazione Video Reale Web & Android: taglio temporale (Trim Start/End), rimozione audio, filtri colore, rotazione, specchio e ritaglio con migrazione automatica del contenitore"
+    "Pinch-to-Zoom Perfetto & Istantaneo 1:1 (v1.3.2): eliminato ogni ritardo di animazione durante il gesto su Android Compose (graphicsLayer lambda phase) e Web",
+    "Ancoraggio Focale al Punto Medio (Zero Scivolamenti): il punto toccato tra le due dita resta perfettamente inchiodato al centro del pinch durante espansione, contrazione e rotazione dita",
+    "Transizione Multi-Dito Senza Salti: tracciamento individuale per PointerId così sollevare o appoggiare un dito durante lo zoom continua il pan senza alcun scatto o attivazione involontaria di swipe/chiusura",
+    "Blocco Pager & Bordi Media Reali: HorizontalPager disabilitato automaticamente durante pinch/zoom su Android e limiti di scorrimento calcolati sulle dimensioni Fitted reali della foto",
+    "Include tutte le novità v1.3.1: Player Video & Studio Editing Unificato Foto + Video con esportazione hardware reale e workflow CI/Release puliti"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.3.1",
-  "publishedAt": "2026-11-12T19:37:31.818Z"
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.3.2",
+  "publishedAt": "2026-11-13T06:54:12.606Z"
 }

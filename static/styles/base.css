@@ -107,6 +107,9 @@ body {
     transition: opacity 0.2s var(--ease-m3);
     will-change: opacity;
     overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .lightbox.active {
@@ -195,6 +198,7 @@ body {
     padding: 68px 12px 96px;
     flex: 1;
     overflow: hidden;
+    touch-action: none;
 }
 
 .media-container {
@@ -205,6 +209,9 @@ body {
     align-items: center;
     justify-content: center;
     overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .media-container img,
@@ -220,6 +227,7 @@ body {
     will-change: transform, opacity;
     transform-origin: center center;
     user-select: none;
+    -webkit-user-select: none;
     -webkit-user-drag: none;
     touch-action: none;
 }

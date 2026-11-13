@@ -20,7 +20,7 @@
         {% block content %}{% endblock %}
     </div>
 
-    <div id="lightbox" class="lightbox" onclick="closeLightbox()" role="dialog" aria-modal="true" aria-label="Visualizzatore Media PhotoCloud">
+    <div id="lightbox" class="lightbox" onclick="if (event.target === this) closeLightbox()" role="dialog" aria-modal="true" aria-label="Visualizzatore Media PhotoCloud">
         <div class="lightbox-top-bar" onclick="event.stopPropagation()">
             <div class="lightbox-meta-group">
                 <span id="lightbox-counter" class="lightbox-counter">1 / 1</span>
@@ -47,7 +47,7 @@
                 <button type="button" id="lightbox-fullscreen-btn" class="lightbox-icon-btn" title="Schermo intero (F)" aria-label="Schermo intero">
                     <span class="material-icons">fullscreen</span>
                 </button>
-                <button type="button" class="close-btn" onclick="closeLightbox()" title="Chiudi (Esc)" aria-label="Chiudi Lightbox">
+                <button type="button" class="close-btn" onclick="closeLightbox(true)" title="Chiudi (Esc)" aria-label="Chiudi Lightbox">
                     <span class="material-icons">close</span>
                 </button>
             </div>
@@ -58,8 +58,8 @@
                 <span class="material-icons">chevron_left</span>
             </button>
 
-            <div class="media-container" id="lightbox-media-container" onclick="closeLightbox()">
-                <img id="lightbox-img" alt="Anteprima" style="display: none;" onclick="event.stopPropagation()">
+            <div class="media-container" id="lightbox-media-container" onclick="if (event.target === this) closeLightbox()">
+                <img id="lightbox-img" alt="Anteprima" draggable="false" style="display: none;" onclick="event.stopPropagation()">
                 <video id="lightbox-video" playsinline preload="metadata" style="display: none;" onclick="event.stopPropagation()">
                     <source src="" type="video/mp4">
                     Il tuo browser non supporta i video.

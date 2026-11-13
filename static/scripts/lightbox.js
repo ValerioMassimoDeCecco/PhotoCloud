@@ -16,19 +16,20 @@
     let lastTapX = 0;
     let lastTapY = 0;
 
-    // Multi-touch & pointer tracking
+    // Multi-touch & pointer tracking (zero-slip incremental focal tracking + cached layout)
     const activePointers = new Map();
-    let pinchStartDist = 0;
-    let pinchStartScale = 1;
-    let pinchStartMidX = 0;
-    let pinchStartMidY = 0;
-    let pinchStartPanX = 0;
-    let pinchStartPanY = 0;
+    let cachedContainerCenterX = 0;
+    let cachedContainerCenterY = 0;
+    let cachedViewportW = 0;
+    let cachedViewportH = 0;
+    let cachedMediaW = 0;
+    let cachedMediaH = 0;
+    let hasCachedGeometry = false;
+    let springResetTimer = null;
+    let suppressBackdropClickUntil = 0;
 
     let gestureStartX = 0;
     let gestureStartY = 0;
-    let dragStartPanX = 0;
-    let dragStartPanY = 0;
     let isTrackingGesture = false;
     let hasMoved = false;
     let wasPinching = false;
@@ -174,42 +175,94 @@
         return null;
     }
 
-    function clampPan(nextScale, nextPanX, nextPanY) {
-        if (nextScale <= 1.01) {
+    function refreshCachedGeometry() {
+        const { lightboxMediaContainer, lightboxImg } = getElements();
+        const bounds = lightboxMediaContainer ? lightboxMediaContainer.getBoundingClientRect() : null;
+        const vw = bounds && bounds.width > 0 ? bounds.width : window.innerWidth;
+        const vh = bounds && bounds.height > 0 ? bounds.height : window.innerHeight;
+        cachedViewportW = vw;
+        cachedViewportH = vh;
+        cachedContainerCenterX = bounds ? bounds.left + vw / 2 : vw / 2;
+        cachedContainerCenterY = bounds ? bounds.top + vh / 2 : vh / 2;
+        if (lightboxImg && lightboxImg.style.display !== 'none') {
+            // offsetWidth/offsetHeight reflect unscaled CSS layout box (immune to transform scale)
+            const layoutW = lightboxImg.offsetWidth;
+            const layoutH = lightboxImg.offsetHeight;
+            if (layoutW > 0 && layoutH > 0) {
+                cachedMediaW = layoutW;
+                cachedMediaH = layoutH;
+            } else if (lightboxImg.naturalWidth > 0 && lightboxImg.naturalHeight > 0) {
+                const ratio = Math.min(vw / lightboxImg.naturalWidth, vh / lightboxImg.naturalHeight);
+                cachedMediaW = lightboxImg.naturalWidth * ratio;
+                cachedMediaH = lightboxImg.naturalHeight * ratio;
+            } else {
+                cachedMediaW = vw;
+                cachedMediaH = vh;
+            }
+        } else {
+            cachedMediaW = vw;
+            cachedMediaH = vh;
+        }
+        hasCachedGeometry = true;
+    }
+
+    function cancelSpringTransition() {
+        if (springResetTimer) {
+            clearTimeout(springResetTimer);
+            springResetTimer = null;
+        }
+        const el = getActiveMediaElement();
+        if (el) {
+            el.classList.remove('lightbox-spring-reset');
+        }
+    }
+
+    function clampPan(nextScale, nextPanX, nextPanY, useCached = false) {
+        if (nextScale <= 1.005) {
             return { scale: 1, panX: 0, panY: 0 };
         }
-        const { lightboxMediaContainer } = getElements();
-        const bounds = lightboxMediaContainer ? lightboxMediaContainer.getBoundingClientRect() : null;
-        const vw = bounds && bounds.width ? bounds.width : window.innerWidth;
-        const vh = bounds && bounds.height ? bounds.height : window.innerHeight;
-        const maxX = Math.max(0, (vw * (nextScale - 1)) / 2);
-        const maxY = Math.max(0, (vh * (nextScale - 1)) / 2);
+        if (!useCached || !hasCachedGeometry) {
+            refreshCachedGeometry();
+        }
+        const vw = cachedViewportW || window.innerWidth;
+        const vh = cachedViewportH || window.innerHeight;
+        const mw = cachedMediaW > 0 ? cachedMediaW : vw;
+        const mh = cachedMediaH > 0 ? cachedMediaH : vh;
+        const maxX = Math.max(0, (mw * nextScale - vw) / 2);
+        const maxY = Math.max(0, (mh * nextScale - vh) / 2);
         return {
             scale: Math.max(MIN_SCALE, Math.min(MAX_SCALE, nextScale)),
-            panX: Math.max(-maxX, Math.min(maxX, nextPanX)),
-            panY: Math.max(-maxY, Math.min(maxY, nextPanY)),
+            panX: Math.max(-maxX, Math.min(maxX, Number.isFinite(nextPanX) ? nextPanX : 0)),
+            panY: Math.max(-maxY, Math.min(maxY, Number.isFinite(nextPanY) ? nextPanY : 0)),
         };
     }
 
-    function applyZoomTransform(animate = false) {
+    function applyZoomTransform(animate = false, useCachedGeometry = false) {
         const el = getActiveMediaElement();
         const { lightboxZoomBadge, lightboxMediaContainer } = getElements();
 
-        const clamped = clampPan(scale, panX, panY);
+        const clamped = clampPan(scale, panX, panY, useCachedGeometry);
         scale = clamped.scale;
         panX = clamped.panX;
         panY = clamped.panY;
 
         if (el) {
             if (animate) {
+                cancelSpringTransition();
                 el.classList.add('lightbox-spring-reset');
-                setTimeout(() => el.classList.remove('lightbox-spring-reset'), 260);
+                springResetTimer = setTimeout(() => {
+                    el.classList.remove('lightbox-spring-reset');
+                    springResetTimer = null;
+                }, 260);
+            } else {
+                cancelSpringTransition();
             }
-            if (scale <= 1.01 && panX === 0 && panY === 0) {
+
+            if (scale <= 1.005 && panX === 0 && panY === 0) {
                 el.style.transform = '';
                 el.style.cursor = isVideoActive ? 'pointer' : 'zoom-in';
             } else {
-                el.style.transform = `translate3d(${panX}px, ${panY}px, 0) scale(${scale})`;
+                el.style.transform = `translate3d(${panX.toFixed(2)}px, ${panY.toFixed(2)}px, 0) scale(${scale.toFixed(5)})`;
                 el.style.cursor = 'grab';
             }
         }
@@ -232,28 +285,26 @@
         scale = 1;
         panX = 0;
         panY = 0;
-        applyZoomTransform(animate);
+        applyZoomTransform(animate, false);
     }
 
     function setZoomCenteredAt(targetScale, clientX, clientY, animate = true) {
+        const prevScale = Math.max(MIN_SCALE, scale);
         const clampedTarget = Math.max(MIN_SCALE, Math.min(MAX_SCALE, targetScale));
         if (clampedTarget <= 1.01) {
             resetZoom(animate);
             return;
         }
-        const { lightboxMediaContainer } = getElements();
-        const rect = lightboxMediaContainer ? lightboxMediaContainer.getBoundingClientRect() : null;
-        if (rect && Number.isFinite(clientX) && Number.isFinite(clientY)) {
-            const cx = rect.left + rect.width / 2;
-            const cy = rect.top + rect.height / 2;
-            const dx = clientX - cx;
-            const dy = clientY - cy;
-            const factor = clampedTarget / Math.max(scale, 1);
-            panX = panX * factor - dx * (factor - 1);
-            panY = panY * factor - dy * (factor - 1);
+        refreshCachedGeometry();
+        if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
+            const dx = clientX - cachedContainerCenterX;
+            const dy = clientY - cachedContainerCenterY;
+            const ratio = clampedTarget / prevScale;
+            panX = panX * ratio - dx * (ratio - 1);
+            panY = panY * ratio - dy * (ratio - 1);
         }
         scale = clampedTarget;
-        applyZoomTransform(animate);
+        applyZoomTransform(animate, true);
     }
 
     function syncVideoHud() {
@@ -566,7 +617,8 @@
         document.addEventListener('keydown', handleKeydown);
     };
 
-    window.closeLightbox = function () {
+    window.closeLightbox = function (force = false) {
+        if (!force && Date.now() < suppressBackdropClickUntil) return;
         const { lightbox, lightboxImg, lightboxVideo, lightboxVideoSource, videoControls, lightboxCenterPlay } =
             getElements();
         if (!lightbox) return;
@@ -574,6 +626,12 @@
         if (document.fullscreenElement === lightbox && document.exitFullscreen) {
             document.exitFullscreen().catch(() => {});
         }
+
+        cancelSpringTransition();
+        activePointers.clear();
+        hasCachedGeometry = false;
+        wasPinching = false;
+        isTrackingGesture = false;
 
         lightbox.classList.remove('active', 'hud-hidden');
         lightbox.style.display = 'none';
@@ -800,8 +858,9 @@
             });
         }
 
-        // Multi-pointer gestures: Pinch Zoom, Pan when zoomed, Swipe Left/Right, Swipe Down dismiss
+        // Instant zero-lag Multi-pointer gestures: Focal-Point Locked Pinch Zoom, Seamless Pan, Swipe Left/Right, Swipe Down dismiss
         lightbox.addEventListener('pointerdown', (e) => {
+            if (!lightbox.classList.contains('active')) return;
             if (
                 e.target.closest(
                     '.nav-btn, .close-btn, .lightbox-icon-btn, .lightbox-action-pill, .lightbox-counter, .lightbox-zoom-badge, .lightbox-bottom-hud, .lightbox-video-center-play'
@@ -809,31 +868,42 @@
             ) {
                 return;
             }
-            activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            if (e.pointerType === 'touch' || scale > 1.01) {
+                e.preventDefault();
+            }
 
+            cancelSpringTransition();
             const el = getActiveMediaElement();
             if (el) {
                 el.classList.remove('lightbox-animate-next-in', 'lightbox-animate-prev-in', 'lightbox-spring-reset');
             }
 
-            if (activePointers.size === 2 && !isVideoActive) {
-                const pts = Array.from(activePointers.values());
-                pinchStartDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
-                pinchStartScale = scale;
-                pinchStartMidX = (pts[0].x + pts[1].x) / 2;
-                pinchStartMidY = (pts[0].y + pts[1].y) / 2;
-                pinchStartPanX = panX;
-                pinchStartPanY = panY;
+            activePointers.set(e.pointerId, {
+                x: e.clientX,
+                y: e.clientY,
+                prevX: e.clientX,
+                prevY: e.clientY,
+            });
+            refreshCachedGeometry();
+
+            if (activePointers.size >= 2 && !isVideoActive) {
+                // Transitioning to 2+ fingers: lock backdrop and cancel any partial single-finger swipe/dismiss immediately
                 wasPinching = true;
                 isTrackingGesture = false;
+                hasMoved = true;
+                lightbox.style.backgroundColor = '';
+                suppressBackdropClickUntil = Date.now() + 450;
+                // Sync prev positions to current coordinates so frame 0 has 0 delta jump
+                activePointers.forEach((pt) => {
+                    pt.prevX = pt.x;
+                    pt.prevY = pt.y;
+                });
                 return;
             }
 
             if (activePointers.size === 1) {
                 gestureStartX = e.clientX;
                 gestureStartY = e.clientY;
-                dragStartPanX = panX;
-                dragStartPanY = panY;
                 isTrackingGesture = true;
                 hasMoved = false;
                 wasPinching = false;
@@ -842,38 +912,85 @@
 
         window.addEventListener('pointermove', (e) => {
             if (!lightbox.classList.contains('active')) return;
-            if (activePointers.has(e.pointerId)) {
-                activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-            }
+            const tracked = activePointers.get(e.pointerId);
+            if (!tracked) return;
+
+            tracked.prevX = tracked.x;
+            tracked.prevY = tracked.y;
+            tracked.x = e.clientX;
+            tracked.y = e.clientY;
 
             if (activePointers.size >= 2 && !isVideoActive) {
                 const pts = Array.from(activePointers.values());
-                const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-                const midX = (pts[0].x + pts[1].x) / 2;
-                const midY = (pts[0].y + pts[1].y) / 2;
-                scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, pinchStartScale * (dist / Math.max(1, pinchStartDist))));
-                panX = pinchStartPanX + (midX - pinchStartMidX);
-                panY = pinchStartPanY + (midY - pinchStartMidY);
-                applyZoomTransform(false);
+                const p0 = pts[0];
+                const p1 = pts[1];
+
+                const prevMidX = (p0.prevX + p1.prevX) / 2;
+                const prevMidY = (p0.prevY + p1.prevY) / 2;
+                const currMidX = (p0.x + p1.x) / 2;
+                const currMidY = (p0.y + p1.y) / 2;
+
+                const prevDist = Math.hypot(p1.prevX - p0.prevX, p1.prevY - p0.prevY);
+                const currDist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+
+                if (prevDist > 2 && currDist > 2) {
+                    const prevScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
+                    const nextScale = Math.max(
+                        MIN_SCALE,
+                        Math.min(MAX_SCALE, prevScale * (currDist / prevDist))
+                    );
+                    const actualRatio = nextScale / prevScale;
+
+                    const panDx = currMidX - prevMidX;
+                    const panDy = currMidY - prevMidY;
+                    const cRelX = prevMidX - cachedContainerCenterX;
+                    const cRelY = prevMidY - cachedContainerCenterY;
+
+                    scale = nextScale;
+                    panX = panX * actualRatio + panDx - cRelX * (actualRatio - 1);
+                    panY = panY * actualRatio + panDy - cRelY * (actualRatio - 1);
+                } else {
+                    panX += currMidX - prevMidX;
+                    panY += currMidY - prevMidY;
+                }
+
+                // Sync prev to current for all pointers after computing step so stationary second pointer stays calibrated
+                p0.prevX = p0.x;
+                p0.prevY = p0.y;
+                p1.prevX = p1.x;
+                p1.prevY = p1.y;
+
+                applyZoomTransform(false, true);
                 hasMoved = true;
+                suppressBackdropClickUntil = Date.now() + 450;
                 return;
             }
 
             if (!isTrackingGesture) return;
-            const deltaX = e.clientX - gestureStartX;
-            const deltaY = e.clientY - gestureStartY;
 
-            if (!hasMoved && Math.hypot(deltaX, deltaY) > 8) {
+            const dxStep = tracked.x - tracked.prevX;
+            const dyStep = tracked.y - tracked.prevY;
+            tracked.prevX = tracked.x;
+            tracked.prevY = tracked.y;
+
+            const deltaX = tracked.x - gestureStartX;
+            const deltaY = tracked.y - gestureStartY;
+
+            if (!hasMoved && Math.hypot(deltaX, deltaY) > 6) {
                 hasMoved = true;
             }
-            if (!hasMoved) return;
+            if (!hasMoved && !wasPinching) return;
 
             if (scale > 1.02 && !isVideoActive) {
-                panX = dragStartPanX + deltaX;
-                panY = dragStartPanY + deltaY;
-                applyZoomTransform(false);
+                panX += dxStep;
+                panY += dyStep;
+                applyZoomTransform(false, true);
+                suppressBackdropClickUntil = Date.now() + 400;
                 return;
             }
+
+            // Do not accidentally dismiss or swipe photo while a pinch finger remains on screen
+            if (wasPinching) return;
 
             const el = getActiveMediaElement();
             if (!el) return;
@@ -889,12 +1006,27 @@
         });
 
         const finishGesture = (e) => {
+            if (!activePointers.has(e.pointerId)) return;
             activePointers.delete(e.pointerId);
 
             if (wasPinching) {
-                if (activePointers.size === 0) {
-                    wasPinching = false;
-                    if (scale <= 1.03) resetZoom(true);
+                suppressBackdropClickUntil = Date.now() + 450;
+                if (activePointers.size >= 1) {
+                    // Seamless 2 -> 1 finger handoff: re-anchor remaining pointer to current coords with 0px jump
+                    const remaining = Array.from(activePointers.values())[0];
+                    remaining.prevX = remaining.x;
+                    remaining.prevY = remaining.y;
+                    gestureStartX = remaining.x;
+                    gestureStartY = remaining.y;
+                    isTrackingGesture = true;
+                    return;
+                }
+                wasPinching = false;
+                isTrackingGesture = false;
+                if (scale <= 1.04) {
+                    resetZoom(true);
+                } else {
+                    applyZoomTransform(false, true);
                 }
                 return;
             }
@@ -908,7 +1040,7 @@
             lightbox.style.backgroundColor = '';
 
             if (scale > 1.02 && !isVideoActive) {
-                applyZoomTransform(false);
+                applyZoomTransform(false, true);
                 return;
             }
 
@@ -938,10 +1070,10 @@
                 if (el) {
                     el.classList.add('lightbox-animate-dismiss');
                     setTimeout(() => {
-                        window.closeLightbox();
+                        window.closeLightbox(true);
                     }, 220);
                 } else {
-                    window.closeLightbox();
+                    window.closeLightbox(true);
                 }
                 return;
             }
@@ -960,9 +1092,10 @@
             if (el) {
                 el.classList.add('lightbox-spring-reset');
                 el.style.transform = 'translate3d(0, 0, 0) scale(1)';
-                setTimeout(() => {
+                springResetTimer = setTimeout(() => {
                     el.classList.remove('lightbox-spring-reset');
                     el.style.transform = '';
+                    springResetTimer = null;
                 }, 280);
             }
         };

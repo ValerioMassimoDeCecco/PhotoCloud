@@ -25,6 +25,7 @@ import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
@@ -40,8 +41,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.calculatePan
-import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -178,6 +177,7 @@ import android.graphics.pdf.PdfRenderer
 import android.media.MediaPlayer
 import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -334,8 +334,8 @@ sealed class PendingTransferRequest {
 }
 
 /**
- * PhotoCloud 100% Native Android Client v1.3.1
- * - Drag-to-Select Multiple Media in LazyVerticalGrid & SelectionActionsPanel
+ * PhotoCloud 100% Native Android Client v1.3.2
+ * - Zero-Lag Focal-Point Locked Pinch-to-Zoom & Fluid Pan in Lightbox with HorizontalPager Lock & Seamless Multi-Finger Handoff
  * - Lightbox Gesture Navigation with HorizontalPager, Swipe-to-Dismiss, Double-Tap Zoom & Coherent Slide Transitions
  * - Cloud File Manager for non-media files (PDF, ZIP, APK, Docs, Audio, Code, etc.)
  * - Top-Right Upload/Download Transfer Center with floating operations menu (real-time speed, size, progress, Pause/Resume & Delete)
@@ -7051,6 +7051,7 @@ fun NativeLightboxModal(
 
     val dismissProgress = (abs(dismissOffsetY) / 420f).coerceIn(0f, 1f)
     val backdropAlpha = (1f - dismissProgress * 0.55f).coerceIn(0.35f, 1f)
+    var blockPagerScroll by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -7060,6 +7061,7 @@ fun NativeLightboxModal(
         HorizontalPager(
             state = pagerState,
             beyondViewportPageCount = 1,
+            userScrollEnabled = !blockPagerScroll,
             modifier = Modifier.fillMaxSize()
         ) { pageIndex ->
             val media = items[pageIndex]
@@ -7085,23 +7087,80 @@ fun NativeLightboxModal(
             var zoomScale by remember(pageIndex) { mutableFloatStateOf(1f) }
             var offsetX by remember(pageIndex) { mutableFloatStateOf(0f) }
             var offsetY by remember(pageIndex) { mutableFloatStateOf(0f) }
+            var activePointersCount by remember(pageIndex) { mutableIntStateOf(0) }
+            var zoomAnimJob by remember(pageIndex) { mutableStateOf<Job?>(null) }
+            var containerSize by remember(pageIndex) { mutableStateOf(IntSize.Zero) }
 
-            LaunchedEffect(pagerState.currentPage) {
-                if (pagerState.currentPage != pageIndex) {
-                    zoomScale = 1f
-                    offsetX = 0f
-                    offsetY = 0f
+            fun computeFittedMaxPan(targetScale: Float, viewport: IntSize, bitmap: Bitmap?): Pair<Float, Float> {
+                if (targetScale <= 1.005f || viewport.width <= 0 || viewport.height <= 0) {
+                    return 0f to 0f
+                }
+                val vw = viewport.width.toFloat()
+                val vh = viewport.height.toFloat()
+                val bw = bitmap?.width?.toFloat()?.coerceAtLeast(1f) ?: vw
+                val bh = bitmap?.height?.toFloat()?.coerceAtLeast(1f) ?: vh
+                val fitScale = (vw / bw).coerceAtMost(vh / bh)
+                val fitW = bw * fitScale
+                val fitH = bh * fitScale
+                val maxX = ((fitW * targetScale - vw) / 2f).coerceAtLeast(0f)
+                val maxY = ((fitH * targetScale - vh) / 2f).coerceAtLeast(0f)
+                return maxX to maxY
+            }
+
+            fun clampOffsetsForScale(
+                targetScale: Float,
+                rawX: Float,
+                rawY: Float,
+                viewport: IntSize,
+                bitmap: Bitmap?
+            ): Pair<Float, Float> {
+                val (maxX, maxY) = computeFittedMaxPan(targetScale, viewport, bitmap)
+                return rawX.coerceIn(-maxX, maxX) to rawY.coerceIn(-maxY, maxY)
+            }
+
+            fun animateZoomAndOffset(targetScale: Float, targetX: Float, targetY: Float) {
+                zoomAnimJob?.cancel()
+                val startScale = zoomScale
+                val startX = offsetX
+                val startY = offsetY
+                zoomAnimJob = scope.launch {
+                    animate(
+                        initialValue = 0f,
+                        targetValue = 1f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMediumLow
+                        )
+                    ) { progress, _ ->
+                        zoomScale = startScale + (targetScale - startScale) * progress
+                        offsetX = startX + (targetX - startX) * progress
+                        offsetY = startY + (targetY - startY) * progress
+                    }
+                    zoomScale = targetScale
+                    offsetX = targetX
+                    offsetY = targetY
                 }
             }
 
-            val animatedZoom by animateFloatAsState(
-                targetValue = zoomScale,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow
-                ),
-                label = "lightboxZoom"
-            )
+            LaunchedEffect(pagerState.currentPage, zoomScale, activePointersCount) {
+                if (pagerState.currentPage == pageIndex) {
+                    blockPagerScroll = (zoomScale > 1.02f) || (activePointersCount >= 2)
+                }
+            }
+
+            LaunchedEffect(pagerState.currentPage) {
+                if (pagerState.currentPage != pageIndex) {
+                    zoomAnimJob?.cancel()
+                    zoomAnimJob = null
+                    zoomScale = 1f
+                    offsetX = 0f
+                    offsetY = 0f
+                    activePointersCount = 0
+                } else {
+                    blockPagerScroll = false
+                }
+            }
+
             val animatedDismissY by animateFloatAsState(
                 targetValue = if (pagerState.currentPage == pageIndex) dismissOffsetY else 0f,
                 animationSpec = spring(
@@ -7120,6 +7179,7 @@ fun NativeLightboxModal(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .onSizeChanged { containerSize = it }
                     .graphicsLayer {
                         scaleX = transitionScale * dismissScale
                         scaleY = transitionScale * dismissScale
@@ -7132,76 +7192,198 @@ fun NativeLightboxModal(
                         detectTapGestures(
                             onTap = { hudVisible = !hudVisible },
                             onDoubleTap = { tapOffset ->
+                                val viewport = if (containerSize.width > 0) containerSize else size
+                                val bitmapNow = bmp
                                 if (zoomScale > 1.05f) {
-                                    zoomScale = 1f
-                                    offsetX = 0f
-                                    offsetY = 0f
+                                    animateZoomAndOffset(1f, 0f, 0f)
                                 } else {
                                     val targetScale = 2.5f
-                                    val cx = size.width / 2f
-                                    val cy = size.height / 2f
-                                    offsetX = ((cx - tapOffset.x) * (targetScale - 1f)).coerceIn(-cx, cx)
-                                    offsetY = ((cy - tapOffset.y) * (targetScale - 1f)).coerceIn(-cy, cy)
-                                    zoomScale = targetScale
+                                    val cx = viewport.width / 2f
+                                    val cy = viewport.height / 2f
+                                    val ratio = targetScale / zoomScale.coerceAtLeast(1f)
+                                    val rawX = offsetX * ratio - (tapOffset.x - cx) * (ratio - 1f)
+                                    val rawY = offsetY * ratio - (tapOffset.y - cy) * (ratio - 1f)
+                                    val (clampedX, clampedY) = clampOffsetsForScale(
+                                        targetScale = targetScale,
+                                        rawX = rawX,
+                                        rawY = rawY,
+                                        viewport = viewport,
+                                        bitmap = bitmapNow
+                                    )
+                                    animateZoomAndOffset(targetScale, clampedX, clampedY)
                                 }
                             }
                         )
                     }
                     .pointerInput(pageIndex, media.isVideo) {
                         if (media.isVideo) return@pointerInput
+                        val lastPositions = mutableMapOf<Long, Offset>()
                         awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
+                            val firstDown = awaitFirstDown(requireUnconsumed = false)
+                            zoomAnimJob?.cancel()
+                            zoomAnimJob = null
+                            lastPositions.clear()
+                            lastPositions[firstDown.id.value] = firstDown.position
+                            activePointersCount = 1
+
+                            val viewportOnDown = if (containerSize.width > 0) containerSize else size
+                            val (maxInitX, _) = computeFittedMaxPan(zoomScale, viewportOnDown, bmp)
+                            val atLeftEdgeOnDown = offsetX >= (maxInitX - 2f)
+                            val atRightEdgeOnDown = offsetX <= (-maxInitX + 2f)
+
+                            var didPinchInGesture = false
                             var verticalDismissActive = false
+                            var pagerHandoffActive = false
                             var totalDx = 0f
                             var totalDy = 0f
+
                             do {
                                 val event = awaitPointerEvent()
-                                val pointerCount = event.changes.count { it.pressed }
-                                if (pointerCount >= 2) {
+                                val pressed = event.changes.filter { it.pressed }
+                                activePointersCount = pressed.size
+                                if (pressed.isEmpty()) break
+
+                                val viewport = if (containerSize.width > 0) containerSize else size
+                                val bitmapNow = bmp
+                                val common = pressed.filter { lastPositions.containsKey(it.id.value) }
+
+                                if (pressed.size >= 2) {
+                                    didPinchInGesture = true
                                     verticalDismissActive = false
+                                    pagerHandoffActive = false
                                     dismissOffsetY = 0f
-                                    val zoomChange = event.calculateZoom()
-                                    val panChange = event.calculatePan()
-                                    val newScale = (zoomScale * zoomChange).coerceIn(1f, 4f)
-                                    zoomScale = newScale
-                                    if (newScale > 1.01f) {
-                                        val maxX = (size.width * (newScale - 1f)) / 2f
-                                        val maxY = (size.height * (newScale - 1f)) / 2f
-                                        offsetX = (offsetX + panChange.x).coerceIn(-maxX, maxX)
-                                        offsetY = (offsetY + panChange.y).coerceIn(-maxY, maxY)
-                                    } else {
-                                        offsetX = 0f
-                                        offsetY = 0f
-                                    }
-                                    event.changes.forEach { if (it.positionChanged()) it.consume() }
-                                } else if (pointerCount == 1) {
-                                    val panChange = event.calculatePan()
-                                    if (zoomScale > 1.02f) {
-                                        val maxX = (size.width * (zoomScale - 1f)) / 2f
-                                        val maxY = (size.height * (zoomScale - 1f)) / 2f
-                                        val nextX = offsetX + panChange.x
-                                        val nextY = offsetY + panChange.y
-                                        val atHorizontalEdge = (nextX > maxX && panChange.x > 0f) || (nextX < -maxX && panChange.x < 0f)
-                                        offsetX = nextX.coerceIn(-maxX, maxX)
-                                        offsetY = nextY.coerceIn(-maxY, maxY)
-                                        if (!atHorizontalEdge || abs(panChange.y) > abs(panChange.x)) {
-                                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                                    blockPagerScroll = true
+
+                                    if (common.size >= 2) {
+                                        var prevCx = 0f
+                                        var prevCy = 0f
+                                        var currCx = 0f
+                                        var currCy = 0f
+                                        for (ch in common) {
+                                            val prevPos = lastPositions[ch.id.value]!!
+                                            prevCx += prevPos.x
+                                            prevCy += prevPos.y
+                                            currCx += ch.position.x
+                                            currCy += ch.position.y
                                         }
-                                    } else {
-                                        totalDx += panChange.x
-                                        totalDy += panChange.y
+                                        val invCount = 1f / common.size.toFloat()
+                                        prevCx *= invCount
+                                        prevCy *= invCount
+                                        currCx *= invCount
+                                        currCy *= invCount
+
+                                        var prevSpread = 0f
+                                        var currSpread = 0f
+                                        for (ch in common) {
+                                            val prevPos = lastPositions[ch.id.value]!!
+                                            prevSpread += hypot((prevPos.x - prevCx).toDouble(), (prevPos.y - prevCy).toDouble()).toFloat()
+                                            currSpread += hypot((ch.position.x - currCx).toDouble(), (ch.position.y - currCy).toDouble()).toFloat()
+                                        }
+
+                                        val zoomDelta = if (prevSpread > 2f && currSpread > 2f) {
+                                            (currSpread / prevSpread).coerceIn(0.5f, 2f)
+                                        } else {
+                                            1f
+                                        }
+
+                                        val prevScale = zoomScale.coerceIn(1f, 5f)
+                                        val nextScale = (prevScale * zoomDelta).coerceIn(1f, 5f)
+                                        val actualRatio = nextScale / prevScale
+
+                                        val panDx = currCx - prevCx
+                                        val panDy = currCy - prevCy
+                                        val centerRelX = prevCx - (viewport.width / 2f)
+                                        val centerRelY = prevCy - (viewport.height / 2f)
+
+                                        val rawX = offsetX * actualRatio + panDx - centerRelX * (actualRatio - 1f)
+                                        val rawY = offsetY * actualRatio + panDy - centerRelY * (actualRatio - 1f)
+
+                                        val (clampedX, clampedY) = clampOffsetsForScale(
+                                            targetScale = nextScale,
+                                            rawX = rawX,
+                                            rawY = rawY,
+                                            viewport = viewport,
+                                            bitmap = bitmapNow
+                                        )
+                                        zoomScale = nextScale
+                                        offsetX = clampedX
+                                        offsetY = clampedY
+                                    } else if (common.size == 1 && zoomScale > 1.005f) {
+                                        val ch = common[0]
+                                        val prevPos = lastPositions[ch.id.value]!!
+                                        val dx = ch.position.x - prevPos.x
+                                        val dy = ch.position.y - prevPos.y
+                                        val (clampedX, clampedY) = clampOffsetsForScale(
+                                            targetScale = zoomScale,
+                                            rawX = offsetX + dx,
+                                            rawY = offsetY + dy,
+                                            viewport = viewport,
+                                            bitmap = bitmapNow
+                                        )
+                                        offsetX = clampedX
+                                        offsetY = clampedY
+                                    }
+
+                                    event.changes.forEach { if (it.positionChanged()) it.consume() }
+                                } else {
+                                    val ch = pressed[0]
+                                    val prevPos = lastPositions[ch.id.value]
+                                    val dx = if (prevPos != null) ch.position.x - prevPos.x else 0f
+                                    val dy = if (prevPos != null) ch.position.y - prevPos.y else 0f
+                                    totalDx += dx
+                                    totalDy += dy
+
+                                    if (zoomScale > 1.02f) {
+                                        if (!didPinchInGesture &&
+                                            !pagerHandoffActive &&
+                                            abs(totalDx) > 16f &&
+                                            abs(totalDx) > abs(totalDy) * 1.45f &&
+                                            ((totalDx > 0f && atLeftEdgeOnDown) || (totalDx < 0f && atRightEdgeOnDown))
+                                        ) {
+                                            pagerHandoffActive = true
+                                            blockPagerScroll = false
+                                        }
+
+                                        if (!pagerHandoffActive) {
+                                            blockPagerScroll = true
+                                            val (clampedX, clampedY) = clampOffsetsForScale(
+                                                targetScale = zoomScale,
+                                                rawX = offsetX + dx,
+                                                rawY = offsetY + dy,
+                                                viewport = viewport,
+                                                bitmap = bitmapNow
+                                            )
+                                            offsetX = clampedX
+                                            offsetY = clampedY
+                                            if (ch.positionChanged()) ch.consume()
+                                        }
+                                    } else if (!didPinchInGesture) {
                                         if (!verticalDismissActive && abs(totalDy) > 18f && abs(totalDy) > abs(totalDx) * 1.35f) {
                                             verticalDismissActive = true
                                         }
                                         if (verticalDismissActive) {
-                                            dismissOffsetY += panChange.y
-                                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                                            dismissOffsetY += dy
+                                            if (ch.positionChanged()) ch.consume()
                                         }
+                                    } else {
+                                        if (ch.positionChanged()) ch.consume()
                                     }
+                                }
+
+                                lastPositions.clear()
+                                for (p in pressed) {
+                                    lastPositions[p.id.value] = p.position
                                 }
                             } while (event.changes.any { it.pressed })
 
-                            if (verticalDismissActive) {
+                            activePointersCount = 0
+                            lastPositions.clear()
+
+                            if (didPinchInGesture) {
+                                if (zoomScale <= 1.04f) {
+                                    animateZoomAndOffset(1f, 0f, 0f)
+                                }
+                            } else if (verticalDismissActive) {
                                 if (abs(dismissOffsetY) > 150f) {
                                     dismissOffsetY = 0f
                                     onClose()
@@ -7443,12 +7625,12 @@ fun NativeLightboxModal(
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
                             .fillMaxSize()
-                            .graphicsLayer(
-                                scaleX = animatedZoom,
-                                scaleY = animatedZoom,
-                                translationX = offsetX,
+                            .graphicsLayer {
+                                scaleX = zoomScale
+                                scaleY = zoomScale
+                                translationX = offsetX
                                 translationY = offsetY
-                            )
+                            }
                     )
                 } else if (isLoading) {
                     CircularProgressIndicator(color = Color.White)

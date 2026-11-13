@@ -476,6 +476,38 @@ export interface ZoomPanState {
   panY: number;
 }
 
+export interface MediaDimensions {
+  width: number;
+  height: number;
+}
+
+export function computeFittedMediaSize(
+  viewportWidth: number,
+  viewportHeight: number,
+  mediaWidth?: number,
+  mediaHeight?: number
+): MediaDimensions {
+  const vw = Math.max(0, Number.isFinite(viewportWidth) ? viewportWidth : 0);
+  const vh = Math.max(0, Number.isFinite(viewportHeight) ? viewportHeight : 0);
+  if (
+    !mediaWidth ||
+    !mediaHeight ||
+    !Number.isFinite(mediaWidth) ||
+    !Number.isFinite(mediaHeight) ||
+    mediaWidth <= 0 ||
+    mediaHeight <= 0 ||
+    vw <= 0 ||
+    vh <= 0
+  ) {
+    return { width: vw, height: vh };
+  }
+  const fitRatio = Math.min(vw / mediaWidth, vh / mediaHeight);
+  return {
+    width: mediaWidth * fitRatio,
+    height: mediaHeight * fitRatio,
+  };
+}
+
 export function clampZoomPan(
   scale: number,
   panX: number,
@@ -483,21 +515,84 @@ export function clampZoomPan(
   viewportWidth: number,
   viewportHeight: number,
   minScale = 1,
-  maxScale = 5
+  maxScale = 5,
+  mediaWidth?: number,
+  mediaHeight?: number
 ): ZoomPanState {
   const safeScale = Number.isFinite(scale)
     ? Math.max(minScale, Math.min(maxScale, scale))
     : minScale;
-  if (safeScale <= 1.01) {
+  if (safeScale <= 1.005) {
     return { scale: 1, panX: 0, panY: 0 };
   }
-  const maxX = Math.max(0, ((viewportWidth || 0) * (safeScale - 1)) / 2);
-  const maxY = Math.max(0, ((viewportHeight || 0) * (safeScale - 1)) / 2);
+  const vw = Math.max(0, Number.isFinite(viewportWidth) ? viewportWidth : 0);
+  const vh = Math.max(0, Number.isFinite(viewportHeight) ? viewportHeight : 0);
+  const fitted = computeFittedMediaSize(vw, vh, mediaWidth, mediaHeight);
+  const maxX = Math.max(0, (fitted.width * safeScale - vw) / 2);
+  const maxY = Math.max(0, (fitted.height * safeScale - vh) / 2);
   return {
-    scale: Number(safeScale.toFixed(4)),
+    scale: Number(safeScale.toFixed(6)),
     panX: Math.max(-maxX, Math.min(maxX, Number.isFinite(panX) ? panX : 0)),
     panY: Math.max(-maxY, Math.min(maxY, Number.isFinite(panY) ? panY : 0)),
   };
+}
+
+export interface PinchZoomStepInput {
+  currentScale: number;
+  currentPanX: number;
+  currentPanY: number;
+  prevMidX: number;
+  prevMidY: number;
+  currMidX: number;
+  currMidY: number;
+  prevDist: number;
+  currDist: number;
+  centerX: number;
+  centerY: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  mediaWidth?: number;
+  mediaHeight?: number;
+  minScale?: number;
+  maxScale?: number;
+}
+
+/**
+ * Computes exact focal-point locked (scale, panX, panY) for multi-touch pinch-to-zoom.
+ * Keeps the image pixel initially under prevMid pinned directly under currMid with zero drift or lag.
+ */
+export function computePinchZoomPan(input: PinchZoomStepInput): ZoomPanState {
+  const minScale = input.minScale ?? 1;
+  const maxScale = input.maxScale ?? 5;
+  const safePrevScale = Math.max(
+    minScale,
+    Math.min(maxScale, Number.isFinite(input.currentScale) ? input.currentScale : 1)
+  );
+  const safePrevDist = Number.isFinite(input.prevDist) && input.prevDist > 1 ? input.prevDist : 1;
+  const safeCurrDist = Number.isFinite(input.currDist) && input.currDist > 1 ? input.currDist : safePrevDist;
+  const zoomDelta = safeCurrDist / safePrevDist;
+  const targetScale = Math.max(minScale, Math.min(maxScale, safePrevScale * zoomDelta));
+  const actualRatio = targetScale / safePrevScale;
+
+  const panDeltaX = input.currMidX - input.prevMidX;
+  const panDeltaY = input.currMidY - input.prevMidY;
+  const centerRelX = input.prevMidX - input.centerX;
+  const centerRelY = input.prevMidY - input.centerY;
+
+  const rawPanX = input.currentPanX * actualRatio + panDeltaX - centerRelX * (actualRatio - 1);
+  const rawPanY = input.currentPanY * actualRatio + panDeltaY - centerRelY * (actualRatio - 1);
+
+  return clampZoomPan(
+    targetScale,
+    rawPanX,
+    rawPanY,
+    input.viewportWidth,
+    input.viewportHeight,
+    minScale,
+    maxScale,
+    input.mediaWidth,
+    input.mediaHeight
+  );
 }
 
 export interface EditHistoryStack<T> {

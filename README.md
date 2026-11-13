@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.3.1)
+# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.3.2)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -7,6 +7,16 @@
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
 > La firma release di `android-app/app/build.gradle.kts` richiede le variabili d'ambiente `PHOTOCLOUD_KEYSTORE_PATH`, `PHOTOCLOUD_KEYSTORE_PASSWORD`, `PHOTOCLOUD_KEY_ALIAS` e `PHOTOCLOUD_KEY_PASSWORD` (nessun keystore o password è committato nel repository). Gli upload temporanei e gli archivi ZIP esportati transitano su disco in `temp_uploads/` e vengono rimossi automaticamente dopo il completamento/download. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow GitHub Actions.
+
+---
+
+## ⚡ Novità Principali della Release `v1.3.2` (`versionCode 29`) — Motore Pinch-to-Zoom 1:1 Istantaneo & Ancoraggio Focale (Zero Scivolamenti / Zero Ritardi)
+
+### 1. Pinch-to-Zoom Riscritto da Zero (`lightbox.js`, `photoEditorMath.ts`, `MainActivity.kt`)
+- **Zero Ritardi (`0ms` Response)**: su Android Compose rimossa l'interpolazione a molla durante il pinch attivo e spostata la trasformazione in `Modifier.graphicsLayer { ... }` (Draw/Layer phase senza ricomposizione); su Web rimozione istantanea della classe di transizione CSS al `pointerdown` e calcolo geometria memorizzato in cache ad inizio gesto.
+- **Ancoraggio Matematico Esatto al Punto Focale (`computePinchZoomPan`)**: il pixel dell'immagine esattamente sotto il punto medio delle due dita resta inchiodato alle coordinate del punto medio durante tutto lo zoom e spostamento simultaneo, azzerando qualsiasi deriva o scivolamento laterale.
+- **Passaggio Multi-Dito Senza Salti (`2 ↔ 1` dita)**: tracciamento individuale per `PointerId` così sollevando un dito mentre si è ingranditi il pan continua esattamente da quel punto senza teletrasporti del centroide o attivazioni accidentali di swipe/chiusura.
+- **Blocco Intelligente Pager & Limiti Fitted Reali**: `HorizontalPager` disabilita lo scroll competitivo durante pinch/zoom (`userScrollEnabled = !blockPagerScroll`), sbloccandosi solo su swipe intenzionale dal bordo già raggiunto, e i limiti di pan si adattano alle proporzioni reali dell'immagine visualizzata.
 
 ---
 

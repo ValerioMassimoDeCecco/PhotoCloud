@@ -523,10 +523,12 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(mainActivityKt.includes('val autoScrollJob = scope.launch'));
   assert.equal(mainActivityKt.includes('detectDragGesturesAfterLongPress('), false, 'Conflicting dual pointerInput detector call must be removed');
 
-  // 5. Release APK v1.3.1, historical APKs preserved, metadata, and Gradle configuration
+  // 5. Release APK v1.3.2, historical APKs preserved, metadata, and Gradle configuration
+  const apkV132Path = path.resolve(process.cwd(), 'release/photocloud-release-v1.3.2-signed.apk');
+  assert.ok(fs.existsSync(apkV132Path), 'Signed release APK v1.3.2 must exist');
+  assert.ok(fs.statSync(apkV132Path).size > 10 * 1024 * 1024, 'Signed release APK v1.3.2 should be > 10MB');
   const apkV131Path = path.resolve(process.cwd(), 'release/photocloud-release-v1.3.1-signed.apk');
-  assert.ok(fs.existsSync(apkV131Path), 'Signed release APK v1.3.1 must exist');
-  assert.ok(fs.statSync(apkV131Path).size > 10 * 1024 * 1024, 'Signed release APK v1.3.1 should be > 10MB');
+  assert.ok(fs.existsSync(apkV131Path), 'Historical signed APK v1.3.1 must remain preserved');
   const apkV130Path = path.resolve(process.cwd(), 'release/photocloud-release-v1.3.0-signed.apk');
   assert.ok(fs.existsSync(apkV130Path), 'Historical signed APK v1.3.0 must remain preserved');
   const apkPath = path.resolve(process.cwd(), 'release/photocloud-release-v1.2.5-signed.apk');
@@ -538,8 +540,8 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.1.3-signed.apk')));
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.3.1"'));
-  assert.ok(appBuildGradle.includes('versionCode = 28'));
+  assert.ok(appBuildGradle.includes('versionName = "1.3.2"'));
+  assert.ok(appBuildGradle.includes('versionCode = 29'));
   assert.equal(appBuildGradle.includes('photocloud_release_2026'), false, 'No hardcoded keystore password in build.gradle.kts');
   assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
   assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
@@ -547,7 +549,7 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.3.1');
+  assert.equal(pkgJson.version, '1.3.2');
 
   // 6. Multi-platform interactive CLI scripts (photocloud.bat & photocloud.sh)
   const batPath = path.resolve(process.cwd(), 'photocloud.bat');
@@ -590,8 +592,8 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   const baseConfig = {
     appName: 'PhotoCloud "Vault" <Test>',
     packageName: 'com.valerio.photocloud',
-    versionName: '1.3.1',
-    versionCode: 28,
+    versionName: '1.3.2',
+    versionCode: 29,
     serverUrl: 'http://10.0.2.2:3000',
     minSdk: 26,
     targetSdk: 35,
@@ -617,7 +619,7 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   assert.ok(!manifestXml.includes('android:label="PhotoCloud "Vault"'));
 
   const gradleKts = generateAppBuildGradleKts(baseConfig);
-  assert.ok(gradleKts.includes('versionName = "1.3.1"'));
+  assert.ok(gradleKts.includes('versionName = "1.3.2"'));
   assert.equal(gradleKts.includes('photocloud_release_2026'), false);
 
   const mainKt = generateMainActivityKt(baseConfig);
@@ -931,13 +933,13 @@ test('Release v1.2.9: Pause/Resume & Delete transfers, Pre-Transfer Choice Modal
   const selectionJs = fs.readFileSync(path.resolve(process.cwd(), 'static/scripts/selection.js'), 'utf-8');
   assert.ok(selectionJs.includes('window.startOrPromptDownload = function'));
 
-  // Verify v1.3.1 APK ZIP structure integrity, AI model SHA-256 verification, and Room indexing SQL
+  // Verify v1.3.2 APK ZIP structure integrity, AI model SHA-256 verification, and Room indexing SQL
   const JSZip = (await import('jszip')).default;
-  const apkV131Bytes = fs.readFileSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.3.1-signed.apk'));
-  const loadedApkZip = await JSZip.loadAsync(apkV131Bytes);
-  assert.ok(loadedApkZip.file('AndroidManifest.xml'), 'v1.3.1 APK must be a valid ZIP archive containing AndroidManifest.xml');
-  assert.ok(loadedApkZip.file('classes.dex'), 'v1.3.1 APK must contain classes.dex');
-  assert.ok(loadedApkZip.file('META-INF/MANIFEST.MF'), 'v1.3.1 APK must contain V1 signature manifest');
+  const apkV132Bytes = fs.readFileSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.3.2-signed.apk'));
+  const loadedApkZip = await JSZip.loadAsync(apkV132Bytes);
+  assert.ok(loadedApkZip.file('AndroidManifest.xml'), 'v1.3.2 APK must be a valid ZIP archive containing AndroidManifest.xml');
+  assert.ok(loadedApkZip.file('classes.dex'), 'v1.3.2 APK must contain classes.dex');
+  assert.ok(loadedApkZip.file('META-INF/MANIFEST.MF'), 'v1.3.2 APK must contain V1 signature manifest');
 
   const aiManagerKt = fs.readFileSync(
     path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/AiModelDownloadManager.kt'),
@@ -1067,6 +1069,97 @@ test('v1.3.1 Unified Photo & Video Viewer + Editor Engine (Math, Web & Android N
     'MainActivity.kt must qualify android.graphics.* classes instead of shadowing Compose wildcard imports'
   );
 });
+
+test('v1.3.2 Zero-Lag Focal-Point Pinch-to-Zoom Engine (Math, Web & Android Native)', async () => {
+  const { computeFittedMediaSize, computePinchZoomPan, clampZoomPan } = await import('./photoEditorMath');
+
+  // 1. Fitted media dimensions preserve aspect ratio without allowing pan into black empty space
+  const fitted = computeFittedMediaSize(400, 800, 1600, 900);
+  assert.equal(fitted.width, 400);
+  assert.equal(fitted.height, 225);
+
+  const clampedLandscape = clampZoomPan(2, 1000, 1000, 400, 800, 1, 5, 1600, 900);
+  assert.equal(clampedLandscape.panX, 200);
+  assert.equal(clampedLandscape.panY, 0); // 225*2 = 450 <= 800 so vertical stays centered
+
+  // 2. Off-center pinch keeps exact focal point pinned under fingers (zero slipping)
+  const step1 = computePinchZoomPan({
+    currentScale: 1,
+    currentPanX: 0,
+    currentPanY: 0,
+    prevMidX: 500, // 100px right of center (400)
+    prevMidY: 350, // 50px right/down of center (300)
+    currMidX: 500,
+    currMidY: 350,
+    prevDist: 100,
+    currDist: 200, // 2x zoom in place
+    centerX: 400,
+    centerY: 300,
+    viewportWidth: 800,
+    viewportHeight: 600,
+  });
+  assert.equal(step1.scale, 2);
+  assert.equal(step1.panX, -100);
+  assert.equal(step1.panY, -50);
+
+  // Simultaneous pinch + finger midpoint translation keeps image point glued to moving midpoint
+  const step2 = computePinchZoomPan({
+    currentScale: step1.scale,
+    currentPanX: step1.panX,
+    currentPanY: step1.panY,
+    prevMidX: 500,
+    prevMidY: 350,
+    currMidX: 530,
+    currMidY: 330,
+    prevDist: 200,
+    currDist: 300, // 3x total
+    centerX: 400,
+    centerY: 300,
+    viewportWidth: 800,
+    viewportHeight: 600,
+  });
+  assert.equal(step2.scale, 3);
+  assert.equal(step2.panX, -170);
+  assert.equal(step2.panY, -120);
+
+  // 3. Web Lightbox invariants: cached geometry, focal formula, spring cancel on down, 2->1 handoff, CSS touch-action
+  const lightboxJs = fs.readFileSync(path.resolve(process.cwd(), 'static/scripts/lightbox.js'), 'utf-8');
+  assert.ok(lightboxJs.includes('cancelSpringTransition()'));
+  assert.ok(lightboxJs.includes('refreshCachedGeometry()'));
+  assert.ok(lightboxJs.includes('cachedContainerCenterX'));
+  assert.ok(lightboxJs.includes('suppressBackdropClickUntil'));
+  assert.equal(lightboxJs.includes('lightbox-spring-reset'), true);
+
+  const baseCss = fs.readFileSync(path.resolve(process.cwd(), 'static/styles/base.css'), 'utf-8');
+  assert.ok(baseCss.includes('touch-action: none;'));
+  const baseHtml = fs.readFileSync(path.resolve(process.cwd(), 'templates/base.html'), 'utf-8');
+  assert.ok(baseHtml.includes('draggable="false"'));
+
+  // 4. Android Native Lightbox invariants: zero spring lag during active pinch, Pager lock, per-pointer ID tracking
+  const mainActivityKt = fs.readFileSync(
+    path.resolve(process.cwd(), 'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt'),
+    'utf-8'
+  );
+  assert.ok(mainActivityKt.includes('userScrollEnabled = !blockPagerScroll'));
+  assert.ok(mainActivityKt.includes('val lastPositions = mutableMapOf<Long, Offset>()'));
+  assert.ok(mainActivityKt.includes('fun computeFittedMaxPan('));
+  assert.ok(mainActivityKt.includes('fun animateZoomAndOffset('));
+  assert.equal(mainActivityKt.includes('animatedZoom by animateFloatAsState('), false, 'Pinch scale must never lag behind animateFloatAsState');
+  assert.equal(mainActivityKt.includes('event.calculatePan()'), false, 'Compose calculatePan must not be used so 2->1 finger lift never jumps centroid');
+  assert.ok(mainActivityKt.includes('scaleX = zoomScale'));
+  assert.ok(mainActivityKt.includes('import androidx.compose.animation.core.animate'));
+  assert.ok(mainActivityKt.includes('import kotlinx.coroutines.Job'));
+
+  // Verify every Icons.AutoMirrored.Filled.<Icon> and Icons.Default.<Icon> in MainActivity.kt is imported
+  const importedAutoMirrored = new Set(
+    [...mainActivityKt.matchAll(/import androidx\.compose\.material\.icons\.automirrored\.filled\.([A-Za-z0-9_]+)/g)].map(m => m[1])
+  );
+  const usedAutoMirrored = [...new Set([...mainActivityKt.matchAll(/Icons\.AutoMirrored\.Filled\.([A-Za-z0-9_]+)/g)].map(m => m[1]))];
+  for (const iconName of usedAutoMirrored) {
+    assert.ok(importedAutoMirrored.has(iconName), `Missing import for Icons.AutoMirrored.Filled.${iconName} in MainActivity.kt`);
+  }
+});
+
 
 
 

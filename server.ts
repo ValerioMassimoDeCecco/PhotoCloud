@@ -45,7 +45,7 @@ const RELEASE_DIR = path.resolve(process.cwd(), 'release');
  * così non si può più annunciare una versione diversa da quella realmente compilata.
  */
 function readAndroidAppVersion(): { versionName: string; versionCode: number } {
-  const fallback = { versionName: '1.3.1', versionCode: 28 };
+  const fallback = { versionName: '1.3.2', versionCode: 29 };
   try {
     const gradlePath = path.resolve(APP_ROOT, 'android-app/app/build.gradle.kts');
     if (!fs.existsSync(gradlePath)) return fallback;
