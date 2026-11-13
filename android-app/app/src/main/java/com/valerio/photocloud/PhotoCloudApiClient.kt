@@ -543,6 +543,30 @@ class PhotoCloudApiClient(
         metaPrefs.edit().putString("albums_list_${currentHostKey()}", arr.toString()).apply()
     }
 
+    // -----------------------------------------------------------------
+    // v1.4.0 — Preferiti (cache locale istantanea + sync con il server)
+    // -----------------------------------------------------------------
+    fun getCachedFavorites(): Set<String> {
+        val raw = metaPrefs.getString("favorites_${currentHostKey()}", null) ?: return emptySet()
+        return try {
+            val arr = JSONArray(raw)
+            val out = mutableSetOf<String>()
+            for (i in 0 until arr.length()) {
+                val f = arr.optString(i, "")
+                if (f.isNotBlank()) out.add(f)
+            }
+            out
+        } catch (_: Exception) {
+            emptySet()
+        }
+    }
+
+    private fun saveCachedFavorites(favorites: Collection<String>) {
+        val arr = JSONArray()
+        favorites.distinct().sorted().forEach { arr.put(it) }
+        metaPrefs.edit().putString("favorites_${currentHostKey()}", arr.toString()).apply()
+    }
+
     fun getCachedFileAlbumsMap(): Map<String, String> {
         val raw = metaPrefs.getString("file_albums_${currentHostKey()}", null) ?: return emptyMap()
         return try {
@@ -1418,6 +1442,390 @@ class PhotoCloudApiClient(
         } catch (_: Exception) {
         }
         true
+    }
+
+    // -----------------------------------------------------------------
+    // v1.4.0 — API Preferiti
+    // -----------------------------------------------------------------
+    suspend fun fetchFavorites(): Set<String> = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/favorites")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string() ?: ""
+                    if (body.trim().startsWith("{")) {
+                        val arr = JSONObject(body).optJSONArray("favorites")
+                        if (arr != null) {
+                            val out = mutableSetOf<String>()
+                            for (i in 0 until arr.length()) {
+                                val f = arr.optString(i, "")
+                                if (f.isNotBlank()) out.add(f)
+                            }
+                            saveCachedFavorites(out)
+                            return@withContext out
+                        } else {
+                            saveCachedFavorites(emptySet())
+                            return@withContext emptySet()
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        getCachedFavorites()
+    }
+
+    suspend fun toggleFavorite(filename: String): Set<String>? = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject().put("filename", filename).toString()
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/favorites/toggle")
+                .post(payload.toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string() ?: ""
+                    val arr = JSONObject(body).optJSONArray("favorites")
+                    if (arr != null) {
+                        val out = mutableSetOf<String>()
+                        for (i in 0 until arr.length()) {
+                            val f = arr.optString(i, "")
+                            if (f.isNotBlank()) out.add(f)
+                        }
+                        saveCachedFavorites(out)
+                        return@withContext out
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        null
+    }
+
+    // -----------------------------------------------------------------
+    // v1.4.0 — Ricordi ("In questo giorno"): sezioni per anno dal server
+    // -----------------------------------------------------------------
+    suspend fun fetchMemories(): List<MemorySectionModel> = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/memories")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val body = resp.body?.string() ?: ""
+                if (!body.trim().startsWith("{")) return@withContext emptyList()
+                val json = JSONObject(body)
+                val sectionsArr = json.optJSONArray("sections") ?: return@withContext emptyList()
+                val out = ArrayList<MemorySectionModel>(sectionsArr.length())
+                val albumsMap = getCachedFileAlbumsMap()
+                for (i in 0 until sectionsArr.length()) {
+                    val s = sectionsArr.optJSONObject(i) ?: continue
+                    val itemsArr = s.optJSONArray("items") ?: continue
+                    val items = ArrayList<MediaItemModel>(itemsArr.length())
+                    for (j in 0 until itemsArr.length()) {
+                        val m = itemsArr.optJSONObject(j) ?: continue
+                        val fn = m.optString("filename", "")
+                        if (fn.isBlank()) continue
+                        items.add(
+                            MediaItemModel(
+                                filename = fn,
+                                timestamp = m.optDouble("timestamp", 0.0),
+                                size = m.optLong("size", 0L),
+                                isMedia = m.optBoolean("isMedia", true),
+                                category = m.optString("category", "media"),
+                                album = m.optString("album", albumsMap[fn] ?: "")
+                            )
+                        )
+                    }
+                    if (items.isNotEmpty()) {
+                        out.add(
+                            MemorySectionModel(
+                                year = s.optInt("year", 0),
+                                yearsAgo = s.optInt("yearsAgo", 0),
+                                items = items
+                            )
+                        )
+                    }
+                }
+                return@withContext out
+            }
+        } catch (_: Exception) {
+        }
+        emptyList()
+    }
+
+    // -----------------------------------------------------------------
+    // v1.4.0 — Ricerca in linguaggio naturale lato server (quando online)
+    // -----------------------------------------------------------------
+    suspend fun searchNaturalServer(query: String): List<MediaItemModel>? = withContext(Dispatchers.IO) {
+        try {
+            val encoded = URLEncoder.encode(query, "UTF-8").replace("+", "%20")
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/search?q=$encoded")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                val body = resp.body?.string() ?: ""
+                if (!body.trim().startsWith("{")) return@withContext null
+                val arr = JSONObject(body).optJSONArray("results") ?: return@withContext null
+                val albumsMap = getCachedFileAlbumsMap()
+                val out = ArrayList<MediaItemModel>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val m = arr.optJSONObject(i) ?: continue
+                    val fn = m.optString("filename", "")
+                    if (fn.isBlank()) continue
+                    out.add(
+                        MediaItemModel(
+                            filename = fn,
+                            timestamp = m.optDouble("timestamp", 0.0),
+                            size = m.optLong("size", 0L),
+                            isMedia = m.optBoolean("isMedia", true),
+                            category = m.optString("category", ""),
+                            album = m.optString("album", albumsMap[fn] ?: "")
+                        )
+                    )
+                }
+                return@withContext out
+            }
+        } catch (_: Exception) {
+        }
+        null
+    }
+
+    // -----------------------------------------------------------------
+    // v1.4.0 — Link pubblici temporanei di condivisione
+    // -----------------------------------------------------------------
+    suspend fun createPublicShareLink(
+        filenames: List<String>,
+        expiresInHours: Int = 72,
+        label: String = "",
+        password: String = "",
+        maxDownloads: Int = 0
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val arr = JSONArray()
+            filenames.forEach { arr.put(it) }
+            val payload = JSONObject()
+                .put("filenames", arr)
+                .put("expiresInHours", expiresInHours)
+                .put("label", label)
+                .put("password", password)
+                .put("maxDownloads", if (maxDownloads > 0) maxDownloads else JSONObject.NULL)
+                .toString()
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/shares/create")
+                .post(payload.toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                val body = resp.body?.string() ?: ""
+                val rel = JSONObject(body).optString("url", "")
+                if (rel.isBlank()) return@withContext null
+                return@withContext "${cleanBaseUrl()}$rel"
+            }
+        } catch (_: Exception) {
+        }
+        null
+    }
+
+    suspend fun listPublicShares(): List<PublicShareSummaryModel> = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/shares")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val arr = JSONObject(resp.body?.string() ?: "").optJSONArray("shares") ?: return@withContext emptyList()
+                val out = ArrayList<PublicShareSummaryModel>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val s = arr.optJSONObject(i) ?: continue
+                    out.add(
+                        PublicShareSummaryModel(
+                            id = s.optString("id", ""),
+                            label = s.optString("label", ""),
+                            itemCount = s.optJSONArray("filenames")?.length() ?: 0,
+                            expiresAtMs = s.optLong("expiresAt", 0L),
+                            expired = s.optBoolean("expired", false),
+                            hasPassword = s.optBoolean("hasPassword", false),
+                            downloadCount = s.optInt("downloadCount", 0),
+                            maxDownloads = if (s.has("maxDownloads") && !s.isNull("maxDownloads")) s.optInt("maxDownloads") else null
+                        )
+                    )
+                }
+                return@withContext out
+            }
+        } catch (_: Exception) {
+        }
+        emptyList()
+    }
+
+    suspend fun deletePublicShare(shareId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject().put("id", shareId).toString()
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/shares/delete")
+                .post(payload.toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+            httpClient.newCall(req).execute().use { return@withContext it.isSuccessful }
+        } catch (_: Exception) {
+        }
+        false
+    }
+
+    // -----------------------------------------------------------------
+    // v1.4.0 — Album multi-utente (condivisione tra utenti registrati)
+    // -----------------------------------------------------------------
+    suspend fun shareAlbumWithUser(album: String, username: String, role: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject()
+                .put("album", album)
+                .put("username", username.trim())
+                .put("role", if (role == "contributor") "contributor" else "viewer")
+                .toString()
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/albums/share")
+                .post(payload.toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string() ?: ""
+                val err = try { JSONObject(body).optString("error", "") } catch (_: Exception) { "" }
+                return@withContext (resp.isSuccessful to (err.ifBlank { if (resp.isSuccessful) "" else "Errore ${resp.code}" }))
+            }
+        } catch (_: Exception) {
+        }
+        false to "Errore di rete"
+    }
+
+    suspend fun unshareAlbum(album: String, username: String = ""): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject()
+                .put("album", album)
+                .put("username", username)
+                .toString()
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/albums/unshare")
+                .post(payload.toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+            httpClient.newCall(req).execute().use { return@withContext it.isSuccessful }
+        } catch (_: Exception) {
+        }
+        false
+    }
+
+    suspend fun fetchSharedAlbumsWithMe(): List<SharedAlbumWithMeModel> = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/albums/shared")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val json = JSONObject(resp.body?.string() ?: "")
+                val arr = json.optJSONArray("sharedWithMe") ?: return@withContext emptyList()
+                val out = ArrayList<SharedAlbumWithMeModel>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val s = arr.optJSONObject(i) ?: continue
+                    out.add(
+                        SharedAlbumWithMeModel(
+                            id = s.optString("id", ""),
+                            owner = s.optString("owner", ""),
+                            album = s.optString("album", ""),
+                            role = s.optString("role", "viewer"),
+                            itemCount = s.optInt("itemCount", 0)
+                        )
+                    )
+                }
+                return@withContext out
+            }
+        } catch (_: Exception) {
+        }
+        emptyList()
+    }
+
+    fun getSharedAlbumFileUrl(shareId: String, filename: String): String {
+        val encoded = URLEncoder.encode(filename, "UTF-8").replace("+", "%20")
+        return "${cleanBaseUrl()}/api/shared-albums/$shareId/file/$encoded"
+    }
+
+    // -----------------------------------------------------------------
+    // v1.4.0 — Notifiche Push Web (VAPID) lato server
+    // -----------------------------------------------------------------
+    suspend fun fetchPushVapidKey(): String = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/push/vapid-key")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string() ?: ""
+                    val key = JSONObject(body).optString("publicKey", "")
+                    if (key.isNotBlank()) return@withContext key
+                }
+            }
+        } catch (_: Exception) {
+        }
+        ""
+    }
+
+    /** Registra una subscription Web Push (endpoint da PushManager del browser/embedded). */
+    suspend fun subscribePush(endpoint: String, p256dhKey: String, authSecret: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val sub = JSONObject()
+                .put("endpoint", endpoint)
+                .put("keys", JSONObject().put("p256dh", p256dhKey).put("auth", authSecret))
+            val payload = JSONObject().put("subscription", sub).toString()
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/push/subscribe")
+                .post(payload.toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+            httpClient.newCall(req).execute().use { return@withContext it.isSuccessful }
+        } catch (_: Exception) {
+        }
+        false
+    }
+
+    // -----------------------------------------------------------------
+    // v1.4.0 — Duplicati quasi identici (pHash percettivo lato server)
+    // -----------------------------------------------------------------
+    suspend fun findNearDuplicates(threshold: Int = 8): List<List<String>> = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject().put("threshold", threshold.coerceIn(0, 20)).toString()
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/similar_duplicates")
+                .post(payload.toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val arr = JSONObject(resp.body?.string() ?: "").optJSONArray("groups") ?: return@withContext emptyList()
+                val out = ArrayList<List<String>>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val g = arr.optJSONObject(i) ?: continue
+                    val files = g.optJSONArray("filenames") ?: continue
+                    val list = ArrayList<String>(files.length())
+                    for (j in 0 until files.length()) {
+                        val fn = files.optString(j, "")
+                        if (fn.isNotBlank()) list.add(fn)
+                    }
+                    if (list.size > 1) out.add(list)
+                }
+                return@withContext out
+            }
+        } catch (_: Exception) {
+        }
+        emptyList()
     }
 
     suspend fun deleteAlbum(albumName: String): Boolean = withContext(Dispatchers.IO) {
@@ -3829,3 +4237,35 @@ class PhotoCloudApiClient(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// v1.4.0 — Modelli per Ricordi, Condivisioni pubbliche e Album multi-utente
+// ---------------------------------------------------------------------------
+
+/** Una sezione "N anni fa" dei Ricordi (In questo giorno). */
+data class MemorySectionModel(
+    val year: Int,
+    val yearsAgo: Int,
+    val items: List<MediaItemModel>
+)
+
+/** Sommario di un link pubblico temporaneo creato dall'utente. */
+data class PublicShareSummaryModel(
+    val id: String,
+    val label: String,
+    val itemCount: Int,
+    val expiresAtMs: Long,
+    val expired: Boolean,
+    val hasPassword: Boolean,
+    val downloadCount: Int,
+    val maxDownloads: Int?
+)
+
+/** Un album condiviso CON l'utente corrente da un altro utente del server. */
+data class SharedAlbumWithMeModel(
+    val id: String,
+    val owner: String,
+    val album: String,
+    val role: String,
+    val itemCount: Int
+)

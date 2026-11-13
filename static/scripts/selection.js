@@ -68,6 +68,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (downloadSelectedBtn) downloadSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
         if (assignAlbumSelectedBtn) assignAlbumSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
         if (deleteSelectedBtn) deleteSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
+        const shareSelectedBtn = document.getElementById('share-selected-btn');
+        if (shareSelectedBtn) shareSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
+        const favoriteSelectedBtn = document.getElementById('favorite-selected-btn');
+        if (favoriteSelectedBtn) favoriteSelectedBtn.style.display = showActionButtons ? 'inline-flex' : 'none';
 
         if (selectAllBtn) {
             const btnText = selectAllBtn.querySelector('.btn-text');
@@ -82,6 +86,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     window.syncSelectionUI = updateUI;
+    window.getSelectedFilenames = function () {
+        return Array.from(selectedFiles);
+    };
 
     function renderAlbumChips() {
         if (!albumChipsList) return;

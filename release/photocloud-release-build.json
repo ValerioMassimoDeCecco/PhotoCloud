@@ -1,19 +1,23 @@
 {
-  "apkFilename": "photocloud-release-v1.3.2-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.3.2-signed.apk",
-  "sha256": "f0aac0b2d0591af8fa28f0c5880a443091b52ac8c1aa1935746948cab08cd296",
-  "sizeBytes": 12409161,
+  "apkFilename": "photocloud-release-v1.4.0-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.4.0-signed.apk",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "sizeBytes": 0,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.3.2",
-  "versionCode": 29,
-  "changelog": "Release 1.3.2 — Riscrittura completa del motore di Pinch-to-Zoom (Web & Android Nativo): risposta istantanea 1:1 alle dita a 120Hz senza lag di animazione, ancoraggio matematico esatto al punto medio focale (zero scivolamenti), transizione fluida 1↔2 dita senza salti di centroide, blocco intelligente di HorizontalPager durante zoom/pinch e ritaglio dei bordi basato sulle proporzioni reali del media.",
+  "versionName": "1.4.0",
+  "versionCode": 30,
+  "changelog": "Release 1.4.0 — Novità cloud: Notifiche Push Web (VAPID) con service worker, Preferiti con stella sync server↔mobile, Ricordi \"In questo giorno\", Slideshow con transizioni Ken Burns/crossfade/slide, barra Timeline scrullable stile Google Foto, rilevamento Duplicati quasi identici via pHash percettivo, Ricerca in linguaggio naturale on-device (IT/EN) e server, Link pubblici temporanei di condivisione con scadenza, password e limite download, Album multi-utente con ruoli viewer/contributor.",
   "features": [
-    "Pinch-to-Zoom Perfetto & Istantaneo 1:1 (v1.3.2): eliminato ogni ritardo di animazione durante il gesto su Android Compose (graphicsLayer lambda phase) e Web",
-    "Ancoraggio Focale al Punto Medio (Zero Scivolamenti): il punto toccato tra le due dita resta perfettamente inchiodato al centro del pinch durante espansione, contrazione e rotazione dita",
-    "Transizione Multi-Dito Senza Salti: tracciamento individuale per PointerId così sollevare o appoggiare un dito durante lo zoom continua il pan senza alcun scatto o attivazione involontaria di swipe/chiusura",
-    "Blocco Pager & Bordi Media Reali: HorizontalPager disabilitato automaticamente durante pinch/zoom su Android e limiti di scorrimento calcolati sulle dimensioni Fitted reali della foto",
-    "Include tutte le novità v1.3.1: Player Video & Studio Editing Unificato Foto + Video con esportazione hardware reale e workflow CI/Release puliti"
+    "Notifiche Push Web (v1.4.0): service worker push/notificationclick, subscribe/unsubscribe per utente con chiavi VAPID per-server zero-config",
+    "Preferiti ⭐: toggle da web e app Android, persistenti per utente (.favorites.json), filtro gallery e ricerca",
+    "Ricordi 🕰️: sezioni \"N anni fa\" con le foto scattate in questo giorno/mese degli anni passati",
+    "Slideshow con Transizioni 🎞️: crossfade, slide, zoom e Ken Burns su TV/browser con intervallo personalizzabile",
+    "Timeline Scrullabile stile Google Foto: scrubber laterale con bubble mese/anno durante lo scroll rapido",
+    "Duplicati Quasi Identici: pHash percettivo 64-bit con cache per-file, gruppi con distanza di Hamming configurabile",
+    "Ricerca in Linguaggio Naturale On-Device: parser IT/EN (anno, mese, tipo media, preferiti, ricordi, keyword AI→label ImageNet) senza dati verso il cloud; fallback server quando online",
+    "Condivisioni Pubbliche Temporanee 🔗: link anonimi /share/<token> con scadenza 1h-30gg, password opzionale, limite download e revoca",
+    "Album Multi-Utente 👥: condivisione tra utenti registrati con ruoli viewer/contributor e upload contributor direttamente nell'album del proprietario"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.3.2",
-  "publishedAt": "2026-11-13T06:54:12.606Z"
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.4.0",
+  "notes": "Pre-release v1.4.0: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release (download-artifact, sha256sum e merge di questo manifest), preservando la stessa catena di firma persistente."
 }
