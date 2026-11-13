@@ -123,6 +123,11 @@ import androidx.compose.material.icons.filled.RestoreFromTrash
 import androidx.compose.material.icons.filled.RotateLeft
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SwapVert
@@ -156,8 +161,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -847,6 +854,9 @@ fun PhotoCloudNativeApp(
     var albumsList by remember(serverUrl) {
         mutableStateOf(apiClient.getCachedAlbums())
     }
+    var favoriteFilenames by remember(serverUrl) {
+        mutableStateOf(apiClient.getCachedFavorites())
+    }
     var infoDialogMessage by remember { mutableStateOf<String?>(null) }
 
     fun saveKeyForBiometrics(bytes: ByteArray) {
@@ -869,6 +879,7 @@ fun PhotoCloudNativeApp(
                     galleryItems = syncResult.items
                     albumsList = apiClient.getCachedAlbums()
                     trashItems = apiClient.fetchTrashItems()
+                    favoriteFilenames = apiClient.fetchFavorites()
                 }
                 is GallerySyncResult.Unauthenticated -> {
                     apiClient.clearCookies()
@@ -952,6 +963,16 @@ fun PhotoCloudNativeApp(
             albumsList = albumsList,
             custom = custom,
             isDarkTheme = isDarkTheme,
+            favoriteFilenames = favoriteFilenames,
+            onToggleFavorite = { fn ->
+                scope.launch {
+                    val updated = apiClient.toggleFavorite(fn)
+                    if (updated != null) {
+                        favoriteFilenames = updated
+                        infoDialogMessage = if (updated.contains(fn)) "⭐ Aggiunto ai Preferiti" else "Rimosso dai Preferiti"
+                    }
+                }
+            },
             onUpdateCustom = onUpdateCustom,
             onLockNow = {
                 if (activity.canUseBiometrics()) {
@@ -1589,6 +1610,8 @@ fun NativeVaultScreen(
     albumsList: List<String>,
     custom: CustomizationState,
     isDarkTheme: Boolean,
+    favoriteFilenames: Set<String> = emptySet(),
+    onToggleFavorite: (String) -> Unit = {},
     onUpdateCustom: (CustomizationState) -> Unit,
     onLockNow: () -> Unit,
     onRefresh: () -> Unit,
@@ -1601,6 +1624,7 @@ fun NativeVaultScreen(
     val haptic = LocalHapticFeedback.current
     val isLgActive = LocalLiquidGlassActive.current
     val lgCfg = LocalLiquidGlassConfig.current
+    val vaultClipboardManager = LocalClipboardManager.current
 
     var currentTab by remember { mutableStateOf(VaultTab.GALLERY) }
     var groupingMode by remember(custom.defaultGrouping) { mutableStateOf(custom.defaultGrouping) }
@@ -1609,6 +1633,13 @@ fun NativeVaultScreen(
     var selectedAlbumFilter by remember { mutableStateOf<String?>(null) }
     var selectedAiCategoryFilter by remember { mutableStateOf<String?>(null) }
     var showAlbumDialog by remember { mutableStateOf(false) }
+
+    // v1.4.0 — Ricerca in linguaggio naturale on-device + filtro Preferiti
+    var vaultSearchQuery by remember { mutableStateOf("") }
+    var favoritesOnlyFilter by remember { mutableStateOf(false) }
+    val nlParsedQuery = remember(vaultSearchQuery) {
+        NaturalLanguageSearchEngine.parse(vaultSearchQuery)
+    }
 
     var selectedFilenames by remember { mutableStateOf<Set<String>>(emptySet()) }
     var lightboxInitialIndex by remember { mutableStateOf<Int?>(null) }
@@ -1813,7 +1844,7 @@ fun NativeVaultScreen(
         (albumsList + fromItems).distinct().sorted()
     }
 
-    val filteredGalleryMedia = remember(mediaOnlyItems, selectedAlbumFilter, selectedAiCategoryFilter, aiCategoriesByFilename) {
+    val filteredGalleryMedia = remember(mediaOnlyItems, selectedAlbumFilter, selectedAiCategoryFilter, aiCategoriesByFilename, favoritesOnlyFilter, nlParsedQuery, favoriteFilenames) {
         var result = if (selectedAlbumFilter != null) {
             mediaOnlyItems.filter { it.album == selectedAlbumFilter }
         } else {
@@ -1824,6 +1855,25 @@ fun NativeVaultScreen(
             result = result.filter { item ->
                 val itemCats = aiCategoriesByFilename[item.filename].orEmpty()
                 itemCats.any { it.equals(activeAiCat, ignoreCase = true) }
+            }
+        }
+        if (favoritesOnlyFilter) {
+            result = result.filter { favoriteFilenames.contains(it.filename) }
+        }
+        if (vaultSearchQuery.isNotBlank()) {
+            result = result.filter { item ->
+                NaturalLanguageSearchEngine.matches(
+                    NaturalLanguageSearchEngine.SearchablePhotoItem(
+                        filename = item.filename,
+                        timestampMs = (item.timestamp * 1000).toLong(),
+                        isMedia = item.isMedia,
+                        isVideo = item.isVideo,
+                        album = item.album,
+                        isFavorite = favoriteFilenames.contains(item.filename),
+                        aiCategories = aiCategoriesByFilename[item.filename].orEmpty()
+                    ),
+                    nlParsedQuery
+                )
             }
         }
         result
@@ -2374,6 +2424,35 @@ fun NativeVaultScreen(
 
             // On-Device AI Category Filter Chips Bar (Tutte + Categorie AI rilevate + Sincronizza AI)
             if (currentTab == VaultTab.GALLERY) {
+                // v1.4.0 — Barra di ricerca in linguaggio naturale on-device
+                OutlinedTextField(
+                    value = vaultSearchQuery,
+                    onValueChange = { vaultSearchQuery = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 2.dp),
+                    placeholder = { Text("Cerca: \"foto di agosto 2024\", \"ricordi\", \"preferiti\"…", maxLines = 1) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(22.dp),
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Cerca nell'archivio",
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    trailingIcon = {
+                        if (vaultSearchQuery.isNotBlank()) {
+                            IconButton(onClick = { vaultSearchQuery = "" }) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Cancella ricerca",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2383,8 +2462,12 @@ fun NativeVaultScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     FilterChip(
-                        selected = selectedAiCategoryFilter == null,
-                        onClick = { selectedAiCategoryFilter = null },
+                        selected = selectedAiCategoryFilter == null && !favoritesOnlyFilter && vaultSearchQuery.isBlank(),
+                        onClick = {
+                            selectedAiCategoryFilter = null
+                            favoritesOnlyFilter = false
+                            vaultSearchQuery = ""
+                        },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.AutoAwesome,
@@ -2393,6 +2476,35 @@ fun NativeVaultScreen(
                             )
                         },
                         label = { Text("Tutte (${mediaOnlyItems.size})") }
+                    )
+                    // v1.4.0 — Chip Preferiti
+                    FilterChip(
+                        selected = favoritesOnlyFilter,
+                        onClick = { favoritesOnlyFilter = !favoritesOnlyFilter },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text("Preferiti (${favoriteFilenames.size})") }
+                    )
+                    // v1.4.0 — Chip Ricordi ("In questo giorno", calcolato on-device)
+                    AssistChip(
+                        onClick = {
+                            val label = "ricordi"
+                            val already = nlParsedQuery.memoriesOnly && vaultSearchQuery.isNotBlank()
+                            vaultSearchQuery = if (already) "" else label
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.History,
+                                contentDescription = "Ricordi: foto scattate in questo giorno negli anni passati",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text("Ricordi") }
                     )
                     if (aiModelState.status == AiModelStatus.INSTALLED) {
                         aiCategoryChips.forEach { chip ->
@@ -3451,6 +3563,19 @@ fun NativeVaultScreen(
                 autoplayVideos = custom.autoplayVideos,
                 aiCategoriesByFilename = aiCategoriesByFilename,
                 photoAiDao = photoAiDao,
+                favoriteFilenames = favoriteFilenames,
+                onToggleFavorite = onToggleFavorite,
+                onShareLink = if (isFromTrash) null else ({ fn ->
+                    scope.launch {
+                        val link = apiClient.createPublicShareLink(listOf(fn), expiresInHours = 72)
+                        if (link != null) {
+                            vaultClipboardManager.setText(AnnotatedString(link))
+                            onShowInfo("🔗 Link pubblico (72h) copiato negli appunti")
+                        } else {
+                            onShowInfo("Errore nella creazione del link pubblico")
+                        }
+                    }
+                }),
                 onClose = { lightboxInitialIndex = null },
                 onEditPhoto = { filename ->
                     editingPhotoFilename = filename
@@ -6984,6 +7109,9 @@ fun NativeLightboxModal(
     autoplayVideos: Boolean,
     aiCategoriesByFilename: Map<String, List<String>> = emptyMap(),
     photoAiDao: PhotoAiDao? = null,
+    favoriteFilenames: Set<String> = emptySet(),
+    onToggleFavorite: ((String) -> Unit)? = null,
+    onShareLink: ((String) -> Unit)? = null,
     onClose: () -> Unit,
     onEditPhoto: (String) -> Unit,
     onMoveToTrash: (String) -> Unit,
@@ -7825,6 +7953,29 @@ fun NativeLightboxModal(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.padding(horizontal = 10.dp)
                 ) {
+                    if (!fromTrash && onToggleFavorite != null) {
+                        val isCurrentFavorite = favoriteFilenames.contains(currentItem.filename)
+                        IconButton(onClick = { onToggleFavorite(currentItem.filename) }) {
+                            Icon(
+                                imageVector = if (isCurrentFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                                contentDescription = if (isCurrentFavorite) "Rimuovi dai Preferiti" else "Aggiungi ai Preferiti",
+                                tint = if (isCurrentFavorite) Color(0xFFFBBF24) else Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+
+                    if (!fromTrash && onShareLink != null) {
+                        IconButton(onClick = { onShareLink(currentItem.filename) }) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Crea link pubblico temporaneo",
+                                tint = Color.White,
+                                modifier = Modifier.size(21.dp)
+                            )
+                        }
+                    }
+
                     if (!fromTrash) {
                         TextButton(
                             onClick = { onEditPhoto(currentItem.filename) },

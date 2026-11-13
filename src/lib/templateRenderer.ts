@@ -175,12 +175,15 @@ export function renderLoginTemplate(errorMessage?: string): string {
 export function renderGalleryTemplate(
   allFiles: MediaItem[],
   albums: string[] = [],
-  trashedFiles: MediaItem[] = []
+  trashedFiles: MediaItem[] = [],
+  favorites: string[] = []
 ): string {
   const filenames = allFiles.map((m) => m.filename);
   const filenamesJson = JSON.stringify(filenames);
   const albumsJson = JSON.stringify(albums);
   const stats = computeCloudStorageStats(allFiles, trashedFiles);
+  const favoritesSet = new Set(favorites);
+  const favoritesJson = JSON.stringify(favorites);
 
   const emptyHtml =
     allFiles.length === 0
@@ -238,6 +241,11 @@ export function renderGalleryTemplate(
           ? `<span class="media-album-badge" title="Album: ${album}"><span class="material-icons">photo_album</span>${album}</span>`
           : '';
 
+      const isFavorite = favoritesSet.has(item.filename);
+      const favoriteBadge = isMedia
+        ? `<button type="button" class="media-fav-badge ${isFavorite ? 'is-favourite' : ''}" title="${isFavorite ? 'Rimuovi dai Preferiti' : 'Aggiungi ai Preferiti'}" aria-label="Preferito" onclick="window.toggleFavoriteFromGallery && window.toggleFavoriteFromGallery(this.closest('[data-filename]').dataset.filename, event)"><span class="material-icons">${isFavorite ? 'star' : 'star_border'}</span></button>`
+        : '';
+
       return `
         <div class="media-card-wrapper ${isMedia ? 'is-media-item' : 'is-cloud-file'}"
              data-timestamp="${Number(item.timestamp) || 0}"
@@ -245,10 +253,12 @@ export function renderGalleryTemplate(
              data-size="${sizeBytes}"
              data-is-media="${isMedia ? 'true' : 'false'}"
              data-category="${category}"
-             data-album="${album}">
+             data-album="${album}"
+             data-favorite="${isFavorite ? 'true' : 'false'}">
             <div class="media-card ${isMedia ? 'clickable-media' : 'clickable-cloud-file'}" data-index="${index}" data-filename="${file}">
                 ${mediaTag}
                 ${albumBadge}
+                ${favoriteBadge}
                 <div class="media-actions">
                     ${
                       isImg || isVid
@@ -280,7 +290,7 @@ export function renderGalleryTemplate(
   const styles = `<link rel="stylesheet" href="/static/styles/gallery.css">`;
 
   const content = `
-<div class="gallery-container" data-albums='${escapeHtml(albumsJson)}'>
+<div class="gallery-container" data-albums='${escapeHtml(albumsJson)}' data-favorites='${escapeHtml(favoritesJson)}'>
     <header class="gallery-header">
         <div class="header-content">
             <div class="header-title-group">
@@ -293,6 +303,29 @@ export function renderGalleryTemplate(
                 </button>
             </div>
             <div class="header-top-controls">
+                <div class="vault-search-bar" id="vault-search-bar">
+                    <span class="material-icons">search</span>
+                    <input type="search" id="vault-search-input" placeholder="Cerca in linguaggio naturale (es. foto di agosto 2024)…" autocomplete="off" aria-label="Cerca nell'archivio" />
+                    <button type="button" id="vault-search-clear-btn" class="vault-search-clear" style="display: none;" title="Cancella ricerca" aria-label="Cancella ricerca">
+                        <span class="material-icons">close</span>
+                    </button>
+                </div>
+                <button type="button" id="favorites-filter-btn" class="btn outlined icon-text-toggle" title="Mostra solo i Preferiti" aria-pressed="false">
+                    <span class="material-icons">star</span>
+                    <span class="btn-text">Preferiti</span>
+                </button>
+                <button type="button" id="open-memories-btn" class="btn outlined" title="Ricordi — In questo giorno">
+                    <span class="material-icons">history_toggle_off</span>
+                    <span class="btn-text">Ricordi</span>
+                </button>
+                <button type="button" id="open-shares-btn" class="btn outlined" title="Gestisci Link Pubblici e Album Condivisi">
+                    <span class="material-icons">share</span>
+                    <span class="btn-text">Condivisioni</span>
+                </button>
+                <button type="button" id="push-notifications-btn" class="btn outlined" title="Attiva Notifiche Push su questo dispositivo">
+                    <span class="material-icons" id="push-notifications-icon">notifications_none</span>
+                    <span class="btn-text" id="push-notifications-label">Notifiche</span>
+                </button>
                 <div class="grouping-controls" id="grouping-controls-wrap">
                     <span class="material-icons">folder_special</span>
                     <select id="group-by-select" class="btn-like-select" aria-label="Raggruppa per">
@@ -426,10 +459,138 @@ export function renderGalleryTemplate(
                 <button type="button" class="btn primary" id="confirm-create-album-btn">Crea</button>
             </div>
             <div id="album-chips-list" class="album-chips-list"></div>
+            <div id="album-share-section" class="album-share-section" style="display: none;">
+                <h4 style="margin: 14px 0 6px;">Condividi album con altri utenti</h4>
+                <div class="m3-modal-input-row">
+                    <select id="album-share-album-select" class="btn-like-select" aria-label="Album da condividere" style="flex:1;"></select>
+                </div>
+                <div class="m3-modal-input-row">
+                    <input type="text" id="album-share-username-input" placeholder="Username (es. mario)" style="flex:1;" />
+                    <select id="album-share-role-select" class="btn-like-select" aria-label="Ruolo">
+                        <option value="viewer">Sola lettura</option>
+                        <option value="contributor">Collaboratore</option>
+                    </select>
+                    <button type="button" class="btn primary" id="confirm-share-album-btn">Condividi</button>
+                </div>
+                <div id="album-share-participants-list" class="album-share-participants-list"></div>
+            </div>
             <div class="m3-modal-actions">
                 <button type="button" class="btn outlined" id="close-album-modal-btn">Chiudi</button>
             </div>
         </div>
+    </div>
+
+    <!-- v1.4.0 — OVERLAY RICORDI (In questo giorno) -->
+    <div id="memories-overlay" class="vm-overlay" style="display: none;" role="dialog" aria-modal="true" aria-label="Ricordi PhotoCloud">
+        <div class="vm-overlay-header">
+            <button type="button" class="btn icon" id="close-memories-btn" title="Chiudi Ricordi" aria-label="Chiudi">
+                <span class="material-icons">arrow_back</span>
+            </button>
+            <div class="vm-overlay-title-group">
+                <h2>Ricordi</h2>
+                <p id="memories-subtitle" class="vm-overlay-subtitle">In questo giorno, negli anni passati</p>
+            </div>
+            <button type="button" class="btn primary" id="memories-slideshow-btn" style="display: none;">
+                <span class="material-icons">slideshow</span>
+                <span class="btn-text">Slideshow</span>
+            </button>
+        </div>
+        <div id="memories-content" class="vm-overlay-content"></div>
+    </div>
+
+    <!-- v1.4.0 — OVERLAY CONDIVISIONI (Link Pubblici + Album Condivisi multi-utente) -->
+    <div id="shares-overlay" class="vm-overlay" style="display: none;" role="dialog" aria-modal="true" aria-label="Gestione Condivisioni PhotoCloud">
+        <div class="vm-overlay-header">
+            <button type="button" class="btn icon" id="close-shares-btn" title="Chiudi Condivisioni" aria-label="Chiudi">
+                <span class="material-icons">arrow_back</span>
+            </button>
+            <div class="vm-overlay-title-group">
+                <h2>Condivisioni</h2>
+                <p class="vm-overlay-subtitle">Link pubblici temporanei e album condivisi con altri utenti</p>
+            </div>
+        </div>
+        <div class="vm-overlay-content">
+            <section class="shares-section">
+                <h3><span class="material-icons">link</span> I tuoi link pubblici</h3>
+                <p class="shares-hint">Seleziona foto/file e tocca "Condividi" nella barra di selezione per creare un link pubblico temporaneo.</p>
+                <div id="public-shares-list" class="public-shares-list"></div>
+            </section>
+            <section class="shares-section">
+                <h3><span class="material-icons">folder_shared</span> Album che condividi</h3>
+                <div id="owned-album-shares-list" class="public-shares-list"></div>
+            </section>
+            <section class="shares-section">
+                <h3><span class="material-icons">group</span> Album condivisi con te</h3>
+                <div id="shared-with-me-list" class="public-shares-list"></div>
+            </section>
+        </div>
+    </div>
+
+    <!-- v1.4.0 — OVERLAY ALBUM CONDIVISO APERTO -->
+    <div id="shared-album-overlay" class="vm-overlay" style="display: none;" role="dialog" aria-modal="true" aria-label="Album condiviso">
+        <div class="vm-overlay-header">
+            <button type="button" class="btn icon" id="close-shared-album-btn" title="Chiudi Album" aria-label="Chiudi">
+                <span class="material-icons">arrow_back</span>
+            </button>
+            <div class="vm-overlay-title-group">
+                <h2 id="shared-album-title">Album condiviso</h2>
+                <p id="shared-album-subtitle" class="vm-overlay-subtitle"></p>
+            </div>
+            <button type="button" class="btn primary" id="shared-album-upload-btn" style="display: none;">
+                <span class="material-icons">upload</span>
+                <span class="btn-text">Carica</span>
+            </button>
+            <button type="button" class="btn outlined" id="shared-album-slideshow-btn" style="display: none;">
+                <span class="material-icons">slideshow</span>
+                <span class="btn-text">Slideshow</span>
+            </button>
+        </div>
+        <div id="shared-album-content" class="vm-overlay-content"></div>
+        <input type="file" id="shared-album-file-input" multiple hidden>
+    </div>
+
+    <!-- v1.4.0 — MODALE CREAZIONE LINK PUBBLICO TEMPORANEO -->
+    <div id="share-create-modal-backdrop" class="m3-modal-backdrop" style="display: none;">
+        <div class="m3-modal-card">
+            <h3>Crea Link Pubblico Temporaneo</h3>
+            <p class="m3-modal-sub">Chiunque abbia il link potrà vedere e scaricare i <span id="share-create-count">0</span> elementi selezionati fino alla scadenza.</p>
+            <label class="share-field-label" for="share-label-input">Etichetta (opzionale)</label>
+            <input type="text" id="share-label-input" class="share-field-input" placeholder="Es. Foto matrimonio" maxlength="120" />
+            <label class="share-field-label" for="share-expiry-select">Scadenza</label>
+            <select id="share-expiry-select" class="btn-like-select" style="width: 100%; height: 42px;">
+                <option value="1">1 ora</option>
+                <option value="24">24 ore</option>
+                <option value="72" selected>3 giorni</option>
+                <option value="168">1 settimana</option>
+                <option value="720">30 giorni</option>
+                <option value="8760">1 anno</option>
+            </select>
+            <label class="share-field-label" for="share-max-downloads-input">Download massimi (0 = illimitati)</label>
+            <input type="number" id="share-max-downloads-input" class="share-field-input" min="0" max="100000" value="0" />
+            <label class="share-field-label" for="share-password-input">Password (opzionale)</label>
+            <input type="text" id="share-password-input" class="share-field-input" placeholder="Lascia vuoto per accesso libero" maxlength="128" autocomplete="off" />
+            <div id="share-create-result" class="share-create-result" style="display: none;">
+                <input type="text" id="share-link-output" class="share-field-input" readonly />
+                <button type="button" class="btn primary" id="copy-share-link-btn">
+                    <span class="material-icons">content_copy</span>
+                    <span class="btn-text">Copia Link</span>
+                </button>
+            </div>
+            <div class="m3-modal-actions">
+                <button type="button" class="btn outlined" id="close-share-create-modal-btn">Chiudi</button>
+                <button type="button" class="btn primary" id="confirm-create-share-btn">
+                    <span class="material-icons">add_link</span>
+                    <span class="btn-text">Crea Link</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- v1.4.0 — TIMELINE SCRUBBER STILE GOOGLE FOTO -->
+    <div id="timeline-scrubber" class="timeline-scrubber" style="display: none;" aria-hidden="true">
+        <div class="timeline-scrub-track" id="timeline-scrub-track"></div>
+        <div class="timeline-scrub-thumb" id="timeline-scrub-thumb"></div>
+        <div class="timeline-scrub-bubble" id="timeline-scrub-bubble">2024</div>
     </div>
 
     <!-- MATERIAL YOU 120HZ FLOATING BAR -->
@@ -442,6 +603,14 @@ export function renderGalleryTemplate(
             <button class="btn outlined" id="assign-album-selected-btn" title="Sposta in un Album" style="display: none;">
                 <span class="material-icons">photo_album</span>
                 <span class="btn-text">Album</span>
+            </button>
+            <button class="btn outlined" id="share-selected-btn" title="Crea Link Pubblico Temporaneo" style="display: none;">
+                <span class="material-icons">share</span>
+                <span class="btn-text">Condividi</span>
+            </button>
+            <button class="btn outlined" id="favorite-selected-btn" title="Aggiungi ai Preferiti" style="display: none;">
+                <span class="material-icons">star</span>
+                <span class="btn-text">Preferiti</span>
             </button>
             <button class="btn danger" id="delete-selected-btn" title="Sposta Selezionati nel Cestino" style="display: none;">
                 <span class="material-icons">delete_sweep</span>
@@ -502,6 +671,10 @@ export function renderGalleryTemplate(
 <script src="/static/scripts/selection.js"></script>
 <script src="/static/scripts/upload.js"></script>
 <script src="/static/scripts/grouping.js"></script>
+<script src="/static/scripts/similar-duplicates.js"></script>
+<script src="/static/scripts/slideshow.js"></script>
+<script src="/static/scripts/timeline-scrubber.js"></script>
+<script src="/static/scripts/cloud-features.js"></script>
 
 <script>
     document.addEventListener('DOMContentLoaded', () => {

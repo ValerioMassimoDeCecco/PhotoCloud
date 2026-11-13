@@ -26,6 +26,45 @@ import {
   resolveFileViewerSpec,
   parseDocumentBuffer,
 } from './src/lib/documentEngine';
+import {
+  computePHashHex,
+  groupSimilarByHash,
+  hammingDistanceHex,
+  isPHashSupportedFilename,
+} from './src/lib/phash';
+import { parseNaturalQuery, mediaItemMatchesQuery } from './src/lib/nlSearch';
+import {
+  getOrCreateServerSecret,
+  readJsonFile,
+  unwrapSecret,
+  writeJsonAtomic,
+} from './src/lib/vaultStorage';
+import {
+  PublicShareRecord,
+  SHARE_TOKEN_REGEX,
+  createPublicShare,
+  deleteAlbumSharesForAlbum,
+  incrementShareDownloadCount,
+  loadAlbumShares,
+  loadPublicShares,
+  resolveShareByToken,
+  saveAlbumShares,
+  savePublicShares,
+  upsertAlbumShare,
+  verifySharePassword,
+} from './src/lib/sharing';
+import {
+  addUserSubscription,
+  getVapidPublicKey,
+  initPushService,
+  removeUserSubscription,
+  sendPushToUser,
+} from './src/lib/pushService';
+import {
+  renderShareErrorPage,
+  renderSharePage,
+  renderSharePasswordPage,
+} from './src/lib/sharePage';
 import { FileCategory, MediaItem, AndroidBuildConfig, AndroidReleaseArtifact } from './src/types';
 import {
   validateAndroidConfig,
@@ -45,7 +84,7 @@ const RELEASE_DIR = path.resolve(process.cwd(), 'release');
  * così non si può più annunciare una versione diversa da quella realmente compilata.
  */
 function readAndroidAppVersion(): { versionName: string; versionCode: number } {
-  const fallback = { versionName: '1.3.2', versionCode: 29 };
+  const fallback = { versionName: '1.4.0', versionCode: 30 };
   try {
     const gradlePath = path.resolve(APP_ROOT, 'android-app/app/build.gradle.kts');
     if (!fs.existsSync(gradlePath)) return fallback;
@@ -298,6 +337,116 @@ function saveUserAlbums(username: string, data: UserAlbumsData): void {
   fs.renameSync(tmpPath, targetPath);
 }
 
+// ---------------------------------------------------------------------------
+// v1.4.0 — Preferiti persistenti per utente (`user_media/<user>/.favorites.json`)
+// ---------------------------------------------------------------------------
+interface UserFavoritesFile {
+  version: 1;
+  favorites: string[];
+}
+
+function getFavoritesFilePath(username: string): string {
+  return path.join(UPLOAD_FOLDER, username, '.favorites.json');
+}
+
+function loadUserFavorites(username: string): Set<string> {
+  const data = readJsonFile<UserFavoritesFile>(getFavoritesFilePath(username), {
+    version: 1,
+    favorites: [],
+  });
+  const set = new Set<string>();
+  if (Array.isArray(data.favorites)) {
+    for (const f of data.favorites) {
+      if (typeof f === 'string' && isValidVaultFilename(f)) set.add(f);
+    }
+  }
+  return set;
+}
+
+function saveUserFavorites(username: string, favorites: ReadonlySet<string>): void {
+  const userFolder = path.join(UPLOAD_FOLDER, username);
+  fs.mkdirSync(userFolder, { recursive: true });
+  writeJsonAtomic(getFavoritesFilePath(username), {
+    version: 1,
+    favorites: [...favorites].sort((a, b) => a.localeCompare(b, 'it')).slice(0, 20000),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// v1.4.0 — Cache pHash per utente (`user_media/<user>/.phash.json`)
+// ---------------------------------------------------------------------------
+interface PHashCacheFile {
+  version: 1;
+  entries: Record<string, { phash: string; mtimeMs: number }>;
+}
+
+function getPHashCachePath(username: string): string {
+  return path.join(UPLOAD_FOLDER, username, '.phash.json');
+}
+
+function loadPHashCache(username: string): PHashCacheFile {
+  const data = readJsonFile<PHashCacheFile>(getPHashCachePath(username), {
+    version: 1,
+    entries: Object.create(null),
+  });
+  if (!data.entries || typeof data.entries !== 'object') {
+    data.entries = Object.create(null);
+  }
+  return data;
+}
+
+function savePHashCache(username: string, cache: PHashCacheFile): void {
+  writeJsonAtomic(getPHashCachePath(username), cache);
+}
+
+// ---------------------------------------------------------------------------
+// v1.4.0 — Rate limiting per lo sblocco password dei link pubblici di condivisione
+// ---------------------------------------------------------------------------
+const SHARE_UNLOCK_ATTEMPTS = new Map<string, { count: number; resetAt: number }>();
+
+function isShareUnlockRateLimited(clientIp: string): boolean {
+  const now = Date.now();
+  const entry = SHARE_UNLOCK_ATTEMPTS.get(clientIp);
+  if (entry && entry.resetAt > now && entry.count >= 10) return true;
+  SHARE_UNLOCK_ATTEMPTS.set(clientIp, {
+    count: entry && entry.resetAt > now ? entry.count + 1 : 1,
+    resetAt: entry && entry.resetAt > now ? entry.resetAt : now + 10 * 60 * 1000,
+  });
+  return false;
+}
+
+/**
+ * Genera (o valida) il cookie di sblocco per condivisioni protette da password:
+ * HMAC del token con il segreto server, a prova di manomissione e revocabile
+ * eliminando la condivisione.
+ */
+function shareUnlockCookieValue(token: string): string {
+  return crypto
+    .createHmac('sha256', getServerSecret())
+    .update(`photocloud-share-unlock:${token}`)
+    .digest('hex');
+}
+
+let cachedServerSecret: Buffer | null = null;
+function getServerSecret(): Buffer {
+  if (!cachedServerSecret) {
+    cachedServerSecret = getOrCreateServerSecret(UPLOAD_FOLDER);
+  }
+  return cachedServerSecret;
+}
+
+/**
+ * Restituisce i filename di un utente che appartengono ad un album condiviso
+ * (`source` = record di condivisione album multi-utente).
+ */
+function listAlbumSharedFiles(sourceOwner: string, albumName: string): MediaItem[] {
+  const userFolder = path.join(UPLOAD_FOLDER, sourceOwner);
+  const albumsData = loadUserAlbums(sourceOwner);
+  return listMediaFiles(userFolder, sourceOwner).filter(
+    (m) => albumsData.fileAlbums[m.filename] === albumName
+  );
+}
+
 function getEncryptedFilePlaintextSize(fullPath: string, stat?: fs.Stats): number {
   try {
     const s = stat ?? fs.statSync(fullPath);
@@ -512,8 +661,9 @@ async function startServer() {
     const allFiles = listMediaFiles(userFolder, sess.username);
     const trashedFiles = listMediaFiles(trashFolder, sess.username);
     const albumsData = loadUserAlbums(sess.username);
+    const favorites = [...loadUserFavorites(sess.username)];
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderGalleryTemplate(allFiles, albumsData.albums, trashedFiles));
+    res.send(renderGalleryTemplate(allFiles, albumsData.albums, trashedFiles, favorites));
   });
 
   app.get('/login', (_req: Request, res: Response) => {
@@ -548,6 +698,10 @@ async function startServer() {
     const albumsData = loadUserAlbums(sess.username);
     const activeMediaFiles = listMediaFiles(userFolder, sess.username);
     const trashedMediaFiles = listMediaFiles(trashFolder, sess.username);
+    const favorites = [...loadUserFavorites(sess.username)].filter(
+      (f) =>
+        activeMediaFiles.some((m) => m.filename === f) || trashedMediaFiles.some((m) => m.filename === f)
+    );
     res.json({
       authenticated: true,
       username: sess.username,
@@ -556,6 +710,7 @@ async function startServer() {
       trashedFiles: trashedMediaFiles,
       albums: albumsData.albums,
       fileAlbums: albumsData.fileAlbums,
+      favorites,
       storageStats: computeCloudStorageStats(activeMediaFiles, trashedMediaFiles),
     });
   });
@@ -639,8 +794,829 @@ async function startServer() {
       }
     }
     saveUserAlbums(sess.username, data);
+    deleteAlbumSharesForAlbum(UPLOAD_FOLDER, sess.username, albumName);
     res.json({ success: true, ...data });
   });
+
+  // ==========================================================================
+  // v1.4.0 — FAVORITI (⭐) persistenti per utente
+  // ==========================================================================
+  app.get('/api/favorites', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    res.json({ favorites: [...loadUserFavorites(sess.username)] });
+  });
+
+  app.post('/api/favorites/toggle', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const filename = String(req.body?.filename || '');
+    if (!isValidVaultFilename(filename)) {
+      res.status(400).json({ error: 'Nome file non valido' });
+      return;
+    }
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const trashFolder = path.join(userFolder, 'trash');
+    const existsActive = fs.existsSync(path.join(userFolder, filename));
+    const existsTrash = fs.existsSync(path.join(trashFolder, filename));
+    if (!existsActive && !existsTrash) {
+      res.status(404).json({ error: 'File non trovato' });
+      return;
+    }
+    const favorites = loadUserFavorites(sess.username);
+    let isFavorite: boolean;
+    if (favorites.has(filename)) {
+      favorites.delete(filename);
+      isFavorite = false;
+    } else {
+      favorites.add(filename);
+      isFavorite = true;
+    }
+    saveUserFavorites(sess.username, favorites);
+    res.json({ success: true, isFavorite, favorites: [...favorites] });
+  });
+
+  app.post('/api/favorites/set-many', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const filenames: unknown[] = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
+    const makeFavorite = req.body?.favorite === true;
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const favorites = loadUserFavorites(sess.username);
+    for (const fn of filenames) {
+      if (!isValidVaultFilename(fn)) continue;
+      if (!fs.existsSync(path.join(userFolder, fn))) continue;
+      if (makeFavorite) favorites.add(fn);
+      else favorites.delete(fn);
+    }
+    saveUserFavorites(sess.username, favorites);
+    res.json({ success: true, favorites: [...favorites] });
+  });
+
+  // ==========================================================================
+  // v1.4.0 — RICORDI ("In questo giorno"): media scattati nello stesso
+  // giorno/mese degli anni passati, in base al timestamp originale del file.
+  // ==========================================================================
+  app.get('/api/memories', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+    const currentDay = now.getDate();
+
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const allFiles = listMediaFiles(userFolder, sess.username);
+
+    const onThisDay = allFiles
+      .filter((m) => {
+        if (!m.isMedia) return false;
+        const d = new Date(m.timestamp * 1000);
+        return d.getMonth() === currentMonth && d.getDate() === currentDay && d.getFullYear() < currentYear;
+      })
+      .sort((a, b) => b.timestamp - a.timestamp);
+
+    // Raggruppa per anno per le sezioni "N anni fa"
+    const byYear = new Map<number, MediaItem[]>();
+    for (const item of onThisDay) {
+      const year = new Date(item.timestamp * 1000).getFullYear();
+      if (!byYear.has(year)) byYear.set(year, []);
+      byYear.get(year)!.push(item);
+    }
+    const sections = [...byYear.entries()]
+      .sort((a, b) => b[0] - a[0])
+      .map(([year, items]) => ({
+        year,
+        yearsAgo: currentYear - year,
+        items,
+      }));
+
+    res.json({
+      date: `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}`,
+      count: onThisDay.length,
+      sections,
+    });
+  });
+
+  // ==========================================================================
+  // v1.4.0 — RICERCA IN LINGUAGGIO NATURALE (IT/EN)
+  // ==========================================================================
+  app.get('/api/search', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const rawQuery = String(req.query.q || '').slice(0, 200);
+    if (!rawQuery.trim()) {
+      res.json({ query: rawQuery, explanation: [], results: [] });
+      return;
+    }
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const favorites = loadUserFavorites(sess.username);
+    const allFiles = listMediaFiles(userFolder, sess.username);
+    const parsed = parseNaturalQuery(rawQuery);
+    const results = allFiles.filter((item) =>
+      mediaItemMatchesQuery(
+        { filename: item.filename, timestamp: item.timestamp, isMedia: item.isMedia === true, album: item.album },
+        parsed,
+        favorites
+      )
+    );
+    res.json({
+      query: rawQuery,
+      explanation: parsed.explanation,
+      count: results.length,
+      results,
+    });
+  });
+
+  // ==========================================================================
+  // v1.4.0 — DUPLICATI QUASI IDENTICI (perceptual hash DCT 64-bit)
+  // ==========================================================================
+  app.post('/api/similar_duplicates', async (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const thresholdRaw = Number(req.body?.threshold);
+    const maxDistance =
+      Number.isFinite(thresholdRaw) && thresholdRaw >= 0 ? Math.min(20, Math.floor(thresholdRaw)) : 8;
+
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    if (!fs.existsSync(userFolder)) {
+      res.json({ groups: [], scanned: 0, cached: 0 });
+      return;
+    }
+    const mediaFiles = listMediaFiles(userFolder, sess.username).filter((m) =>
+      isPHashSupportedFilename(m.filename)
+    );
+
+    const cache = loadPHashCache(sess.username);
+    const entries: Array<{ filename: string; phash: string }> = [];
+    let recomputed = 0;
+    let cacheHits = 0;
+
+    for (const m of mediaFiles) {
+      const fullPath = path.join(userFolder, m.filename);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(fullPath);
+      } catch {
+        continue;
+      }
+      const cached = cache.entries[m.filename];
+      if (cached && typeof cached.phash === 'string' && Math.abs(cached.mtimeMs - stat.mtimeMs) < 1) {
+        entries.push({ filename: m.filename, phash: cached.phash });
+        cacheHits++;
+        continue;
+      }
+      try {
+        const enc = await fs.promises.readFile(fullPath);
+        const dec = await decryptFileAsync(enc, sess.apiKey);
+        const phash = await computePHashHex(dec);
+        cache.entries[m.filename] = { phash, mtimeMs: stat.mtimeMs };
+        entries.push({ filename: m.filename, phash });
+        recomputed++;
+      } catch {
+        // immagine non decodificabile (es. HEIC): ignorata dalla scansione
+      }
+    }
+
+    // Ripulisci la cache dai file non più presenti nel vault attivo
+    const activeSet = new Set(mediaFiles.map((m) => m.filename));
+    for (const key of Object.keys(cache.entries)) {
+      if (!activeSet.has(key)) delete cache.entries[key];
+    }
+    savePHashCache(sess.username, cache);
+
+    const grouped = groupSimilarByHash(entries, maxDistance).map((group) => {
+      const sorted = [...group].sort((a, b) => a.filename.localeCompare(b.filename, 'it'));
+      return {
+        filenames: sorted.map((g) => g.filename),
+        distances: sorted.map((g) => hammingDistanceHex(sorted[0].phash, g.phash)),
+      };
+    });
+
+    res.json({
+      groups: grouped,
+      scanned: recomputed,
+      cached: cacheHits,
+      total: entries.length,
+      threshold: maxDistance,
+    });
+  });
+
+  // ==========================================================================
+  // v1.4.0 — NOTIFICHE PUSH WEB (VAPID): iscrizione/disicrizione dispositivi
+  // ==========================================================================
+  app.get('/api/push/vapid-key', (_req: Request, res: Response) => {
+    const key = getVapidPublicKey();
+    if (!key) {
+      res.status(503).json({ error: 'Notifiche push non disponibili sul server' });
+      return;
+    }
+    res.json({ publicKey: key });
+  });
+
+  app.post('/api/push/subscribe', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const sub = req.body?.subscription;
+    const endpoint = typeof sub?.endpoint === 'string' ? sub.endpoint : '';
+    const p256dh = typeof sub?.keys?.p256dh === 'string' ? sub.keys.p256dh : '';
+    const auth = typeof sub?.keys?.auth === 'string' ? sub.keys.auth : '';
+    if (!/^https:\/\/.{10,2000}$/.test(endpoint) || !p256dh || !auth) {
+      res.status(400).json({ error: 'Subscription push non valida' });
+      return;
+    }
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const total = addUserSubscription(userFolder, {
+      endpoint,
+      keys: { p256dh, auth },
+      userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
+      createdAt: Date.now(),
+    });
+    res.json({ success: true, subscriptions: total });
+  });
+
+  app.post('/api/push/unsubscribe', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint : '';
+    if (!endpoint) {
+      res.status(400).json({ error: 'Endpoint mancante' });
+      return;
+    }
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const remaining = removeUserSubscription(userFolder, endpoint);
+    res.json({ success: true, subscriptions: remaining });
+  });
+
+  /** Notifica broadcast all'utente (fire-and-forget, mai bloccante). */
+  function notifyUserAsync(username: string, title: string, body: string, tag?: string): void {
+    const userFolder = path.join(UPLOAD_FOLDER, username);
+    void sendPushToUser(userFolder, { title, body, tag });
+  }
+
+  // ==========================================================================
+  // v1.4.0 — CONDIVISIONI PUBBLICHE TEMPORANEE (link opachi, revocabili)
+  // ==========================================================================
+  app.post('/api/shares/create', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const rawFilenames: unknown[] = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const filenames = rawFilenames
+      .filter((f): f is string => isValidVaultFilename(f))
+      .filter((f) => fs.existsSync(path.join(userFolder, f)))
+      .slice(0, 500);
+    if (filenames.length === 0) {
+      res.status(400).json({ error: 'Nessun file valido selezionato' });
+      return;
+    }
+    const expiresInHoursRaw = Number(req.body?.expiresInHours);
+    const expiresInHours =
+      Number.isFinite(expiresInHoursRaw) && expiresInHoursRaw > 0
+        ? Math.min(expiresInHoursRaw, 24 * 365)
+        : 72;
+    const maxDownloadsRaw = Number(req.body?.maxDownloads);
+    const maxDownloads =
+      Number.isFinite(maxDownloadsRaw) && maxDownloadsRaw > 0 ? Math.min(maxDownloadsRaw, 100000) : null;
+    const password = typeof req.body?.password === 'string' ? req.body.password.slice(0, 128) : '';
+
+    const { token, record } = createPublicShare(UPLOAD_FOLDER, getServerSecret(), {
+      owner: sess.username,
+      ownerApiKey: sess.apiKey,
+      filenames,
+      label: typeof req.body?.label === 'string' ? req.body.label : '',
+      expiresInHours,
+      password,
+      maxDownloads,
+    });
+
+    res.json({
+      success: true,
+      url: `/share/${token}`,
+      expiresAt: record.expiresAt,
+      count: record.filenames.length,
+    });
+  });
+
+  app.get('/api/shares', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const all = loadPublicShares(UPLOAD_FOLDER);
+    const mine = Object.values(all)
+      .filter((s) => s.owner === sess.username)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((s) => ({
+        id: s.id,
+        filenames: s.filenames,
+        label: s.label,
+        createdAt: s.createdAt,
+        expiresAt: s.expiresAt,
+        expired: s.expiresAt > 0 && s.expiresAt <= Date.now(),
+        hasPassword: !!s.passwordHash,
+        maxDownloads: s.maxDownloads,
+        downloadCount: s.downloadCount,
+      }));
+    res.json({ shares: mine });
+  });
+
+  app.post('/api/shares/delete', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const id = String(req.body?.id || '');
+    if (!/^[0-9a-f]{64}$/.test(id)) {
+      res.status(400).json({ error: 'ID condivisione non valido' });
+      return;
+    }
+    const all = loadPublicShares(UPLOAD_FOLDER);
+    const rec = all[id];
+    if (!rec || rec.owner !== sess.username) {
+      res.status(404).json({ error: 'Condivisione non trovata' });
+      return;
+    }
+    delete all[id];
+    savePublicShares(UPLOAD_FOLDER, all);
+    res.json({ success: true });
+  });
+
+  // ==========================================================================
+  // v1.4.0 — PAGINE PUBBLICHE DI CONDIVISIONE (senza autenticazione)
+  // ==========================================================================
+  function isShareUnlocked(req: Request, record: PublicShareRecord): boolean {
+    if (!record.passwordHash) return true;
+    const cookies = parseCookies(req.headers.cookie);
+    return cookies[`pc_share_${record.id.slice(0, 16)}`] === shareUnlockCookieValue(
+      // Il client conosce solo il token; ricostruiamo il check dal token in URL
+      String(req.params.token || '')
+    );
+  }
+
+  app.get('/share/:token', (req: Request, res: Response) => {
+    const token = String(req.params.token || '');
+    if (!SHARE_TOKEN_REGEX.test(token)) {
+      res.status(404).setHeader('Content-Type', 'text/html; charset=utf-8').send(renderShareErrorPage('invalid'));
+      return;
+    }
+    const resolved = resolveShareByToken(UPLOAD_FOLDER, token);
+    if ('error' in resolved) {
+      res
+        .status(resolved.error === 'expired' ? 410 : resolved.error === 'exhausted' ? 410 : 404)
+        .setHeader('Content-Type', 'text/html; charset=utf-8')
+        .send(renderShareErrorPage(resolved.error));
+      return;
+    }
+    const { record } = resolved;
+    if (record.passwordHash && !isShareUnlocked(req, record)) {
+      res.status(401).setHeader('Content-Type', 'text/html; charset=utf-8').send(renderSharePasswordPage(token));
+      return;
+    }
+    record.filenames = record.filenames.filter((f) =>
+      fs.existsSync(path.join(UPLOAD_FOLDER, record.owner, f))
+    );
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(
+      renderSharePage({
+        token,
+        filenames: record.filenames,
+        label: record.label,
+        owner: record.owner,
+        expiresAt: record.expiresAt,
+      })
+    );
+  });
+
+  app.post('/share/:token/unlock', (req: Request, res: Response) => {
+    const token = String(req.params.token || '');
+    if (!SHARE_TOKEN_REGEX.test(token)) {
+      res.status(404).setHeader('Content-Type', 'text/html; charset=utf-8').send(renderShareErrorPage('invalid'));
+      return;
+    }
+    const clientIp = String(req.ip || req.socket.remoteAddress || 'unknown');
+    if (isShareUnlockRateLimited(clientIp)) {
+      res
+        .status(429)
+        .setHeader('Content-Type', 'text/html; charset=utf-8')
+        .send(renderSharePasswordPage(token, 'Troppi tentativi. Riprova tra qualche minuto.'));
+      return;
+    }
+    const resolved = resolveShareByToken(UPLOAD_FOLDER, token);
+    if ('error' in resolved) {
+      res.status(410).setHeader('Content-Type', 'text/html; charset=utf-8').send(renderShareErrorPage(resolved.error));
+      return;
+    }
+    const password = typeof req.body?.password === 'string' ? req.body.password.slice(0, 128) : '';
+    if (!verifySharePassword(resolved.record, password)) {
+      res
+        .status(401)
+        .setHeader('Content-Type', 'text/html; charset=utf-8')
+        .send(renderSharePasswordPage(token, 'Password errata.'));
+      return;
+    }
+    res.setHeader(
+      'Set-Cookie',
+      `pc_share_${resolved.id.slice(0, 16)}=${shareUnlockCookieValue(token)}; Path=/share/${token}; HttpOnly; SameSite=Lax; Max-Age=86400${req.secure ? '; Secure' : ''}`
+    );
+    res.redirect(`/share/${token}`);
+  });
+
+  app.get('/share/:token/media/:filename', async (req: Request, res: Response) => {
+    const token = String(req.params.token || '');
+    if (!SHARE_TOKEN_REGEX.test(token)) {
+      res.status(404).send('Link non valido');
+      return;
+    }
+    const resolved = resolveShareByToken(UPLOAD_FOLDER, token);
+    if ('error' in resolved) {
+      res.status(410).send('Link scaduto o non valido');
+      return;
+    }
+    const { id, record } = resolved;
+    if (record.passwordHash && !isShareUnlocked(req, record)) {
+      res.status(401).send('Password richiesta');
+      return;
+    }
+    const filename = String(req.params.filename);
+    if (!isValidVaultFilename(filename) || !record.filenames.includes(filename)) {
+      res.status(404).send('File non condiviso');
+      return;
+    }
+    const ownerFolder = path.join(UPLOAD_FOLDER, record.owner);
+    const safeFilepath = path.resolve(ownerFolder, filename);
+    if (!safeFilepath.startsWith(path.resolve(ownerFolder) + path.sep) || !fs.existsSync(safeFilepath)) {
+      res.status(404).send('File non trovato');
+      return;
+    }
+    const apiKey = unwrapSecret(getServerSecret(), record.keyWrap);
+    if (!apiKey) {
+      res.status(500).send('Condivisione non decifrabile');
+      return;
+    }
+    try {
+      const encrypted = await fs.promises.readFile(safeFilepath);
+      const decrypted = await decryptFileAsync(encrypted, apiKey);
+      const spec = resolveFileViewerSpec(filename);
+      const isExplicitDownload = req.query.download === '1' || req.query.download === 'true';
+      const isDangerousExt = ACTIVE_SCRIPT_EXTS.has(spec.extension);
+
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox"
+      );
+      res.setHeader('Accept-Ranges', 'bytes');
+      const mime = isDangerousExt && !isExplicitDownload ? 'text/plain; charset=utf-8' : spec.mimeType;
+      res.setHeader('Content-Type', mime);
+      res.setHeader(
+        'Content-Disposition',
+        `${isExplicitDownload || isDangerousExt ? 'attachment' : 'inline'}; filename="${encodeURIComponent(filename)}"`
+      );
+
+      if (isExplicitDownload) {
+        incrementShareDownloadCount(UPLOAD_FOLDER, id);
+      }
+
+      const parsedRange = parseHttpByteRange(req.headers.range, decrypted.length);
+      if (parsedRange.status === 'invalid') {
+        res.status(416).setHeader('Content-Range', `bytes */${decrypted.length}`).end();
+        return;
+      }
+      if (parsedRange.status === 'ok') {
+        const chunk = decrypted.subarray(parsedRange.start, parsedRange.end + 1);
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${parsedRange.start}-${parsedRange.end}/${decrypted.length}`);
+        res.setHeader('Content-Length', String(chunk.length));
+        res.send(chunk);
+        return;
+      }
+      res.setHeader('Content-Length', String(decrypted.length));
+      res.send(decrypted);
+    } catch {
+      res.status(500).send('Errore durante la decrittografia.');
+    }
+  });
+
+  // ==========================================================================
+  // v1.4.0 — ALBUM MULTI-UTENTE (condivisione tra utenti registrati)
+  // ==========================================================================
+  app.post('/api/albums/share', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const albumName = String(req.body?.album || '').trim();
+    const targetUser = String(req.body?.username || '').trim();
+    const role = req.body?.role === 'contributor' ? 'contributor' : 'viewer';
+    if (!isValidAlbumName(albumName)) {
+      res.status(400).json({ error: 'Nome album non valido' });
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(targetUser) || targetUser === sess.username) {
+      res.status(400).json({ error: 'Utente destinatario non valido' });
+      return;
+    }
+    if (!findUser(targetUser)) {
+      res.status(404).json({ error: `Utente "${targetUser}" inesistente su questo server` });
+      return;
+    }
+    const data = loadUserAlbums(sess.username);
+    if (!data.albums.includes(albumName)) {
+      res.status(404).json({ error: 'Album non trovato' });
+      return;
+    }
+    const record = upsertAlbumShare(
+      UPLOAD_FOLDER,
+      getServerSecret(),
+      sess.username,
+      albumName,
+      sess.apiKey,
+      targetUser,
+      role
+    );
+    notifyUserAsync(
+      targetUser,
+      '📁 Album condiviso con te',
+      `${sess.username} ha condiviso l'album "${albumName}" (${role === 'contributor' ? 'puoi anche caricare' : 'sola lettura'}).`,
+      'photocloud-album-share'
+    );
+    res.json({ success: true, shareId: record.id, participants: record.participants });
+  });
+
+  app.post('/api/albums/unshare', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const albumName = String(req.body?.album || '').trim();
+    const targetUser = String(req.body?.username || '').trim();
+    const all = loadAlbumShares(UPLOAD_FOLDER);
+    let changed = false;
+    for (const rec of Object.values(all)) {
+      if (rec.owner !== sess.username || rec.album !== albumName) continue;
+      if (targetUser) {
+        if (delete rec.participants[targetUser]) changed = true;
+      } else {
+        delete all[rec.id];
+        changed = true;
+      }
+    }
+    if (changed) saveAlbumShares(UPLOAD_FOLDER, all);
+    res.json({ success: changed });
+  });
+
+  app.get('/api/albums/shared', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const all = loadAlbumShares(UPLOAD_FOLDER);
+    const ownedByMe: Array<Record<string, unknown>> = [];
+    const sharedWithMe: Array<Record<string, unknown>> = [];
+    for (const rec of Object.values(all)) {
+      if (rec.owner === sess.username) {
+        const albumsData = loadUserAlbums(rec.owner);
+        if (!albumsData.albums.includes(rec.album)) continue;
+        ownedByMe.push({
+          id: rec.id,
+          album: rec.album,
+          participants: rec.participants,
+          createdAt: rec.createdAt,
+          itemCount: listAlbumSharedFiles(rec.owner, rec.album).length,
+        });
+      } else if (rec.participants[sess.username]) {
+        const albumsData = loadUserAlbums(rec.owner);
+        if (!albumsData.albums.includes(rec.album)) continue;
+        sharedWithMe.push({
+          id: rec.id,
+          owner: rec.owner,
+          album: rec.album,
+          role: rec.participants[sess.username],
+          createdAt: rec.createdAt,
+          itemCount: listAlbumSharedFiles(rec.owner, rec.album).length,
+        });
+      }
+    }
+    res.json({ ownedByMe, sharedWithMe });
+  });
+
+  function resolveAlbumShareForUser(
+    req: Request,
+    sess: SessionData
+  ): { record: ReturnType<typeof loadAlbumShares>[string]; role: 'owner' | 'viewer' | 'contributor' } | null {
+    const shareId = String(req.params.shareId || '');
+    if (!/^[0-9a-f]{32,64}$/.test(shareId)) return null;
+    const all = loadAlbumShares(UPLOAD_FOLDER);
+    const record = all[shareId];
+    if (!record) return null;
+    const albumsData = loadUserAlbums(record.owner);
+    if (!albumsData.albums.includes(record.album)) return null;
+    if (record.owner === sess.username) return { record, role: 'owner' };
+    const role = record.participants[sess.username];
+    if (!role) return null;
+    return { record, role };
+  }
+
+  app.get('/api/shared-albums/:shareId/media', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const resolved = resolveAlbumShareForUser(req, sess);
+    if (!resolved) {
+      res.status(404).json({ error: 'Album condiviso non trovato o accesso negato' });
+      return;
+    }
+    const { record, role } = resolved;
+    res.json({
+      id: record.id,
+      owner: record.owner,
+      album: record.album,
+      role,
+      items: listAlbumSharedFiles(record.owner, record.album),
+    });
+  });
+
+  app.get('/api/shared-albums/:shareId/file/:filename', async (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).send('Accesso negato');
+      return;
+    }
+    const resolved = resolveAlbumShareForUser(req, sess);
+    if (!resolved) {
+      res.status(404).send('Album condiviso non trovato o accesso negato');
+      return;
+    }
+    const { record } = resolved;
+    const filename = String(req.params.filename);
+    if (!isValidVaultFilename(filename)) {
+      res.status(403).send('Accesso non autorizzato.');
+      return;
+    }
+    const albumsData = loadUserAlbums(record.owner);
+    if (albumsData.fileAlbums[filename] !== record.album) {
+      res.status(403).send('File non appartenente a questo album condiviso');
+      return;
+    }
+    const ownerFolder = path.resolve(UPLOAD_FOLDER, record.owner);
+    const safeFilepath = path.resolve(ownerFolder, filename);
+    if (!safeFilepath.startsWith(ownerFolder + path.sep) || !fs.existsSync(safeFilepath)) {
+      res.status(404).send('File non trovato');
+      return;
+    }
+    const apiKey = unwrapSecret(getServerSecret(), record.keyWrap);
+    if (!apiKey) {
+      res.status(500).send('Album condiviso non decifrabile');
+      return;
+    }
+    try {
+      const encrypted = await fs.promises.readFile(safeFilepath);
+      const decrypted = await decryptFileAsync(encrypted, apiKey);
+      const spec = resolveFileViewerSpec(filename);
+      const isDangerousExt = ACTIVE_SCRIPT_EXTS.has(spec.extension);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox"
+      );
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Type', isDangerousExt ? 'text/plain; charset=utf-8' : spec.mimeType);
+      res.setHeader(
+        'Content-Disposition',
+        `${isDangerousExt ? 'attachment' : 'inline'}; filename="${encodeURIComponent(filename)}"`
+      );
+      const parsedRange = parseHttpByteRange(req.headers.range, decrypted.length);
+      if (parsedRange.status === 'ok') {
+        const chunk = decrypted.subarray(parsedRange.start, parsedRange.end + 1);
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${parsedRange.start}-${parsedRange.end}/${decrypted.length}`);
+        res.setHeader('Content-Length', String(chunk.length));
+        res.send(chunk);
+        return;
+      }
+      res.setHeader('Content-Length', String(decrypted.length));
+      res.send(decrypted);
+    } catch {
+      res.status(500).send('Errore durante la decrittografia.');
+    }
+  });
+
+  app.post(
+    '/api/shared-albums/:shareId/upload',
+    (req: Request, res: Response, next: NextFunction) => {
+      const sess = getSession(req);
+      if (!sess) {
+        res.status(403).json({ error: 'Accesso negato' });
+        return;
+      }
+      upload.array('file[]')(req, res, (err: unknown) => {
+        if (err) {
+          cleanupUploadedFiles(req);
+          res.status(400).json({ error: 'Upload non valido' });
+          return;
+        }
+        next();
+      });
+    },
+    async (req: Request, res: Response) => {
+      try {
+        const sess = getSession(req);
+        if (!sess) {
+          res.status(403).json({ error: 'Accesso negato' });
+          return;
+        }
+        const resolved = resolveAlbumShareForUser(req, sess);
+        if (!resolved || resolved.role !== 'contributor') {
+          res.status(403).json({ error: 'Solo i collaboratori possono caricare in questo album' });
+          return;
+        }
+        const files = req.files as Express.Multer.File[] | undefined;
+        if (!files || files.length === 0) {
+          res.status(400).json({ error: 'Nessun file' });
+          return;
+        }
+        const { record } = resolved;
+        const apiKey = unwrapSecret(getServerSecret(), record.keyWrap);
+        if (!apiKey) {
+          res.status(500).json({ error: 'Album condiviso non decifrabile' });
+          return;
+        }
+        const ownerFolder = path.join(UPLOAD_FOLDER, record.owner);
+        const uploadedFilenames: string[] = [];
+        for (const file of files) {
+          const rawOrig = path.basename(file.originalname || `file_${Date.now()}`);
+          const ext = path.extname(rawOrig) || '.bin';
+          let filename = '';
+          let filepath = '';
+          while (true) {
+            filename = `${crypto.randomBytes(8).toString('hex')}${ext}`;
+            filepath = path.join(ownerFolder, filename);
+            if (!fs.existsSync(filepath)) break;
+          }
+          const rawBuf = readUploadedFileBuffer(file);
+          const encrypted = await encryptFileAsync(rawBuf, apiKey);
+          await fs.promises.writeFile(filepath, encrypted);
+          uploadedFilenames.push(filename);
+        }
+        const albumsData = loadUserAlbums(record.owner);
+        for (const fn of uploadedFilenames) {
+          albumsData.fileAlbums[fn] = record.album;
+        }
+        saveUserAlbums(record.owner, albumsData);
+        notifyUserAsync(
+          record.owner,
+          '📥 Nuovo contenuto condiviso',
+          `${sess.username} ha caricato ${uploadedFilenames.length} file nell'album "${record.album}".`,
+          'photocloud-album-upload'
+        );
+        res.json({
+          success: true,
+          uploadedCount: uploadedFilenames.length,
+          uploadedFilenames,
+          items: listAlbumSharedFiles(record.owner, record.album),
+        });
+      } catch (e: unknown) {
+        res.status(500).json({ error: `Errore caricamento: ${e instanceof Error ? e.message : String(e)}` });
+      } finally {
+        cleanupUploadedFiles(req);
+      }
+    }
+  );
 
   // --- APK & GITHUB ACTIONS / RELEASE ENDPOINTS ---
   // Release publishing is deliberately not exposed over HTTP. Use the CLI/workflow.
@@ -963,6 +1939,15 @@ async function startServer() {
           mediaFiles: activeMediaFiles,
           storageStats,
         });
+
+        if (uploadedFilenames.length > 0) {
+          notifyUserAsync(
+            sess.username,
+            '☁️ PhotoCloud — Upload completato',
+            `${uploadedFilenames.length} file caricati nel tuo archivio crittografato.`,
+            'photocloud-upload'
+          );
+        }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         res.status(500).json({ error: `Errore durante il caricamento: ${msg}` });
@@ -1588,6 +2573,12 @@ async function startServer() {
           totalBytes: buf.length,
           processedBytes: buf.length,
         });
+        notifyUserAsync(
+          sess.username,
+          '📦 PhotoCloud — Archivio ZIP pronto',
+          `L'esportazione di ${total} file è pronta per il download.`,
+          'photocloud-zip'
+        );
       } catch {
         ZIP_TASKS.set(taskId, {
           owner: sess.username,
@@ -2071,6 +3062,13 @@ async function startServer() {
   const port = Number(process.env.PORT) || 3000;
   app.listen(port, '0.0.0.0', () => {
     console.log(`PhotoCloud server listening on http://0.0.0.0:${port}`);
+  });
+
+  // Inizializza il servizio Web Push (chiavi VAPID persistenti) in background.
+  void initPushService(UPLOAD_FOLDER).then((res) => {
+    if (res) {
+      console.log('PhotoCloud Web Push attivo (endpoint /api/push/* disponibili)');
+    }
   });
 }
 
