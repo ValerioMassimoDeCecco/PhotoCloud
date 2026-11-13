@@ -742,12 +742,12 @@ test('Auto-update anti-loop: APK version must be newer than installed and match 
   );
 
   // 4. Il server deriva versione e APK dalla configurazione Gradle reale
-  const serverTs = read('server.ts');
-  assert.ok(serverTs.includes('function readAndroidAppVersion()'));
-  assert.ok(serverTs.includes('function resolveReleaseApk('));
-  assert.ok(serverTs.includes("const versionName = manifestAheadOfCode"));
+  const androidRoutesTs = read('src/routes/androidRoutes.ts');
+  assert.ok(androidRoutesTs.includes('function readAndroidAppVersion()'));
+  assert.ok(androidRoutesTs.includes('function resolveReleaseApk('));
+  assert.ok(androidRoutesTs.includes("const versionName = manifestAheadOfCode"));
   assert.equal(
-    /versionName:\s*String\(manifestData\.versionName\s*\|\|\s*'1\.2\.5'\)/.test(serverTs),
+    /versionName:\s*String\(manifestData\.versionName\s*\|\|\s*'1\.2\.5'\)/.test(androidRoutesTs),
     false,
     'Il manifest server non deve più avere la versione hardcoded 1.2.5'
   );
@@ -1384,12 +1384,14 @@ test('v1.4.0 Android Kotlin Compilation Safety: ParsedQuery properties, Icon imp
   }
 
   // 4c. Server v1.4.1: endpoint EXIF/mappa e pagina /map
-  const serverTs = read('server.ts');
-  assert.ok(serverTs.includes("app.get('/api/exif/:filename'"));
-  assert.ok(serverTs.includes("app.get('/api/map-photos'"));
-  assert.ok(serverTs.includes("app.get('/map'"));
-  assert.ok(serverTs.includes('parseExifFromJpeg'));
-  assert.ok(serverTs.includes('renderMapPage'));
+  const intelligenceRoutesTs = read('src/routes/intelligenceRoutes.ts');
+  const serverContextTs = read('src/lib/serverContext.ts');
+  const pageAndAuthRoutesTs = read('src/routes/pageAndAuthRoutes.ts');
+  assert.ok(intelligenceRoutesTs.includes("router.get('/api/exif/:filename'"));
+  assert.ok(intelligenceRoutesTs.includes("router.get('/api/map-photos'"));
+  assert.ok(pageAndAuthRoutesTs.includes("router.get('/map'"));
+  assert.ok(serverContextTs.includes('parseExifFromJpeg'));
+  assert.ok(pageAndAuthRoutesTs.includes('renderMapPage'));
   assert.ok(fs.existsSync(path.resolve(root, 'static/scripts/map.js')));
   assert.ok(fs.existsSync(path.resolve(root, 'static/scripts/exif-panel.js')));
   assert.ok(fs.existsSync(path.resolve(root, 'src/lib/exif.ts')));

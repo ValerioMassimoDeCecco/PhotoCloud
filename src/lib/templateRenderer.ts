@@ -135,6 +135,154 @@ function getCategoryIcon(category?: string, ext?: string): string {
   return 'insert_drive_file';
 }
 
+function getStaticAssetVersion(relPath: string): string {
+  try {
+    const fullPath = path.resolve(process.cwd(), 'static', relPath);
+    const stat = fs.statSync(fullPath);
+    return String(Math.floor(stat.mtimeMs));
+  } catch {
+    return '1';
+  }
+}
+
+export interface RenderMediaCardOptions {
+  fromTrash: boolean;
+  isFavorite: boolean;
+}
+
+export function renderMediaCardHtml(
+  item: MediaItem,
+  index: number,
+  { fromTrash, isFavorite }: RenderMediaCardOptions
+): string {
+  const file = escapeHtml(item.filename);
+  const encodedFilename = encodeURIComponent(item.filename);
+  const ext = file.split('.').pop()?.toLowerCase() || '';
+  const isImg = (
+    fromTrash
+      ? ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic']
+      : ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic', 'avif']
+  ).includes(ext);
+  const isVid = ['mp4', 'mov', 'webm', 'mkv'].includes(ext);
+  const isMedia = item.isMedia !== undefined ? item.isMedia : isImg || isVid;
+  const rawCategory = item.category || (isMedia ? 'media' : 'other');
+  const category = escapeHtml(rawCategory);
+  const album = escapeHtml(item.album || '');
+  const sizeBytes = Number(item.size) || 0;
+  const humanSize = formatFileSize(sizeBytes);
+
+  let mediaTag = '';
+  if (isImg) {
+    mediaTag = `<img src="/media/${encodedFilename}${fromTrash ? '?from_trash=true' : ''}" alt="${file}" loading="lazy">`;
+  } else if (isVid) {
+    const videoMime = fromTrash
+      ? 'video/mp4'
+      : ext === 'webm'
+      ? 'video/webm'
+      : ext === 'mov'
+      ? 'video/quicktime'
+      : ext === 'mkv'
+      ? 'video/x-matroska'
+      : 'video/mp4';
+    mediaTag = fromTrash
+      ? `<video preload="metadata">
+                                <source src="/media/${encodedFilename}?from_trash=true#t=0.5" type="${videoMime}">
+                            </video>`
+      : `<video preload="metadata" muted playsinline>
+                        <source src="/media/${encodedFilename}#t=0.5" type="${videoMime}">
+                    </video>
+                    <div class="video-overlay"><span class="material-icons">play_circle</span></div>`;
+  } else {
+    const iconName = escapeHtml(getCategoryIcon(rawCategory, ext));
+    mediaTag = fromTrash
+      ? `<div class="cloud-file-preview" data-category="${category}">
+                            <div class="cloud-file-icon-wrap">
+                                <span class="material-icons">${iconName}</span>
+                                <span class="cloud-file-ext">${escapeHtml(ext.toUpperCase() || 'FILE')}</span>
+                            </div>
+                            <div class="cloud-file-meta">
+                                <span class="cloud-file-title">${file}</span>
+                                <span class="cloud-file-sub">${humanSize}</span>
+                            </div>
+                        </div>`
+      : `<div class="cloud-file-preview" data-category="${category}">
+                        <div class="cloud-file-icon-wrap">
+                            <span class="material-icons">${iconName}</span>
+                            <span class="cloud-file-ext">${escapeHtml(ext.toUpperCase() || 'FILE')}</span>
+                        </div>
+                        <div class="cloud-file-meta">
+                            <span class="cloud-file-title" title="${file}">${file}</span>
+                            <span class="cloud-file-sub">${humanSize}${album ? ` • ${album}` : ''}</span>
+                        </div>
+                    </div>`;
+  }
+
+  if (fromTrash) {
+    return `
+                <div class="media-card-wrapper" data-size="${sizeBytes}" data-category="${category}">
+                    <div class="media-card clickable-media" data-filename="${file}">
+                        ${mediaTag}
+                        <div class="media-actions">
+                            <button class="btn icon restore-btn" title="Ripristina" data-filename="${file}">
+                                <span class="material-icons">restore_from_trash</span>
+                            </button>
+                            <button class="btn icon danger permanent-delete-btn" title="Elimina Definitivamente" data-filename="${file}">
+                                <span class="material-icons">delete_forever</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>`;
+  }
+
+  const albumBadge =
+    album && isMedia
+      ? `<span class="media-album-badge" title="Album: ${album}"><span class="material-icons">photo_album</span>${album}</span>`
+      : '';
+
+  const favoriteBadge = isMedia
+    ? `<button type="button" class="media-fav-badge ${isFavorite ? 'is-favourite' : ''}" title="${isFavorite ? 'Rimuovi dai Preferiti' : 'Aggiungi ai Preferiti'}" aria-label="Preferito" onclick="window.toggleFavoriteFromGallery && window.toggleFavoriteFromGallery(this.closest('[data-filename]').dataset.filename, event)"><span class="material-icons">${isFavorite ? 'star' : 'star_border'}</span></button>`
+    : '';
+
+  return `
+        <div class="media-card-wrapper ${isMedia ? 'is-media-item' : 'is-cloud-file'}"
+             data-timestamp="${Number(item.timestamp) || 0}"
+             data-filename="${file}"
+             data-size="${sizeBytes}"
+             data-is-media="${isMedia ? 'true' : 'false'}"
+             data-category="${category}"
+             data-album="${album}"
+             data-favorite="${isFavorite ? 'true' : 'false'}">
+            <div class="media-card ${isMedia ? 'clickable-media' : 'clickable-cloud-file'}" data-index="${index}" data-filename="${file}">
+                ${mediaTag}
+                ${albumBadge}
+                ${favoriteBadge}
+                <div class="media-actions">
+                    ${
+                      isImg || isVid
+                        ? `<button type="button" class="btn icon edit-photo-btn" title="${isVid ? 'Modifica Video' : 'Modifica Foto'}" aria-label="Modifica ${file}" onclick="window.openPhotoEditor && window.openPhotoEditor(this.closest('[data-filename]').dataset.filename, event)">
+                            <span class="material-icons">tune</span>
+                        </button>`
+                        : ''
+                    }
+                    ${
+                      !isMedia
+                        ? `<button type="button" class="btn icon open-doc-btn" title="Apri documento o file" aria-label="Apri ${file}" onclick="window.openCloudFile && window.openCloudFile(this.closest('[data-filename]').dataset.filename, ${sizeBytes}, false, event)">
+                            <span class="material-icons">open_in_new</span>
+                        </button>`
+                        : ''
+                    }
+                    <form action="/trash/${encodedFilename}" method="POST" class="delete-form" data-filename="${file}">
+                        <button type="submit" class="btn icon danger" title="Sposta nel Cestino" onclick="handleDelete(event, this)">
+                            <span class="material-icons">delete</span>
+                        </button>
+                    </form>
+                </div>
+            </div>
+            <div class="selection-overlay"></div>
+            <input type="checkbox" class="media-checkbox" data-filename="${file}" onclick="event.stopPropagation();">
+        </div>`;
+}
+
 function renderWithBase(stylesBlock: string, contentBlock: string, scriptsBlock: string): string {
   let base = readTemplate('base.html');
   base = base.replace(
@@ -195,96 +343,12 @@ export function renderGalleryTemplate(
       : '';
 
   const cardsHtml = allFiles
-    .map((item, index) => {
-      const file = escapeHtml(item.filename);
-      const ext = file.split('.').pop()?.toLowerCase() || '';
-      const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic', 'avif'].includes(ext);
-      const isVid = ['mp4', 'mov', 'webm', 'mkv'].includes(ext);
-      const isMedia = item.isMedia !== undefined ? item.isMedia : isImg || isVid;
-      const category = escapeHtml(item.category || (isMedia ? 'media' : 'other'));
-      const album = escapeHtml(item.album || '');
-      const sizeBytes = Number(item.size) || 0;
-      const humanSize = formatFileSize(sizeBytes);
-
-      let mediaTag = '';
-      if (isImg) {
-        mediaTag = `<img src="/media/${encodeURIComponent(item.filename)}" alt="${file}" loading="lazy">`;
-      } else if (isVid) {
-        const videoMime =
-          ext === 'webm'
-            ? 'video/webm'
-            : ext === 'mov'
-            ? 'video/quicktime'
-            : ext === 'mkv'
-            ? 'video/x-matroska'
-            : 'video/mp4';
-        mediaTag = `<video preload="metadata" muted playsinline>
-                        <source src="/media/${encodeURIComponent(item.filename)}#t=0.5" type="${videoMime}">
-                    </video>
-                    <div class="video-overlay"><span class="material-icons">play_circle</span></div>`;
-      } else {
-        const iconName = escapeHtml(getCategoryIcon(item.category, ext));
-        mediaTag = `<div class="cloud-file-preview" data-category="${category}">
-                        <div class="cloud-file-icon-wrap">
-                            <span class="material-icons">${iconName}</span>
-                            <span class="cloud-file-ext">${escapeHtml(ext.toUpperCase() || 'FILE')}</span>
-                        </div>
-                        <div class="cloud-file-meta">
-                            <span class="cloud-file-title" title="${file}">${file}</span>
-                            <span class="cloud-file-sub">${humanSize}${album ? ` • ${album}` : ''}</span>
-                        </div>
-                    </div>`;
-      }
-
-      const albumBadge =
-        album && isMedia
-          ? `<span class="media-album-badge" title="Album: ${album}"><span class="material-icons">photo_album</span>${album}</span>`
-          : '';
-
-      const isFavorite = favoritesSet.has(item.filename);
-      const favoriteBadge = isMedia
-        ? `<button type="button" class="media-fav-badge ${isFavorite ? 'is-favourite' : ''}" title="${isFavorite ? 'Rimuovi dai Preferiti' : 'Aggiungi ai Preferiti'}" aria-label="Preferito" onclick="window.toggleFavoriteFromGallery && window.toggleFavoriteFromGallery(this.closest('[data-filename]').dataset.filename, event)"><span class="material-icons">${isFavorite ? 'star' : 'star_border'}</span></button>`
-        : '';
-
-      return `
-        <div class="media-card-wrapper ${isMedia ? 'is-media-item' : 'is-cloud-file'}"
-             data-timestamp="${Number(item.timestamp) || 0}"
-             data-filename="${file}"
-             data-size="${sizeBytes}"
-             data-is-media="${isMedia ? 'true' : 'false'}"
-             data-category="${category}"
-             data-album="${album}"
-             data-favorite="${isFavorite ? 'true' : 'false'}">
-            <div class="media-card ${isMedia ? 'clickable-media' : 'clickable-cloud-file'}" data-index="${index}" data-filename="${file}">
-                ${mediaTag}
-                ${albumBadge}
-                ${favoriteBadge}
-                <div class="media-actions">
-                    ${
-                      isImg || isVid
-                        ? `<button type="button" class="btn icon edit-photo-btn" title="${isVid ? 'Modifica Video' : 'Modifica Foto'}" aria-label="Modifica ${file}" onclick="window.openPhotoEditor && window.openPhotoEditor(this.closest('[data-filename]').dataset.filename, event)">
-                            <span class="material-icons">tune</span>
-                        </button>`
-                        : ''
-                    }
-                    ${
-                      !isMedia
-                        ? `<button type="button" class="btn icon open-doc-btn" title="Apri documento o file" aria-label="Apri ${file}" onclick="window.openCloudFile && window.openCloudFile(this.closest('[data-filename]').dataset.filename, ${sizeBytes}, false, event)">
-                            <span class="material-icons">open_in_new</span>
-                        </button>`
-                        : ''
-                    }
-                    <form action="/trash/${encodeURIComponent(item.filename)}" method="POST" class="delete-form" data-filename="${file}">
-                        <button type="submit" class="btn icon danger" title="Sposta nel Cestino" onclick="handleDelete(event, this)">
-                            <span class="material-icons">delete</span>
-                        </button>
-                    </form>
-                </div>
-            </div>
-            <div class="selection-overlay"></div>
-            <input type="checkbox" class="media-checkbox" data-filename="${file}" onclick="event.stopPropagation();">
-        </div>`;
-    })
+    .map((item, index) =>
+      renderMediaCardHtml(item, index, {
+        fromTrash: false,
+        isFavorite: favoritesSet.has(item.filename),
+      })
+    )
     .join('\n');
 
   const styles = `<link rel="stylesheet" href="/static/styles/gallery.css">`;
@@ -671,6 +735,7 @@ export function renderGalleryTemplate(
 <form action="/logout" method="POST" id="logout-form" style="display:none;"></form>
 `;
 
+  const galleryInitVersion = getStaticAssetVersion('scripts/gallery-init.js');
   const scripts = `
 <script src="/static/scripts/duplicates.js"></script>
 <script src="/static/scripts/selection.js"></script>
@@ -680,160 +745,7 @@ export function renderGalleryTemplate(
 <script src="/static/scripts/slideshow.js"></script>
 <script src="/static/scripts/timeline-scrubber.js"></script>
 <script src="/static/scripts/cloud-features.js"></script>
-
-<script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const themeToggleBtn = document.getElementById('theme-toggle-btn');
-        if (!themeToggleBtn) return;
-
-        const body = document.body;
-        const icon = themeToggleBtn.querySelector('.material-icons');
-
-        const applyTheme = (theme) => {
-            if (theme === 'dark') {
-                body.classList.add('dark-mode');
-                icon.textContent = 'dark_mode';
-                themeToggleBtn.title = 'Passa a tema chiaro';
-            } else {
-                body.classList.remove('dark-mode');
-                icon.textContent = 'light_mode';
-                themeToggleBtn.title = 'Passa a tema scuro';
-            }
-            if (window.PhotoCloudThemeManager && typeof window.PhotoCloudThemeManager.refresh === 'function') {
-                window.PhotoCloudThemeManager.refresh();
-            }
-        };
-
-        const toggleTheme = () => {
-            const newTheme = body.classList.contains('dark-mode') ? 'light' : 'dark';
-            localStorage.setItem('theme', newTheme);
-            applyTheme(newTheme);
-        };
-
-        const savedTheme = localStorage.getItem('theme');
-        const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        applyTheme(savedTheme || (prefersDark ? 'dark' : 'light'));
-        themeToggleBtn.addEventListener('click', toggleTheme);
-    });
-</script>
-
-<script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const groupingControls = document.querySelector('.grouping-controls');
-        if (groupingControls) {
-            groupingControls.style.display = 'inline-flex';
-        }
-
-        const logoutBtn = document.getElementById('logout-btn');
-        if (logoutBtn) {
-            logoutBtn.addEventListener('click', () => document.getElementById('logout-form').submit());
-        }
-
-        const galleryGrid = document.querySelector('.gallery-grid');
-        if (galleryGrid) {
-            galleryGrid.addEventListener('click', (event) => {
-                const clickedCloudFile = event.target.closest('.clickable-cloud-file');
-                if (clickedCloudFile && !event.target.closest('.media-actions') && !event.target.matches('.media-checkbox')) {
-                    const df = clickedCloudFile.getAttribute('data-filename');
-                    const wrapper = clickedCloudFile.closest('.media-card-wrapper');
-                    const sz = Number(wrapper?.getAttribute('data-size') || 0);
-                    const fromTrash = Boolean(clickedCloudFile.closest('#pane-trash'));
-                    if (df && window.openCloudFile) {
-                        window.openCloudFile(df, sz, fromTrash, event);
-                    }
-                    return;
-                }
-
-                const clickedCard = event.target.closest('.clickable-media');
-                if (clickedCard && !event.target.closest('.media-actions') && !event.target.closest('.delete-form') && !event.target.matches('.media-checkbox')) {
-                    const activePane = clickedCard.closest('.keep-alive-pane') || galleryGrid;
-                    const allCards = Array.from(activePane.querySelectorAll('.clickable-media'));
-                    const fromTrash = activePane.id === 'pane-trash';
-                    const allUrls = allCards.map(card => {
-                        const df = card.getAttribute('data-filename');
-                        if (df) return \`/media/\${encodeURIComponent(df)}\${fromTrash ? '?from_trash=true' : ''}\`;
-                        const img = card.querySelector('img');
-                        if (img && img.getAttribute('src')) return img.getAttribute('src');
-                        const src = card.querySelector('video source');
-                        return src ? src.getAttribute('src').split('#')[0] : '';
-                    }).filter(Boolean);
-
-                    const clickedIndex = Math.max(0, allCards.indexOf(clickedCard));
-                    const filename = clickedCard.getAttribute('data-filename') || '';
-                    const imgEl = clickedCard.querySelector('img');
-                    const url = filename
-                        ? \`/media/\${encodeURIComponent(filename)}\${fromTrash ? '?from_trash=true' : ''}\`
-                        : (imgEl ? imgEl.getAttribute('src') : allUrls[clickedIndex]);
-                    const isVideo = /\\.(mp4|mov|avi|mkv|webm)(\\?.*)?$/i.test(url || '');
-
-                    if (window.openLightbox && url) {
-                        window.openLightbox(url, isVideo, clickedIndex, allUrls);
-                    }
-                }
-            });
-        }
-    });
-
-    async function handleDelete(event, button) {
-        event.stopPropagation();
-        event.preventDefault();
-        
-        if (!confirm('Spostare questo elemento nel cestino?')) return;
-        
-        const form = button.closest('form');
-        const cardWrapper = form.closest('.media-card-wrapper');
-        const parentNode = cardWrapper ? cardWrapper.parentNode : null;
-        const nextSibling = cardWrapper ? cardWrapper.nextSibling : null;
-
-        if (cardWrapper) {
-            cardWrapper.dataset.removed = 'true';
-            cardWrapper.remove();
-        }
-        if (window.refreshGalleryGrouping) {
-            window.refreshGalleryGrouping();
-        }
-        
-        try {
-            const response = await fetch(form.action, {
-                method: 'POST',
-                headers: { 
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json'
-                }
-            });
-            
-            const result = await response.json();
-
-            if (!result.success) {
-                if (cardWrapper) {
-                    delete cardWrapper.dataset.removed;
-                }
-                if (parentNode && cardWrapper) {
-                    parentNode.insertBefore(cardWrapper, nextSibling);
-                }
-                if (window.refreshGalleryGrouping) {
-                    window.refreshGalleryGrouping();
-                }
-                alert(\`Errore: \${result.error || 'Impossibile spostare il file nel cestino'}\`);
-            } else if (window.refreshTrashPane) {
-                window.refreshTrashPane();
-            }
-        } catch (error) {
-            if (cardWrapper) {
-                delete cardWrapper.dataset.removed;
-            }
-            if (parentNode && cardWrapper) {
-                parentNode.insertBefore(cardWrapper, nextSibling);
-            }
-            if (window.refreshGalleryGrouping) {
-                window.refreshGalleryGrouping();
-            }
-            alert('Errore di comunicazione con il server.');
-            console.error('Errore durante lo spostamento nel cestino:', error);
-        }
-    }
-    window.handleDelete = handleDelete;
-</script>
+<script src="/static/scripts/gallery-init.js?v=${encodeURIComponent(galleryInitVersion)}"></script>
 `;
 
   return renderWithBase(styles, content, scripts);
@@ -881,50 +793,7 @@ export function renderTrashTemplate(trashedFiles: MediaItem[], activeFiles: Medi
                     <p>I file eliminati appariranno qui.</p>
                 </div>`
       : trashedFiles
-          .map((item) => {
-            const file = escapeHtml(item.filename);
-            const ext = file.split('.').pop()?.toLowerCase() || '';
-            const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic'].includes(ext);
-            const isVid = ['mp4', 'mov', 'webm', 'mkv'].includes(ext);
-            const isMedia = item.isMedia !== undefined ? item.isMedia : isImg || isVid;
-            const category = item.category || (isMedia ? 'media' : 'other');
-
-            let mediaTag = '';
-            if (isImg) {
-              mediaTag = `<img src="/media/${encodeURIComponent(item.filename)}?from_trash=true" alt="${file}" loading="lazy">`;
-            } else if (isVid) {
-              mediaTag = `<video preload="metadata">
-                                <source src="/media/${encodeURIComponent(item.filename)}?from_trash=true#t=0.5" type="video/mp4">
-                            </video>`;
-            } else {
-              const iconName = getCategoryIcon(category, ext);
-              mediaTag = `<div class="cloud-file-preview" data-category="${category}">
-                            <div class="cloud-file-icon-wrap">
-                                <span class="material-icons">${iconName}</span>
-                                <span class="cloud-file-ext">${escapeHtml(ext.toUpperCase() || 'FILE')}</span>
-                            </div>
-                            <div class="cloud-file-meta">
-                                <span class="cloud-file-title">${file}</span>
-                                <span class="cloud-file-sub">${formatFileSize(item.size)}</span>
-                            </div>
-                        </div>`;
-            }
-
-            return `
-                <div class="media-card-wrapper" data-size="${Number(item.size) || 0}" data-category="${escapeHtml(category)}">
-                    <div class="media-card clickable-media" data-filename="${file}">
-                        ${mediaTag}
-                        <div class="media-actions">
-                            <button class="btn icon restore-btn" title="Ripristina" data-filename="${file}">
-                                <span class="material-icons">restore_from_trash</span>
-                            </button>
-                            <button class="btn icon danger permanent-delete-btn" title="Elimina Definitivamente" data-filename="${file}">
-                                <span class="material-icons">delete_forever</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>`;
-          })
+          .map((item, index) => renderMediaCardHtml(item, index, { fromTrash: true, isFavorite: false }))
           .join('\n');
 
   const content = `
