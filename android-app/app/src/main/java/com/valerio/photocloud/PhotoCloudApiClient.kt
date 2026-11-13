@@ -450,7 +450,7 @@ sealed class GallerySyncResult {
 
 class PhotoCloudApiClient(
     private val context: Context,
-    @Volatile var baseUrl: String
+    @Volatile @get:JvmName("getRawBaseUrl") var baseUrl: String
 ) {
     private val cookiePrefs = context.getSharedPreferences("photocloud_cookie_store", Context.MODE_PRIVATE)
     private val metaPrefs = context.getSharedPreferences("photocloud_metadata_cache", Context.MODE_PRIVATE)

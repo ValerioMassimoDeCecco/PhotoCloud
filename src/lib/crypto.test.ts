@@ -1353,6 +1353,11 @@ test('v1.4.0 Android Kotlin Compilation Safety: ParsedQuery properties, Icon imp
   assert.ok(apiKt.includes('suspend fun fetchMapPhotos()'));
   assert.ok(apiKt.includes('fun getWebViewCookiePairs()'));
   assert.ok(apiKt.includes('fun getBaseUrl()'));
+  assert.ok(
+    !/@Volatile\s+var\s+baseUrl\s*:/.test(apiKt),
+    'PhotoCloudApiClient.baseUrl must not generate a colliding getBaseUrl() JVM getter alongside fun getBaseUrl()'
+  );
+  assert.ok(apiKt.includes('@get:JvmName("getRawBaseUrl") var baseUrl: String'));
   assert.ok(apiKt.includes('data class ExifMetadataModel('));
   assert.ok(apiKt.includes('data class MapPhotoModel('));
   assert.ok(mainKt.includes('private fun NativeMapOverlay('));
