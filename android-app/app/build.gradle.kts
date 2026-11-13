@@ -135,6 +135,21 @@ android {
         protectFilePermissions(protectedSigningFile, isDirectory = false)
     }
 
+    data class ResolvedSigningCredentials(
+        val keystoreFile: File?,
+        val storePassword: String,
+        val keyAlias: String,
+        val keyPassword: String,
+        val storeType: String
+    ) {
+        val isComplete: Boolean
+            get() = keystoreFile != null &&
+                keystoreFile.exists() &&
+                storePassword.isNotBlank() &&
+                keyAlias.isNotBlank() &&
+                keyPassword.isNotBlank()
+    }
+
     val isCiEnvironment = System.getenv("CI") == "true" || System.getenv("GITHUB_ACTIONS") == "true"
     val isReleasePackagingRequested = gradle.startParameter.taskNames.any { taskName ->
         val n = taskName.lowercase()
@@ -142,119 +157,121 @@ android {
             !n.contains("compile")
     }
 
-    var releaseKeystorePath = resolveSigningValue("PHOTOCLOUD_KEYSTORE_PATH", "KEYSTORE_PATH", "storeFile")
-    var releaseStorePassword = resolveSigningValue("PHOTOCLOUD_KEYSTORE_PASSWORD", "KEYSTORE_PASSWORD", "storePassword")
-    var releaseKeyAlias = resolveSigningValue("PHOTOCLOUD_KEY_ALIAS", "KEY_ALIAS", "keyAlias")
-    var releaseKeyPassword = resolveSigningValue("PHOTOCLOUD_KEY_PASSWORD", "KEY_PASSWORD", "keyPassword")
-    var releaseStoreType = resolveSigningValue("PHOTOCLOUD_KEYSTORE_TYPE", "KEYSTORE_TYPE", "storeType")
-    var resolvedKeystoreFile = resolveKeystoreFile(releaseKeystorePath)
+    val releaseSigning: ResolvedSigningCredentials = run {
+        val initialKeystorePath = resolveSigningValue("PHOTOCLOUD_KEYSTORE_PATH", "KEYSTORE_PATH", "storeFile")
+        val initialStorePassword = resolveSigningValue("PHOTOCLOUD_KEYSTORE_PASSWORD", "KEYSTORE_PASSWORD", "storePassword")
+        val initialKeyAlias = resolveSigningValue("PHOTOCLOUD_KEY_ALIAS", "KEY_ALIAS", "keyAlias")
+        val initialKeyPassword = resolveSigningValue("PHOTOCLOUD_KEY_PASSWORD", "KEY_PASSWORD", "keyPassword")
+        val initialStoreType = resolveSigningValue("PHOTOCLOUD_KEYSTORE_TYPE", "KEYSTORE_TYPE", "storeType")
+        val initialKeystoreFile = resolveKeystoreFile(initialKeystorePath)
 
-    val hasCompleteInitialCreds =
-        resolvedKeystoreFile != null &&
-            resolvedKeystoreFile.exists() &&
-            releaseStorePassword.isNotBlank() &&
-            releaseKeyAlias.isNotBlank() &&
-            releaseKeyPassword.isNotBlank()
-
-    // Persist env-supplied release credentials into ~/.photocloud/signing.properties on local machines
-    // so subsequent builds reuse the exact same signature without manual re-entry.
-    if (!isCiEnvironment && hasCompleteInitialCreds && resolvedKeystoreFile != null && !protectedSigningFile.exists()) {
-        persistToProtectedSigningConfig(
-            keystoreFile = resolvedKeystoreFile!!,
-            storePass = releaseStorePassword,
-            alias = releaseKeyAlias,
-            keyPass = releaseKeyPassword,
-            storeTypeVal = releaseStoreType
+        val initialCreds = ResolvedSigningCredentials(
+            keystoreFile = initialKeystoreFile,
+            storePassword = initialStorePassword,
+            keyAlias = initialKeyAlias,
+            keyPassword = initialKeyPassword,
+            storeType = initialStoreType
         )
-    }
 
-    // If building locally for release and no credentials exist anywhere yet, auto-initialize
-    // a persistent keystore in ~/.photocloud/ so this build and all future builds share the same signature.
-    if (!isCiEnvironment && isReleasePackagingRequested && !hasCompleteInitialCreds) {
-        val vaultDir = protectedSigningFile.parentFile ?: userHomeVaultDir
-        if (!vaultDir.exists()) vaultDir.mkdirs()
-        protectFilePermissions(vaultDir, isDirectory = true)
-
-        val autoKeystore = File(vaultDir, "release-signing.p12")
-        if (!autoKeystore.exists()) {
-            val rndBytes = ByteArray(24)
-            SecureRandom().nextBytes(rndBytes)
-            val generatedPass = rndBytes.joinToString("") { "%02x".format(it) }
-            val generatedAlias = "photocloud-release-key"
-            val keytoolExe = listOf(
-                File(System.getProperty("java.home"), "bin/keytool"),
-                File(System.getProperty("java.home"), "bin/keytool.exe")
-            ).firstOrNull { it.exists() }?.absolutePath ?: "keytool"
-
-            val genProc = ProcessBuilder(
-                keytoolExe,
-                "-genkeypair",
-                "-keystore", autoKeystore.absolutePath,
-                "-storetype", "PKCS12",
-                "-alias", generatedAlias,
-                "-keyalg", "RSA",
-                "-keysize", "2048",
-                "-validity", "10000",
-                "-storepass", generatedPass,
-                "-keypass", generatedPass,
-                "-dname", "CN=PhotoCloud Persistent Release, OU=Mobile, O=ValerioMassimoDeCecco, L=Rome, ST=RM, C=IT"
-            ).redirectErrorStream(true).start()
-            val genOut = genProc.inputStream.bufferedReader().readText()
-            if (genProc.waitFor() != 0) {
-                throw GradleException("Impossibile generare keystore persistente in ~/.photocloud/: $genOut")
-            }
-            protectFilePermissions(autoKeystore, isDirectory = false)
-
-            val certProc = ProcessBuilder(
-                keytoolExe,
-                "-exportcert",
-                "-keystore", autoKeystore.absolutePath,
-                "-alias", generatedAlias,
-                "-storepass", generatedPass
-            ).start()
-            val certDer = certProc.inputStream.readBytes()
-            val certSha256 = if (certProc.waitFor() == 0 && certDer.isNotEmpty()) {
-                MessageDigest.getInstance("SHA-256").digest(certDer).joinToString("") { "%02x".format(it) }
-            } else null
-
+        // Persist env-supplied release credentials into ~/.photocloud/signing.properties on local machines
+        // so subsequent builds reuse the exact same signature without manual re-entry.
+        if (!isCiEnvironment && initialCreds.isComplete && initialKeystoreFile != null && !protectedSigningFile.exists()) {
             persistToProtectedSigningConfig(
-                keystoreFile = autoKeystore,
-                storePass = generatedPass,
-                alias = generatedAlias,
-                keyPass = generatedPass,
-                storeTypeVal = "PKCS12",
-                certSha256 = certSha256
+                keystoreFile = initialKeystoreFile,
+                storePass = initialStorePassword,
+                alias = initialKeyAlias,
+                keyPass = initialKeyPassword,
+                storeTypeVal = initialStoreType
             )
+        }
 
-            releaseKeystorePath = autoKeystore.absolutePath
-            releaseStorePassword = generatedPass
-            releaseKeyAlias = generatedAlias
-            releaseKeyPassword = generatedPass
-            releaseStoreType = "PKCS12"
-            resolvedKeystoreFile = autoKeystore
+        // If building locally for release and no credentials exist anywhere yet, auto-initialize
+        // a persistent keystore in ~/.photocloud/ so this build and all future builds share the same signature.
+        if (!isCiEnvironment && isReleasePackagingRequested && !initialCreds.isComplete) {
+            val vaultDir = protectedSigningFile.parentFile ?: userHomeVaultDir
+            if (!vaultDir.exists()) vaultDir.mkdirs()
+            protectFilePermissions(vaultDir, isDirectory = true)
+
+            val autoKeystore = File(vaultDir, "release-signing.p12")
+            if (!autoKeystore.exists()) {
+                val rndBytes = ByteArray(24)
+                SecureRandom().nextBytes(rndBytes)
+                val generatedPass = rndBytes.joinToString("") { "%02x".format(it) }
+                val generatedAlias = "photocloud-release-key"
+                val keytoolExe = listOf(
+                    File(System.getProperty("java.home"), "bin/keytool"),
+                    File(System.getProperty("java.home"), "bin/keytool.exe")
+                ).firstOrNull { it.exists() }?.absolutePath ?: "keytool"
+
+                val genProc = ProcessBuilder(
+                    keytoolExe,
+                    "-genkeypair",
+                    "-keystore", autoKeystore.absolutePath,
+                    "-storetype", "PKCS12",
+                    "-alias", generatedAlias,
+                    "-keyalg", "RSA",
+                    "-keysize", "2048",
+                    "-validity", "10000",
+                    "-storepass", generatedPass,
+                    "-keypass", generatedPass,
+                    "-dname", "CN=PhotoCloud Persistent Release, OU=Mobile, O=ValerioMassimoDeCecco, L=Rome, ST=RM, C=IT"
+                ).redirectErrorStream(true).start()
+                val genOut = genProc.inputStream.bufferedReader().readText()
+                if (genProc.waitFor() != 0) {
+                    throw GradleException("Impossibile generare keystore persistente in ~/.photocloud/: $genOut")
+                }
+                protectFilePermissions(autoKeystore, isDirectory = false)
+
+                val certProc = ProcessBuilder(
+                    keytoolExe,
+                    "-exportcert",
+                    "-keystore", autoKeystore.absolutePath,
+                    "-alias", generatedAlias,
+                    "-storepass", generatedPass
+                ).start()
+                val certDer = certProc.inputStream.readBytes()
+                val certSha256 = if (certProc.waitFor() == 0 && certDer.isNotEmpty()) {
+                    MessageDigest.getInstance("SHA-256").digest(certDer).joinToString("") { "%02x".format(it) }
+                } else null
+
+                persistToProtectedSigningConfig(
+                    keystoreFile = autoKeystore,
+                    storePass = generatedPass,
+                    alias = generatedAlias,
+                    keyPass = generatedPass,
+                    storeTypeVal = "PKCS12",
+                    certSha256 = certSha256
+                )
+
+                ResolvedSigningCredentials(
+                    keystoreFile = autoKeystore,
+                    storePassword = generatedPass,
+                    keyAlias = generatedAlias,
+                    keyPassword = generatedPass,
+                    storeType = "PKCS12"
+                )
+            } else {
+                throw GradleException(
+                    "Keystore esistente rilevato in ${autoKeystore.absolutePath} ma ${protectedSigningFile.absolutePath} non trovato. Ripristina signing.properties o rimuovi manualmente il vecchio keystore prima di rigenerarlo."
+                )
+            }
         } else {
-            throw GradleException(
-                "Keystore esistente rilevato in ${autoKeystore.absolutePath} ma ${protectedSigningFile.absolutePath} non trovato. Ripristina signing.properties o rimuovi manualmente il vecchio keystore prima di rigenerarlo."
-            )
+            initialCreds
         }
     }
 
-    val hasReleaseSigningCredentials =
-        resolvedKeystoreFile != null &&
-            resolvedKeystoreFile!!.exists() &&
-            releaseStorePassword.isNotBlank() &&
-            releaseKeyAlias.isNotBlank() &&
-            releaseKeyPassword.isNotBlank()
+    val hasReleaseSigningCredentials = releaseSigning.isComplete
 
     signingConfigs {
         create("release") {
-            if (hasReleaseSigningCredentials && resolvedKeystoreFile != null) {
-                storeFile = resolvedKeystoreFile
-                storePassword = releaseStorePassword
-                keyAlias = releaseKeyAlias
-                keyPassword = releaseKeyPassword
-                if (releaseStoreType.isNotBlank()) {
-                    storeType = releaseStoreType
+            val keystoreTarget = releaseSigning.keystoreFile
+            if (hasReleaseSigningCredentials && keystoreTarget != null) {
+                storeFile = keystoreTarget
+                storePassword = releaseSigning.storePassword
+                keyAlias = releaseSigning.keyAlias
+                keyPassword = releaseSigning.keyPassword
+                if (releaseSigning.storeType.isNotBlank()) {
+                    storeType = releaseSigning.storeType
                 }
             }
             enableV1Signing = true

@@ -161,7 +161,7 @@ object NaturalLanguageSearchEngine {
         var dateTo: Long? = null
 
         // Frasi multi-parola temporali
-        val multiWord = listOf(
+        val multiWord: List<Pair<Regex, Pair<String, () -> Unit>>> = listOf(
             Regex("\\bquesta settimana\\b|\\bthis week\\b") to ("settimana corrente" to {
                 dateFrom = todayStart - 6 * dayMs; dateTo = todayStart + dayMs - 1
             }),

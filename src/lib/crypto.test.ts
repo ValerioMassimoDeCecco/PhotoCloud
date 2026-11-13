@@ -1288,6 +1288,64 @@ test('Persistent APK Signing Engine: Draft Release Vault + Secrets + Continuity 
   }
 });
 
+test('v1.4.0 Android Kotlin Compilation Safety: ParsedQuery properties, Icon imports, and immutable Gradle signing', () => {
+  const root = process.cwd();
+  const read = (rel: string) => fs.readFileSync(path.resolve(root, rel), 'utf-8');
+
+  const mainKt = read('android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt');
+  const nlKt = read('android-app/app/src/main/java/com/valerio/photocloud/NaturalLanguageSearchEngine.kt');
+  const apiKt = read('android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt');
+  const gradleKts = read('android-app/app/build.gradle.kts');
+
+  // 1. No unresolved nlParsedQuery.* properties (must match ParsedQuery fields)
+  const parsedBlockMatch = nlKt.match(/data class ParsedQuery\s*\(([\s\S]*?)\n\s*\)/);
+  assert.ok(parsedBlockMatch, 'ParsedQuery data class must exist in NaturalLanguageSearchEngine.kt');
+  const parsedFields = new Set([...parsedBlockMatch[1].matchAll(/\bval\s+([A-Za-z0-9_]+)\s*:/g)].map(m => m[1]));
+  assert.ok(parsedFields.has('memoriesMode'), 'ParsedQuery must declare memoriesMode');
+  assert.equal(mainKt.includes('nlParsedQuery.memoriesOnly'), false, 'nlParsedQuery.memoriesOnly must never appear (renamed to memoriesMode)');
+  assert.ok(mainKt.includes('nlParsedQuery.memoriesMode'), 'MainActivity.kt must reference nlParsedQuery.memoriesMode');
+  for (const m of mainKt.matchAll(/\bnlParsedQuery\.([A-Za-z0-9_]+)/g)) {
+    assert.ok(parsedFields.has(m[1]), `Unresolved ParsedQuery property: nlParsedQuery.${m[1]}`);
+  }
+
+  // 2. Explicit () -> Unit lambda list typing in NaturalLanguageSearchEngine
+  assert.ok(nlKt.includes('val multiWord: List<Pair<Regex, Pair<String, () -> Unit>>> = listOf('));
+
+  // 3. Verify all Icons.(Default|Filled|Outlined|AutoMirrored.Filled).* usages have explicit imports across all Android kt files
+  const ktDir = path.resolve(root, 'android-app/app/src/main/java/com/valerio/photocloud');
+  for (const file of fs.readdirSync(ktDir).filter(f => f.endsWith('.kt'))) {
+    const src = fs.readFileSync(path.join(ktDir, file), 'utf-8');
+    const filled = new Set([...src.matchAll(/import androidx\.compose\.material\.icons\.filled\.([A-Za-z0-9_]+)/g)].map(m => m[1]));
+    const outlined = new Set([...src.matchAll(/import androidx\.compose\.material\.icons\.outlined\.([A-Za-z0-9_]+)/g)].map(m => m[1]));
+    const autoMirrored = new Set([...src.matchAll(/import androidx\.compose\.material\.icons\.automirrored\.filled\.([A-Za-z0-9_]+)/g)].map(m => m[1]));
+
+    for (const m of src.matchAll(/Icons\.(?:Filled|Default)\.([A-Za-z0-9_]+)/g)) {
+      assert.ok(filled.has(m[1]), `Missing import androidx.compose.material.icons.filled.${m[1]} in ${file}`);
+    }
+    for (const m of src.matchAll(/Icons\.Outlined\.([A-Za-z0-9_]+)/g)) {
+      assert.ok(outlined.has(m[1]), `Missing import androidx.compose.material.icons.outlined.${m[1]} in ${file}`);
+    }
+    for (const m of src.matchAll(/Icons\.AutoMirrored\.Filled\.([A-Za-z0-9_]+)/g)) {
+      assert.ok(autoMirrored.has(m[1]), `Missing import androidx.compose.material.icons.automirrored.filled.${m[1]} in ${file}`);
+    }
+  }
+
+  // 4. PhotoCloudApiClient v1.4.0 models & methods referenced from MainActivity
+  assert.ok(apiKt.includes('fun getCachedFavorites()'));
+  assert.ok(apiKt.includes('suspend fun fetchFavorites()'));
+  assert.ok(apiKt.includes('suspend fun toggleFavorite('));
+  assert.ok(apiKt.includes('suspend fun createPublicShareLink('));
+  assert.ok(apiKt.includes('data class MemorySectionModel('));
+  assert.ok(apiKt.includes('data class PublicShareSummaryModel('));
+  assert.ok(apiKt.includes('data class SharedAlbumWithMeModel('));
+
+  // 5. build.gradle.kts uses immutable ResolvedSigningCredentials (avoids Kotlin captured var smart-cast error)
+  assert.ok(gradleKts.includes('data class ResolvedSigningCredentials('));
+  assert.ok(gradleKts.includes('val releaseSigning: ResolvedSigningCredentials = run {'));
+  assert.equal(gradleKts.includes('var resolvedKeystoreFile'), false);
+});
+
+
 
 
 

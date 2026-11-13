@@ -1844,7 +1844,7 @@ fun NativeVaultScreen(
         (albumsList + fromItems).distinct().sorted()
     }
 
-    val filteredGalleryMedia = remember(mediaOnlyItems, selectedAlbumFilter, selectedAiCategoryFilter, aiCategoriesByFilename, favoritesOnlyFilter, nlParsedQuery, favoriteFilenames) {
+    val filteredGalleryMedia = remember(mediaOnlyItems, selectedAlbumFilter, selectedAiCategoryFilter, aiCategoriesByFilename, favoritesOnlyFilter, vaultSearchQuery, nlParsedQuery, favoriteFilenames) {
         var result = if (selectedAlbumFilter != null) {
             mediaOnlyItems.filter { it.album == selectedAlbumFilter }
         } else {
@@ -2494,7 +2494,7 @@ fun NativeVaultScreen(
                     AssistChip(
                         onClick = {
                             val label = "ricordi"
-                            val already = nlParsedQuery.memoriesOnly && vaultSearchQuery.isNotBlank()
+                            val already = nlParsedQuery.memoriesMode && vaultSearchQuery.isNotBlank()
                             vaultSearchQuery = if (already) "" else label
                         },
                         leadingIcon = {
