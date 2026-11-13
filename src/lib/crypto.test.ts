@@ -1178,10 +1178,14 @@ test('Persistent APK Signing Engine: Draft Release Vault + Secrets + Continuity 
   assert.ok(releaseWorkflow.includes('allow_signature_rotation'));
   assert.ok(releaseWorkflow.includes('concurrency:'));
 
-  // 2. Gradle supports env vars, Gradle props, and local gitignored signing.properties without hardcoded secrets
+  // 2. Gradle supports env vars, Gradle props, and auto-loads/persists ~/.photocloud/signing.properties without hardcoded secrets
   const buildGradle = read('android-app/app/build.gradle.kts');
   assert.ok(buildGradle.includes('signing.properties'));
-  assert.ok(buildGradle.includes('.photocloud/signing.properties'));
+  assert.ok(buildGradle.includes('.photocloud'));
+  assert.ok(buildGradle.includes('PHOTOCLOUD_SIGNING_PROPERTIES'));
+  assert.ok(buildGradle.includes('persistToProtectedSigningConfig'));
+  assert.ok(buildGradle.includes('protectFilePermissions'));
+  assert.ok(buildGradle.includes('PosixFilePermission.OWNER_READ'));
   assert.ok(buildGradle.includes('resolveKeystoreFile'));
   assert.equal(buildGradle.includes('photocloud_release_2026'), false);
 
@@ -1208,6 +1212,80 @@ test('Persistent APK Signing Engine: Draft Release Vault + Secrets + Continuity 
   const sampleApkBytes = fs.readFileSync(path.resolve(root, 'release/photocloud-release-v1.3.2-signed.apk'));
   const certDigest = await extractApkSigningCertSha256(sampleApkBytes);
   assert.match(certDigest, /^[0-9a-f]{64}$/);
+
+  // 6. Behavioral test: ~/.photocloud/signing.properties auto-creation, permission protection, env auto-loading, and reuse
+  const os = await import('node:os');
+  const { ensurePersistentLocalSigning, applySigningEnvFromProtectedConfig } = await import('./persistentSigning');
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'photocloud-signing-home-'));
+  const tmpProj = fs.mkdtempSync(path.join(os.tmpdir(), 'photocloud-signing-proj-'));
+  try {
+    const firstEnv: NodeJS.ProcessEnv = {};
+    const firstRes = ensurePersistentLocalSigning({
+      env: firstEnv,
+      homeDir: tmpHome,
+      projectDir: tmpProj,
+      autoCreateIfMissing: true,
+    });
+    assert.equal(firstRes.source, 'auto-generated');
+    assert.ok(firstRes.config);
+    assert.ok(fs.existsSync(firstRes.propertiesPath), 'Protected signing.properties must be created');
+    assert.ok(fs.existsSync(firstRes.config!.storeFile), 'Persistent keystore file must be created');
+    assert.match(firstRes.config!.certSha256 || '', /^[0-9a-f]{64}$/);
+    if (process.platform !== 'win32') {
+      const dirMode = fs.statSync(path.dirname(firstRes.propertiesPath)).mode & 0o777;
+      const fileMode = fs.statSync(firstRes.propertiesPath).mode & 0o777;
+      assert.equal(dirMode, 0o700, '~/.photocloud directory must be owner-only (0700)');
+      assert.equal(fileMode, 0o600, '~/.photocloud/signing.properties must be owner-only (0600)');
+    }
+
+    // Second build with empty env vars automatically reloads the exact same signature from ~/.photocloud/signing.properties
+    const secondEnv: NodeJS.ProcessEnv = {};
+    const secondRes = ensurePersistentLocalSigning({
+      env: secondEnv,
+      homeDir: tmpHome,
+      projectDir: tmpProj,
+    });
+    assert.equal(secondRes.source, 'user-protected-file');
+    assert.equal(secondRes.config?.certSha256, firstRes.config?.certSha256);
+    assert.equal(secondEnv.PHOTOCLOUD_KEYSTORE_PATH, firstRes.config?.storeFile);
+    assert.equal(secondEnv.PHOTOCLOUD_KEYSTORE_PASSWORD, firstRes.config?.storePassword);
+    assert.equal(secondEnv.PHOTOCLOUD_KEY_ALIAS, firstRes.config?.keyAlias);
+    assert.equal(secondEnv.PHOTOCLOUD_KEY_PASSWORD, firstRes.config?.keyPassword);
+
+    // Providing env vars on a fresh user profile persists them into ~/.photocloud/signing.properties for future reuse
+    const tmpHome2 = fs.mkdtempSync(path.join(os.tmpdir(), 'photocloud-signing-home2-'));
+    try {
+      const explicitEnv: NodeJS.ProcessEnv = {
+        PHOTOCLOUD_KEYSTORE_PATH: firstRes.config!.storeFile,
+        PHOTOCLOUD_KEYSTORE_PASSWORD: firstRes.config!.storePassword,
+        PHOTOCLOUD_KEY_ALIAS: firstRes.config!.keyAlias,
+        PHOTOCLOUD_KEY_PASSWORD: firstRes.config!.keyPassword,
+        PHOTOCLOUD_KEYSTORE_TYPE: 'PKCS12',
+      };
+      const persisted = applySigningEnvFromProtectedConfig({
+        env: explicitEnv,
+        homeDir: tmpHome2,
+        projectDir: tmpProj,
+        persistEnvToProtectedFile: true,
+      });
+      assert.equal(persisted.source, 'env');
+      assert.ok(fs.existsSync(path.join(tmpHome2, '.photocloud', 'signing.properties')));
+
+      const reloadFromSaved = applySigningEnvFromProtectedConfig({
+        env: {},
+        homeDir: tmpHome2,
+        projectDir: tmpProj,
+      });
+      assert.equal(reloadFromSaved.source, 'user-protected-file');
+      assert.equal(reloadFromSaved.config?.keyAlias, firstRes.config!.keyAlias);
+      assert.equal(reloadFromSaved.config?.storePassword, firstRes.config!.storePassword);
+    } finally {
+      fs.rmSync(tmpHome2, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+    fs.rmSync(tmpProj, { recursive: true, force: true });
+  }
 });
 
 

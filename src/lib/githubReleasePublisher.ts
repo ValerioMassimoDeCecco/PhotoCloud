@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { ensurePersistentLocalSigning } from './persistentSigning';
 
 export interface GitHubReleaseStatus {
   published: boolean;
@@ -72,10 +73,14 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
   apkPath: string; apkBuffer: Buffer; sha256: string; metadataPath: string; signingCertSha256: string;
 }> {
   const project = path.resolve(process.cwd(), 'android-app');
+  const buildEnv: NodeJS.ProcessEnv = { ...process.env };
+  ensurePersistentLocalSigning({ env: buildEnv, projectDir: project });
   let source = path.join(project, 'app/build/outputs/apk/release/app-release.apk');
   try {
     await promisify(execFile)('gradle', ['-p', project, 'assembleRelease', '--no-daemon'], {
-      cwd: project, maxBuffer: 10 * 1024 * 1024,
+      cwd: project,
+      env: buildEnv,
+      maxBuffer: 10 * 1024 * 1024,
     });
   } catch {
     // If gradle binary is not present in local container, use pre-built signed release APK
@@ -173,9 +178,11 @@ export async function triggerGitHubActionsBuild(options?: {
   const filesToSync = [
     'README.md',
     '.gitignore',
+    '.env.example',
     '.github/workflows/android-release.yml',
     '.github/workflows/android-ci.yml',
     'scripts/setup-persistent-signing.ts',
+    'src/lib/persistentSigning.ts',
     'android-app/settings.gradle.kts',
     'android-app/build.gradle.kts',
     'android-app/gradle.properties',

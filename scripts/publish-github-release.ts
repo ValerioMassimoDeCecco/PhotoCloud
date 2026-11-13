@@ -4,8 +4,17 @@ import {
   triggerGitHubActionsBuild,
   publishApkToGitHubRelease,
 } from '../src/lib/githubReleasePublisher';
+import { ensurePersistentLocalSigning } from '../src/lib/persistentSigning';
 
 async function main() {
+  const signingInfo = ensurePersistentLocalSigning();
+  console.log(
+    `🔐 Firma persistente attiva (${signingInfo.source}): ${signingInfo.propertiesPath}`
+  );
+  if (signingInfo.config?.certSha256) {
+    console.log(`🔐 Certificato SHA-256: ${signingInfo.config.certSha256}`);
+  }
+
   const outputDir = path.resolve(process.cwd(), 'release');
   console.log('[1/3] Preparazione progetto Android (/android-app) e pacchetto locale...');
   const { apkPath, sha256, metadataPath } = await compileSignedAndroidApk(outputDir);
