@@ -376,6 +376,160 @@ test('v1.4.0: preferiti, ricordi, ricerca NL, condivisioni pubbliche, album mult
       res = await get(`/api/shared-albums/${shareId}/media`, bob);
       assert.equal(res.status, 404);
     });
+
+    // ================= v1.4.1 — EXIF + MAPPA FOTO GPS =================
+    await t.test('v1.4.1: metadati EXIF e mappa interattiva foto GPS', async () => {
+      // JPEG sintetico con EXIF (Canon EOS R6, 2023:08:15 14:22:10, f/2.8, ISO 200, 1/125, 50mm, GPS Roma)
+      const w16le = (v: number) => { const b = Buffer.allocUnsafe(2); b.writeUInt16LE(v); return b; };
+      const w32le = (v: number) => { const b = Buffer.allocUnsafe(4); b.writeUInt32LE(v); return b; };
+      const w16be = (v: number) => { const b = Buffer.allocUnsafe(2); b.writeUInt16BE(v); return b; };
+      const ent = (tag: number, type: number, count: number, vo: number) =>
+        Buffer.concat([w16le(tag), w16le(type), w32le(count), w32le(vo)]);
+      const asciiInline = (tag: number, s: string) => {
+        const b = Buffer.alloc(12);
+        Buffer.concat([w16le(tag), w16le(2), w32le(2)]).copy(b, 0);
+        Buffer.from(s + String.fromCharCode(0), 'latin1').copy(b, 8);
+        return b;
+      };
+      const shortInline = (tag: number, v: number) =>
+        Buffer.concat([w16le(tag), w16le(3), w32le(1), w16le(v), w16le(0)]);
+      const rat = (n: number, d: number) => Buffer.concat([w32le(n), w32le(d)]);
+
+      const make = Buffer.from('Canon', 'latin1');
+      const model = Buffer.from('Canon EOS R6', 'latin1');
+      const dto = Buffer.from('2023:08:15 14:22:10', 'latin1');
+      const ifd0Size = 2 + 4 * 12 + 4;
+      const makeOff = 8 + ifd0Size;            // 62
+      const modelOff = makeOff + make.length;  // 67
+      const exifOff = modelOff + model.length; // 81? no: 67+14=81... ricalcolato sotto
+      const exifIfdSize = 2 + 5 * 12 + 4;
+      let c = exifOff + exifIfdSize;
+      const expOff = c; c += 8;
+      const fnumOff = c; c += 8;
+      const dtoOff = c; c += dto.length;
+      const focalOff = c; c += 8;
+      const gpsOff = c;
+      const gpsIfdSize = 2 + 6 * 12 + 4;
+      let g = gpsOff + gpsIfdSize;
+      const latOff = g; g += 24;
+      const lonOff = g; g += 24;
+      const altOff = g;
+      const tiff = Buffer.concat([
+        Buffer.from('II', 'latin1'), w16le(42), w32le(8),
+        w16le(4),
+        ent(0x010f, 2, make.length, makeOff),
+        ent(0x0110, 2, model.length, modelOff),
+        ent(0x8769, 4, 1, exifOff),
+        ent(0x8825, 4, 1, gpsOff),
+        w32le(0),
+        make, model,
+        w16le(5),
+        ent(0x829a, 5, 1, expOff),
+        ent(0x829d, 5, 1, fnumOff),
+        shortInline(0x8827, 200),
+        ent(0x9003, 2, dto.length, dtoOff),
+        ent(0x920a, 5, 1, focalOff),
+        w32le(0),
+        rat(1, 125), rat(28, 10), dto, rat(50, 1),
+        w16le(6),
+        asciiInline(0x0001, 'N'),
+        ent(0x0002, 5, 3, latOff),
+        asciiInline(0x0003, 'E'),
+        ent(0x0004, 5, 3, lonOff),
+        ent(0x0005, 1, 1, 0),
+        ent(0x0006, 5, 1, altOff),
+        w32le(0),
+        Buffer.concat([rat(41, 1), rat(53, 1), rat(36, 1)]),
+        Buffer.concat([rat(12, 1), rat(29, 1), rat(33, 1)]),
+        rat(52, 1),
+      ]);
+      const payload = Buffer.concat([Buffer.from('Exif' + String.fromCharCode(0) + String.fromCharCode(0), 'latin1'), tiff]);
+      const jpegExif = Buffer.concat([
+        Buffer.from([0xff, 0xd8, 0xff, 0xe1]),
+        w16be(payload.length + 2),
+        payload,
+        Buffer.from([0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00]),
+      ]);
+
+      // Upload del JPEG con EXIF
+      const form = new FormData();
+      form.append('file[]', new Blob([new Uint8Array(jpegExif)]), 'roma-colosseo.jpg');
+      let res = await fetch(base + '/upload?skipList=1', { method: 'POST', headers: { Cookie: alice }, body: form });
+      const up = (await res.json()) as { success: boolean; uploadedFilenames: string[] };
+      assert.ok(up.success && up.uploadedFilenames[0].endsWith('.jpg'));
+      const jpg = up.uploadedFilenames[0];
+
+      // --- /api/exif/<file>: metadati completi ---
+      res = await get(`/api/exif/${encodeURIComponent(jpg)}`, alice);
+      assert.equal(res.status, 200);
+      const exifData = (await res.json()) as {
+        supported: boolean;
+        exif: {
+          camera: string | null; iso: number | null; apertureFNumber: number | null;
+          exposureTimeLabel: string | null; focalLengthMm: number | null; hasGps: boolean;
+          latitude: number | null; longitude: number | null; altitudeM: number | null;
+          dateTimeOriginal: string | null;
+        };
+      };
+      assert.equal(exifData.supported, true);
+      assert.equal(exifData.exif.camera, 'Canon EOS R6');
+      assert.equal(exifData.exif.iso, 200);
+      assert.equal(exifData.exif.apertureFNumber, 2.8);
+      assert.equal(exifData.exif.exposureTimeLabel, '1/125');
+      assert.equal(exifData.exif.focalLengthMm, 50);
+      assert.equal(exifData.exif.dateTimeOriginal, '2023:08:15 14:22:10');
+      assert.equal(exifData.exif.hasGps, true);
+      assert.ok(exifData.exif.latitude !== null && Math.abs(exifData.exif.latitude - 41.893333) < 0.0001);
+      assert.ok(exifData.exif.longitude !== null && Math.abs(exifData.exif.longitude - 12.4925) < 0.0001);
+      assert.equal(exifData.exif.altitudeM, 52);
+
+      // guardie: anon 403, nome invalido 400, file assente 404, non-JPEG → supported:false
+      assert.equal((await get(`/api/exif/${encodeURIComponent(jpg)}`)).status, 403);
+      assert.equal((await get('/api/exif/..%2F..%2Fevil.jpg', alice)).status, 400);
+      assert.equal((await get('/api/exif/non-esiste.jpg', alice)).status, 404);
+      const pngName = up.uploadedFilenames[0];
+      void pngName;
+      const pngProbe = (await (await get('/api/session', alice)).json()) as { mediaFiles: Array<{ filename: string }> };
+      const somePng = pngProbe.mediaFiles.find((m) => m.filename.endsWith('.png'));
+      assert.ok(somePng, 'serve almeno un PNG nel vault di alice');
+      res = await get(`/api/exif/${encodeURIComponent(somePng!.filename)}`, alice);
+      assert.equal(res.status, 200);
+      const pngExif = (await res.json()) as { supported: boolean; exif: { hasGps: boolean } };
+      assert.equal(pngExif.supported, false);
+      assert.equal(pngExif.exif.hasGps, false);
+
+      // --- /api/map-photos: solo il JPEG con GPS, cache mtime-keyed ---
+      res = await get('/api/map-photos', alice);
+      assert.equal(res.status, 200);
+      const map1 = (await res.json()) as {
+        count: number; processed: number; cacheHits: number;
+        items: Array<{ filename: string; lat: number; lon: number; album: string }>;
+      };
+      assert.ok(map1.processed >= 1);
+      const found = map1.items.find((i) => i.filename === jpg);
+      assert.ok(found, 'il JPEG con GPS deve comparire nella mappa');
+      assert.ok(Math.abs(found!.lat - 41.893333) < 0.0001);
+      assert.ok(Math.abs(found!.lon - 12.4925) < 0.0001);
+      assert.equal(map1.items.some((i) => i.filename.endsWith('.png')), false);
+      // bob ha vault separato: zero foto GPS
+      const bobMap = (await (await get('/api/map-photos', bob)).json()) as { count: number };
+      assert.equal(bobMap.count, 0);
+      // seconda chiamata: tutto da cache (.exif.json su disco)
+      const map2 = (await (await get('/api/map-photos', alice)).json()) as { cacheHits: number; processed: number };
+      assert.ok(map2.cacheHits >= 1 && map2.cacheHits === map2.processed, 'seconda scansione totalmente da cache');
+      assert.ok(fs.existsSync(path.join(dir, 'user_media', 'alice', '.exif.json')), 'cache EXIF persistita');
+
+      // --- /map: pagina interattiva con tile OSM, guardata da sessione ---
+      res = await get('/map', alice);
+      assert.equal(res.status, 200);
+      const mapHtml = await res.text();
+      assert.ok(mapHtml.includes('id="pc-map"'));
+      assert.ok(mapHtml.includes('/static/scripts/map.js'));
+      assert.ok(mapHtml.includes('OpenStreetMap'));
+      // anonimo: redirect a /
+      const anon = await fetch(base + '/map', { redirect: 'manual' });
+      assert.equal(anon.status, 302);
+    });
   } finally {
     child.kill('SIGKILL');
     await new Promise((r) => setTimeout(r, 200));

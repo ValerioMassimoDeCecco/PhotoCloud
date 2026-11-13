@@ -106,13 +106,13 @@ test('server protects vaults, preserves collisions, and handles real media flows
     if (updateManifestResp.status === 404) {
       const missing = await updateManifestResp.json() as any;
       assert.equal(missing.error, 'Nessun APK di release disponibile sul server');
-      assert.equal(missing.versionName, '1.4.0');
+      assert.equal(missing.versionName, '1.4.1');
     } else {
       assert.equal(updateManifestResp.status, 200);
       const updateManifest = await updateManifestResp.json() as any;
-      assert.equal(updateManifest.versionCode, 30);
-      assert.equal(updateManifest.versionName, '1.4.0');
-      assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.4.0-signed.apk');
+      assert.equal(updateManifest.versionCode, 31);
+      assert.equal(updateManifest.versionName, '1.4.1');
+      assert.equal(updateManifest.apkFilename, 'photocloud-release-v1.4.1-signed.apk');
       assert.equal(updateManifest.sha256.length, 64);
     }
 

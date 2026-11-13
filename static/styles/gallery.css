@@ -1639,3 +1639,118 @@
     height: 34px;
     font-size: 12px;
 }
+
+/* ==========================================================================
+   v1.4.1 — Pannello metadati EXIF (bottom-sheet nella lightbox)
+   ========================================================================== */
+.exif-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 2600;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(3px);
+    padding: 16px;
+}
+
+.exif-panel[hidden] {
+    display: none;
+}
+
+.exif-panel-card {
+    width: min(480px, 100%);
+    background: var(--md-sys-color-surface-container-high, #26282e);
+    color: var(--md-sys-color-on-surface, #e3e3e6);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.5);
+    padding: 16px 18px;
+    animation: exif-slide-up 0.22s ease-out;
+}
+
+@keyframes exif-slide-up {
+    from { transform: translateY(28px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.exif-panel-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.exif-panel-header strong {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 700;
+    word-break: break-all;
+}
+
+.exif-panel-header .material-icons {
+    font-size: 19px;
+    color: var(--md-sys-color-primary, #a8c7fa);
+}
+
+.exif-panel-header .lightbox-icon-btn {
+    width: 30px;
+    height: 30px;
+    flex-shrink: 0;
+}
+
+.exif-panel-grid .exif-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 14px;
+    padding: 7px 2px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    font-size: 13px;
+}
+
+.exif-panel-grid .exif-row:last-child {
+    border-bottom: none;
+}
+
+.exif-panel-grid .exif-label {
+    color: var(--md-sys-color-on-surface-variant, #c4c6cf);
+    flex-shrink: 0;
+}
+
+.exif-panel-grid .exif-value {
+    font-weight: 600;
+    text-align: right;
+    word-break: break-word;
+}
+
+.exif-panel-grid .exif-empty {
+    padding: 14px 4px;
+    font-size: 13px;
+    color: var(--md-sys-color-on-surface-variant, #c4c6cf);
+    text-align: center;
+}
+
+.exif-panel-map-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    margin-top: 12px;
+    padding: 11px 14px;
+    border-radius: 14px;
+    background: var(--md-sys-color-primary, #a8c7fa);
+    color: var(--md-sys-color-on-primary, #062e6f);
+    font-size: 13px;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.exif-panel-map-link[hidden] {
+    display: none;
+}
+
+.exif-panel-map-link .material-icons {
+    font-size: 18px;
+}

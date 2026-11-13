@@ -1,12 +1,12 @@
 {
-  "apkFilename": "photocloud-release-v1.4.0-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.4.0-signed.apk",
+  "apkFilename": "photocloud-release-v1.4.1-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.4.1-signed.apk",
   "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "sizeBytes": 0,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.4.0",
-  "versionCode": 30,
-  "changelog": "Release 1.4.0 — Novità cloud: Notifiche Push Web (VAPID) con service worker, Preferiti con stella sync server↔mobile, Ricordi \"In questo giorno\", Slideshow con transizioni Ken Burns/crossfade/slide, barra Timeline scrullable stile Google Foto, rilevamento Duplicati quasi identici via pHash percettivo, Ricerca in linguaggio naturale on-device (IT/EN) e server, Link pubblici temporanei di condivisione con scadenza, password e limite download, Album multi-utente con ruoli viewer/contributor.",
+  "versionName": "1.4.1",
+  "versionCode": 31,
+  "changelog": "Release 1.4.1 — Mappa interattiva delle foto da EXIF GPS (slippy-map custom con tile pubbliche OpenStreetMap, schermata dedicata /map con marcatori, popup anteprima e \"Vedi sulla mappa\" dal pannello EXIF) e pannello metadati EXIF nella lightbox (fotocamera, data originale di scatto, apertura f/, ISO, esposizione, focale, coordinate GPS e altitudine), cache per-file .exif.json con invalidazione su mtime. Firma invariata rispetto a v1.4.0 (stessa catena di firma persistente).",
   "features": [
     "Notifiche Push Web (v1.4.0): service worker push/notificationclick, subscribe/unsubscribe per utente con chiavi VAPID per-server zero-config",
     "Preferiti ⭐: toggle da web e app Android, persistenti per utente (.favorites.json), filtro gallery e ricerca",
@@ -16,8 +16,10 @@
     "Duplicati Quasi Identici: pHash percettivo 64-bit con cache per-file, gruppi con distanza di Hamming configurabile",
     "Ricerca in Linguaggio Naturale On-Device: parser IT/EN (anno, mese, tipo media, preferiti, ricordi, keyword AI→label ImageNet) senza dati verso il cloud; fallback server quando online",
     "Condivisioni Pubbliche Temporanee 🔗: link anonimi /share/<token> con scadenza 1h-30gg, password opzionale, limite download e revoca",
-    "Album Multi-Utente 👥: condivisione tra utenti registrati con ruoli viewer/contributor e upload contributor direttamente nell'album del proprietario"
+    "Album Multi-Utente 👥: condivisione tra utenti registrati con ruoli viewer/contributor e upload contributor direttamente nell'album del proprietario",
+    "Mappa Foto GPS (v1.4.1): vista geografica interattiva su /map e chip Mappa nell'app — marker con thumbnail, popup con data/album/coordinate, zoom/pan stile Google Maps, tile pubbliche OpenStreetMap",
+    "Pannello Metadati EXIF (v1.4.1): fotocamera, data originale, apertura f/, ISO, esposizione, focale, GPS e altitudine — in lightbox web (pulsante ℹ️ / tasto I) e app Android"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.4.0",
-  "notes": "Pre-release v1.4.0: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release (download-artifact, sha256sum e merge di questo manifest), preservando la stessa catena di firma persistente."
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.4.1",
+  "notes": "Pre-release v1.4.1: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release, firmato con la stessa firma persistente di v1.4.0 (nessun segreto committato)."
 }

@@ -20,7 +20,7 @@ function readTemplate(filename: string): string {
   }
 }
 
-function escapeHtml(str: string): string {
+export function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -641,6 +641,11 @@ export function renderGalleryTemplate(
                 <span class="material-icons">manage_search</span>
                 <span class="pill-label">Duplicati</span>
             </button>
+
+            <a href="/map" class="nav-pill" id="tab-map-btn" title="Mappa interattiva delle foto con GPS (OpenStreetMap)">
+                <span class="material-icons">map</span>
+                <span class="pill-label">Mappa</span>
+            </a>
 
             <a href="/trash" class="nav-pill" id="tab-trash-btn" data-view-tab="trash" title="Cestino">
                 <span class="material-icons">delete_outline</span>

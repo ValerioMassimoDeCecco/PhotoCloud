@@ -128,6 +128,8 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SwapVert
@@ -165,6 +167,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -1634,6 +1638,9 @@ fun NativeVaultScreen(
     var selectedAiCategoryFilter by remember { mutableStateOf<String?>(null) }
     var showAlbumDialog by remember { mutableStateOf(false) }
 
+    // v1.4.1 — Schermata Mappa interattiva (foto con GPS EXIF)
+    var showMapScreen by remember { mutableStateOf(false) }
+
     // v1.4.0 — Ricerca in linguaggio naturale on-device + filtro Preferiti
     var vaultSearchQuery by remember { mutableStateOf("") }
     var favoritesOnlyFilter by remember { mutableStateOf(false) }
@@ -2505,6 +2512,18 @@ fun NativeVaultScreen(
                             )
                         },
                         label = { Text("Ricordi") }
+                    )
+                    // v1.4.1 — Chip Mappa (vista geografica EXIF GPS, WebView /map)
+                    AssistChip(
+                        onClick = { showMapScreen = true },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Place,
+                                contentDescription = "Mappa interattiva delle foto con coordinate GPS",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text("Mappa") }
                     )
                     if (aiModelState.status == AiModelStatus.INSTALLED) {
                         aiCategoryChips.forEach { chip ->
@@ -3614,6 +3633,14 @@ fun NativeVaultScreen(
                         fromTrash = isFromTrash
                     )
                 }
+            )
+        }
+
+        // v1.4.1 — Schermata Mappa interattiva a schermo intero (foto con GPS EXIF)
+        if (showMapScreen) {
+            NativeMapOverlay(
+                apiClient = apiClient,
+                onClose = { showMapScreen = false }
             )
         }
 
@@ -7131,6 +7158,18 @@ fun NativeLightboxModal(
         mutableStateOf(aiCategoriesByFilename[currentItem.filename].orEmpty())
     }
 
+    // v1.4.1 — Pannello metadati EXIF (fotocamera, apertura, ISO, data originale, GPS)
+    var exifPanelVisible by remember { mutableStateOf(false) }
+    var exifData by remember(currentItem.filename) { mutableStateOf<ExifMetadataModel?>(null) }
+    var exifLoading by remember(currentItem.filename) { mutableStateOf(false) }
+    LaunchedEffect(exifPanelVisible, currentItem.filename) {
+        if (exifPanelVisible && !fromTrash) {
+            exifLoading = true
+            exifData = apiClient.fetchExifMetadata(currentItem.filename)
+            exifLoading = false
+        }
+    }
+
     LaunchedEffect(currentItem.filename, aiCategoriesByFilename) {
         val existing = aiCategoriesByFilename[currentItem.filename].orEmpty()
         if (existing.isNotEmpty()) {
@@ -7933,6 +7972,126 @@ fun NativeLightboxModal(
             }
         }
 
+        // v1.4.1 — Pannello metadati EXIF (fotocamera, apertura, ISO, data originale, GPS)
+        if (exifPanelVisible && !fromTrash) {
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = Color(0xFF16161E).copy(alpha = 0.97f),
+                tonalElevation = 10.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(start = 14.dp, end = 14.dp, bottom = 84.dp)
+                    .fillMaxWidth()
+            ) {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = Color(0xFFA8C7FA),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Metadati EXIF",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { exifPanelVisible = false }, modifier = Modifier.size(30.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Chiudi pannello EXIF",
+                                tint = Color(0xFF9AA0A6),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    when {
+                        exifLoading -> Text(
+                            text = "Caricamento metadati…",
+                            color = Color(0xFF9AA0A6),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(vertical = 10.dp)
+                        )
+                        exifData == null -> Text(
+                            text = "Metadati non disponibili per questo file.",
+                            color = Color(0xFF9AA0A6),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(vertical = 10.dp)
+                        )
+                        else -> {
+                            val d = exifData!!
+                            if (!d.supported) {
+                                Text(
+                                    text = "Metadati EXIF disponibili solo per le foto JPEG.",
+                                    color = Color(0xFF9AA0A6),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(vertical = 10.dp)
+                                )
+                            } else {
+                                val hasAnyField = d.camera != null || d.dateTimeOriginal != null ||
+                                    d.apertureFNumber != null || d.iso != null || d.exposureTimeLabel != null ||
+                                    d.focalLengthMm != null || d.hasGps
+                                ExifRow("Fotocamera", d.camera)
+                                ExifRow("Data scatto", d.dateTimeOriginal)
+                                ExifRow("Apertura", d.apertureFNumber?.let { "f/$it" })
+                                ExifRow("ISO", d.iso?.toString())
+                                ExifRow("Esposizione", d.exposureTimeLabel)
+                                ExifRow("Focale", d.focalLengthMm?.let { "$it mm" })
+                                if (d.hasGps && d.latitude != null && d.longitude != null) {
+                                    ExifRow("GPS", "%.5f, %.5f".format(d.latitude, d.longitude))
+                                    ExifRow("Altitudine", d.altitudeM?.let { "${it} m" })
+                                    TextButton(
+                                        onClick = {
+                                            val lat = d.latitude
+                                            val lon = d.longitude
+                                            if (lat != null && lon != null) {
+                                                val label = Uri.encode(currentItem.filename)
+                                                try {
+                                                    localCtx.startActivity(
+                                                        Intent(
+                                                            Intent.ACTION_VIEW,
+                                                            Uri.parse("geo:$lat,$lon?q=$lat,$lon($label)")
+                                                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    )
+                                                } catch (_: Exception) {
+                                                    try {
+                                                        localCtx.startActivity(
+                                                            Intent(
+                                                                Intent.ACTION_VIEW,
+                                                                Uri.parse("https://www.openstreetmap.org/?mlat=$lat&mlon=$lon#map=16/$lat/$lon")
+                                                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                        )
+                                                    } catch (_: Exception) {
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFA8C7FA)),
+                                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                                    ) {
+                                        Icon(Icons.Default.Place, contentDescription = null, modifier = Modifier.size(17.dp))
+                                        Spacer(Modifier.width(5.dp))
+                                        Text("Apri nella mappa", fontWeight = FontWeight.SemiBold)
+                                    }
+                                } else if (!hasAnyField) {
+                                    Text(
+                                        text = "Nessun metadato EXIF presente in questo file.",
+                                        color = Color(0xFF9AA0A6),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(vertical = 10.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         AnimatedVisibility(
             visible = hudVisible,
             enter = fadeIn() + slideInVertically { it / 2 },
@@ -7971,6 +8130,18 @@ fun NativeLightboxModal(
                                 imageVector = Icons.Default.Share,
                                 contentDescription = "Crea link pubblico temporaneo",
                                 tint = Color.White,
+                                modifier = Modifier.size(21.dp)
+                            )
+                        }
+                    }
+
+                    if (!fromTrash) {
+                        // v1.4.1 — Pulsante metadati EXIF nella HUD della lightbox
+                        IconButton(onClick = { exifPanelVisible = !exifPanelVisible }) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Metadati EXIF (fotocamera, apertura, ISO, data)",
+                                tint = if (exifPanelVisible) Color(0xFFA8C7FA) else Color.White,
                                 modifier = Modifier.size(21.dp)
                             )
                         }
@@ -10305,3 +10476,104 @@ private fun NativeAudioPlayerView(
 
 
 
+
+/**
+ * v1.4.1 — Riga chiave/valore del pannello metadati EXIF nella lightbox.
+ */
+@Composable
+private fun ExifRow(label: String, value: String?) {
+    if (value.isNullOrBlank()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = Color(0xFF9AA0A6), style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.width(12.dp))
+        Text(
+            value,
+            color = Color.White,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+/**
+ * v1.4.1 — Schermata "Mappa Foto GPS": WebView a schermo intero sulla pagina
+ * /map servita dal server (slippy-map custom, tile pubbliche OpenStreetMap).
+ * I cookie di sessione OkHttp vengono sincronizzati nel CookieManager di
+ * sistema prima del caricamento, così il WebView risulta già autenticato.
+ */
+@Composable
+private fun NativeMapOverlay(
+    apiClient: PhotoCloudApiClient,
+    onClose: () -> Unit
+) {
+    val mapUrl = remember(apiClient) { "${apiClient.getBaseUrl()}/map" }
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xFF0B0F14))
+        ) {
+            AndroidView(
+                factory = { ctx ->
+                    android.webkit.WebView(ctx).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        webViewClient = android.webkit.WebViewClient()
+                        try {
+                            val cookieManager = android.webkit.CookieManager.getInstance()
+                            cookieManager.setAcceptCookie(true)
+                            val baseUrl = apiClient.getBaseUrl()
+                            for ((name, value) in apiClient.getWebViewCookiePairs()) {
+                                cookieManager.setCookie(baseUrl, "$name=$value; Path=/")
+                            }
+                        } catch (_: Exception) {
+                            // CookieManager non disponibile: la pagina /map chiederà il login
+                        }
+                        loadUrl(mapUrl)
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+                update = { }
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .background(Color(0xAA0B0F14))
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+            ) {
+                IconButton(onClick = onClose) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Chiudi la mappa",
+                        tint = Color.White
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                Column {
+                    Text(
+                        text = "Mappa foto GPS",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Tile © OpenStreetMap contributors",
+                        color = Color(0xFF9AA0A6),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+        }
+    }
+}

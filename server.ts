@@ -34,6 +34,13 @@ import {
 } from './src/lib/phash';
 import { parseNaturalQuery, mediaItemMatchesQuery } from './src/lib/nlSearch';
 import {
+  parseExifFromJpeg,
+  isExifParseableFilename,
+  emptyExifMetadata,
+  ExifMetadata,
+} from './src/lib/exif';
+import { renderMapPage } from './src/lib/mapPage';
+import {
   getOrCreateServerSecret,
   readJsonFile,
   unwrapSecret,
@@ -84,7 +91,7 @@ const RELEASE_DIR = path.resolve(process.cwd(), 'release');
  * così non si può più annunciare una versione diversa da quella realmente compilata.
  */
 function readAndroidAppVersion(): { versionName: string; versionCode: number } {
-  const fallback = { versionName: '1.4.0', versionCode: 30 };
+  const fallback = { versionName: '1.4.1', versionCode: 31 };
   try {
     const gradlePath = path.resolve(APP_ROOT, 'android-app/app/build.gradle.kts');
     if (!fs.existsSync(gradlePath)) return fallback;
@@ -397,6 +404,67 @@ function loadPHashCache(username: string): PHashCacheFile {
 
 function savePHashCache(username: string, cache: PHashCacheFile): void {
   writeJsonAtomic(getPHashCachePath(username), cache);
+}
+
+// ---------------------------------------------------------------------------
+// v1.4.1 — Cache metadati EXIF per utente (`user_media/<user>/.exif.json`)
+// ---------------------------------------------------------------------------
+interface ExifCacheFile {
+  version: 1;
+  entries: Record<string, { exif: ExifMetadata; mtimeMs: number }>;
+}
+
+function getExifCachePath(username: string): string {
+  return path.join(UPLOAD_FOLDER, username, '.exif.json');
+}
+
+function loadExifCache(username: string): ExifCacheFile {
+  const data = readJsonFile<ExifCacheFile>(getExifCachePath(username), {
+    version: 1,
+    entries: Object.create(null),
+  });
+  if (!data.entries || typeof data.entries !== 'object') {
+    data.entries = Object.create(null);
+  }
+  return data;
+}
+
+function saveExifCache(username: string, cache: ExifCacheFile): void {
+  writeJsonAtomic(getExifCachePath(username), cache);
+}
+
+/**
+ * Legge (con cache mtime-keyed) i metadati EXIF di un file JPEG del vault,
+ * decifrando il file in memoria solo quando serve. Mai lancia eccezioni.
+ */
+async function getExifForVaultFile(
+  username: string,
+  filename: string,
+  apiKey: string
+): Promise<ExifMetadata | null> {
+  try {
+    const userFolder = path.join(UPLOAD_FOLDER, username);
+    const fullPath = path.join(userFolder, filename);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(fullPath);
+    } catch {
+      return null;
+    }
+    const cache = loadExifCache(username);
+    const cached = cache.entries[filename];
+    if (cached && cached.exif && Math.abs(cached.mtimeMs - stat.mtimeMs) < 1) {
+      return cached.exif;
+    }
+    const encrypted = await fs.promises.readFile(fullPath);
+    const decrypted = await decryptFileAsync(encrypted, apiKey);
+    const exif = parseExifFromJpeg(decrypted);
+    cache.entries[filename] = { exif, mtimeMs: stat.mtimeMs };
+    saveExifCache(username, cache);
+    return exif;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,6 +1145,93 @@ async function startServer() {
     const userFolder = path.join(UPLOAD_FOLDER, username);
     void sendPushToUser(userFolder, { title, body, tag });
   }
+
+  // ==========================================================================
+  // v1.4.1 — METADATI EXIF (fotocamera, apertura, ISO, data originale, GPS)
+  // ==========================================================================
+  app.get('/api/exif/:filename', async (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const filename = String(req.params.filename || '');
+    if (!isValidVaultFilename(filename)) {
+      res.status(400).json({ error: 'Nome file non valido' });
+      return;
+    }
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const fullPath = path.join(userFolder, filename);
+    const trashPath = path.join(userFolder, 'trash', filename);
+    if (!fs.existsSync(fullPath) && !fs.existsSync(trashPath)) {
+      res.status(404).json({ error: 'File non trovato' });
+      return;
+    }
+    if (!isExifParseableFilename(filename)) {
+      // Forma di risposta stabile: EXIF vuoto per formati non-JPEG
+      res.json({ filename, exif: emptyExifMetadata(), supported: false });
+      return;
+    }
+    const exif = await getExifForVaultFile(sess.username, filename, sess.apiKey);
+    if (!exif) {
+      res.status(404).json({ error: 'File non trovato' });
+      return;
+    }
+    res.json({ filename, exif, supported: true });
+  });
+
+  // ==========================================================================
+  // v1.4.1 — MAPPA FOTO GPS: elenco dei media con coordinate EXIF
+  // ==========================================================================
+  app.get('/api/map-photos', async (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    fs.mkdirSync(userFolder, { recursive: true });
+    const mediaItems = listMediaFiles(userFolder, sess.username);
+    const items: Array<{
+      filename: string;
+      lat: number;
+      lon: number;
+      timestamp: number;
+      album: string;
+    }> = [];
+    let processed = 0;
+    let cacheHits = 0;
+    const cacheBefore = loadExifCache(sess.username);
+    for (const m of mediaItems) {
+      if (!m.isMedia || !isExifParseableFilename(m.filename)) continue;
+      const hadCache = Boolean(cacheBefore.entries[m.filename]);
+      const exif = await getExifForVaultFile(sess.username, m.filename, sess.apiKey);
+      processed++;
+      if (!exif) continue;
+      if (hadCache) cacheHits++;
+      if (exif.hasGps && exif.latitude !== null && exif.longitude !== null) {
+        items.push({
+          filename: m.filename,
+          lat: exif.latitude,
+          lon: exif.longitude,
+          timestamp: exif.dateTimeOriginalMs ? exif.dateTimeOriginalMs / 1000 : m.timestamp,
+          album: m.album || '',
+        });
+      }
+    }
+    res.json({ count: items.length, processed, cacheHits, items });
+  });
+
+  // Pagina dedicata: mappa interattiva (tile pubbliche OpenStreetMap)
+  app.get('/map', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.redirect('/');
+      return;
+    }
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(renderMapPage(sess.username));
+  });
 
   // ==========================================================================
   // v1.4.0 — CONDIVISIONI PUBBLICHE TEMPORANEE (link opachi, revocabili)
