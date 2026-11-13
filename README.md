@@ -6,7 +6,12 @@
 
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
-> La firma release di `android-app/app/build.gradle.kts` richiede le variabili d'ambiente `PHOTOCLOUD_KEYSTORE_PATH`, `PHOTOCLOUD_KEYSTORE_PASSWORD`, `PHOTOCLOUD_KEY_ALIAS` e `PHOTOCLOUD_KEY_PASSWORD` (nessun keystore o password è committato nel repository). Gli upload temporanei e gli archivi ZIP esportati transitano su disco in `temp_uploads/` e vengono rimossi automaticamente dopo il completamento/download. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow GitHub Actions.
+> La firma release di `android-app/app/build.gradle.kts` usa la risoluzione **persistente a 3 livelli** (nessun keystore o password è committato nel repository):
+> 1. **GitHub Secrets** (`PHOTOCLOUD_KEYSTORE_BASE64`, `PHOTOCLOUD_KEYSTORE_PASSWORD`, `PHOTOCLOUD_KEY_ALIAS`, `PHOTOCLOUD_KEY_PASSWORD`) in CI/CD;
+> 2. **Draft Release Vault Privato (`photocloud-signing-vault`)** su GitHub Actions (`android-release.yml`): se i Secrets non sono configurati, inizializza una sola volta la chiave RSA-2048 nella bozza privata protetta da `GITHUB_TOKEN` (invisibile al pubblico) e la riutilizza in modo identico su tutte le release future verificando la continuità del certificato `SHA-256` tramite `apksigner`;
+> 3. **Locale (`android-app/signing.properties` o `~/.photocloud/signing.properties`)**: generabile/sincronizzabile in un comando con `npm run android:signing:setup`.
+>
+> Gli upload temporanei e gli archivi ZIP esportati transitano su disco in `temp_uploads/` e vengono rimossi automaticamente dopo il completamento/download. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow GitHub Actions.
 
 ---
 

@@ -14,8 +14,13 @@ temp_uploads/
 # Android Keystores & Signing Secrets (NEVER commit)
 *.jks
 *.keystore
+*.p12
+*.pfx
+signing.properties
+android-app/signing.properties
 android-app/app/*.jks
 android-app/app/*.keystore
+android-app/app/*.p12
 
 # Python cache
 __pycache__/

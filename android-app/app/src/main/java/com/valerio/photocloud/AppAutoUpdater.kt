@@ -41,7 +41,8 @@ data class AppUpdateManifest(
     val apkFilename: String,
     val fileSizeBytes: Long,
     val sha256: String,
-    val changelog: List<String>
+    val changelog: List<String>,
+    val signingCertSha256: String = ""
 )
 
 enum class AppUpdateStatus {
@@ -544,11 +545,12 @@ object AppAutoUpdater {
             // (Skip strict mismatch only on debug builds updating to release if packageName has .debug suffix)
             val isDebugInstalled = context.packageName.endsWith(".debug")
             if (!isDebugInstalled && archiveCertDigests.isNotEmpty() && installedCertDigests.isNotEmpty()) {
-                val hasMatchingSignature = archiveCertDigests.any { it in installedCertDigests }
-                if (!hasMatchingSignature) {
+                if (!verifySignatureMatch(installedCertDigests, archiveCertDigests)) {
+                    val installedShort = installedCertDigests.firstOrNull()?.take(12).orEmpty()
+                    val archiveShort = archiveCertDigests.firstOrNull()?.take(12).orEmpty()
                     return ApkVerificationResult(
                         isValid = false,
-                        errorReason = "Firma digitale dell'aggiornamento non corrispondente con l'app installata."
+                        errorReason = "Firma digitale dell'aggiornamento ($archiveShort…) diversa dall'app installata ($installedShort…). Se questa build installata usava una vecchia firma provvisoria, disinstalla e installa questa release una sola volta: tutte le release successive si aggiorneranno direttamente con la stessa firma persistente."
                     )
                 }
             }
@@ -620,6 +622,17 @@ object AppAutoUpdater {
         }
     }
 
+    fun verifySignatureMatch(installedDigests: Set<String>, archiveDigests: Set<String>): Boolean {
+        if (installedDigests.isEmpty() || archiveDigests.isEmpty()) return true
+        return archiveDigests.any { it in installedDigests }
+    }
+
+    fun isSigningCertificateCompatible(installedDigests: Set<String>, remoteSha256: String): Boolean {
+        val cleanRemote = remoteSha256.trim().lowercase(Locale.ROOT)
+        if (cleanRemote.length != 64 || installedDigests.isEmpty()) return true
+        return cleanRemote in installedDigests
+    }
+
     private fun extractSigningCertificateDigests(pkgInfo: PackageInfo): Set<String> {
         val digests = HashSet<String>()
         try {
@@ -629,18 +642,19 @@ object AppAutoUpdater {
                     if (signingInfo.hasMultipleSigners()) {
                         signingInfo.apkContentsSigners
                     } else {
-                        signingInfo.signingCertificateHistory
+                        signingInfo.signingCertificateHistory?.takeIf { it.isNotEmpty() }
+                            ?: signingInfo.apkContentsSigners
                     }
                 } else {
                     null
                 }
                 sigs?.forEach { sig ->
-                    digests.add(sha256Hex(sig.toByteArray()))
+                    digests.add(sha256Hex(sig.toByteArray()).lowercase(Locale.ROOT))
                 }
             } else {
                 @Suppress("DEPRECATION")
                 pkgInfo.signatures?.forEach { sig ->
-                    digests.add(sha256Hex(sig.toByteArray()))
+                    digests.add(sha256Hex(sig.toByteArray()).lowercase(Locale.ROOT))
                 }
             }
         } catch (_: Throwable) {
@@ -805,7 +819,8 @@ object AppAutoUpdater {
                     apkFilename = apkName.ifBlank { "photocloud-release-v$tagName-signed.apk" },
                     fileSizeBytes = if (apkSize > 0L) apkSize else (extraManifest?.fileSizeBytes ?: 0L),
                     sha256 = extraManifest?.sha256.orEmpty(),
-                    changelog = extraManifest?.changelog?.takeIf { it.isNotEmpty() } ?: bodyLines
+                    changelog = extraManifest?.changelog?.takeIf { it.isNotEmpty() } ?: bodyLines,
+                    signingCertSha256 = extraManifest?.signingCertSha256.orEmpty()
                 )
             }
         } catch (t: Throwable) {
@@ -843,6 +858,10 @@ object AppAutoUpdater {
 
                 val sizeBytes = json.optLong("sizeBytes", json.optLong("apkSizeBytes", 0L))
                 val sha256 = json.optString("sha256", json.optString("sha256Fingerprint", "")).trim()
+                val signingCertSha256 = json.optString(
+                    "signingCertSha256",
+                    json.optString("signing_cert_sha256", "")
+                ).trim().lowercase(Locale.ROOT)
                 val changelogList = ArrayList<String>()
                 val featuresArr = json.optJSONArray("changelog") ?: json.optJSONArray("features")
                 if (featuresArr != null) {
@@ -859,7 +878,8 @@ object AppAutoUpdater {
                     apkFilename = apkFilename,
                     fileSizeBytes = sizeBytes,
                     sha256 = sha256,
-                    changelog = changelogList
+                    changelog = changelogList,
+                    signingCertSha256 = signingCertSha256
                 )
             }
         } catch (_: Throwable) {

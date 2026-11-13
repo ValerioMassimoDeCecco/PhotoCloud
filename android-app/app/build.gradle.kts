@@ -1,3 +1,6 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -23,36 +26,65 @@ android {
         noCompress += "tflite"
     }
 
-    val releaseKeystorePath = System.getenv("PHOTOCLOUD_KEYSTORE_PATH")
-        ?: System.getenv("KEYSTORE_PATH")
-        ?: (findProperty("PHOTOCLOUD_KEYSTORE_PATH") as String?)
-        ?: ""
-    val releaseStorePassword = System.getenv("PHOTOCLOUD_KEYSTORE_PASSWORD")
-        ?: System.getenv("KEYSTORE_PASSWORD")
-        ?: (findProperty("PHOTOCLOUD_KEYSTORE_PASSWORD") as String?)
-        ?: ""
-    val releaseKeyAlias = System.getenv("PHOTOCLOUD_KEY_ALIAS")
-        ?: System.getenv("KEY_ALIAS")
-        ?: (findProperty("PHOTOCLOUD_KEY_ALIAS") as String?)
-        ?: ""
-    val releaseKeyPassword = System.getenv("PHOTOCLOUD_KEY_PASSWORD")
-        ?: System.getenv("KEY_PASSWORD")
-        ?: (findProperty("PHOTOCLOUD_KEY_PASSWORD") as String?)
-        ?: ""
+    val localSigningProps = Properties().apply {
+        val candidates = listOf(
+            rootProject.file("signing.properties"),
+            File(System.getProperty("user.home"), ".photocloud/signing.properties")
+        )
+        for (propFile in candidates) {
+            if (propFile.exists() && propFile.isFile) {
+                propFile.inputStream().use { load(it) }
+                break
+            }
+        }
+    }
+
+    fun resolveSigningValue(envPrimary: String, envFallback: String, propKey: String): String {
+        val fromEnv = System.getenv(envPrimary)?.takeIf { it.isNotBlank() }
+            ?: System.getenv(envFallback)?.takeIf { it.isNotBlank() }
+        if (fromEnv != null) return fromEnv
+        val fromGradle = (findProperty(envPrimary) as String?)?.takeIf { it.isNotBlank() }
+            ?: (findProperty(envFallback) as String?)?.takeIf { it.isNotBlank() }
+        if (fromGradle != null) return fromGradle
+        return localSigningProps.getProperty(propKey)?.trim().orEmpty()
+    }
+
+    fun resolveKeystoreFile(rawPath: String): File? {
+        if (rawPath.isBlank()) return null
+        val direct = File(rawPath)
+        if (direct.isAbsolute && direct.exists()) return direct
+        val inModule = file(rawPath)
+        if (inModule.exists()) return inModule
+        val inRoot = rootProject.file(rawPath)
+        if (inRoot.exists()) return inRoot
+        val inHome = File(System.getProperty("user.home"), ".photocloud/$rawPath")
+        if (inHome.exists()) return inHome
+        return inModule
+    }
+
+    val releaseKeystorePath = resolveSigningValue("PHOTOCLOUD_KEYSTORE_PATH", "KEYSTORE_PATH", "storeFile")
+    val releaseStorePassword = resolveSigningValue("PHOTOCLOUD_KEYSTORE_PASSWORD", "KEYSTORE_PASSWORD", "storePassword")
+    val releaseKeyAlias = resolveSigningValue("PHOTOCLOUD_KEY_ALIAS", "KEY_ALIAS", "keyAlias")
+    val releaseKeyPassword = resolveSigningValue("PHOTOCLOUD_KEY_PASSWORD", "KEY_PASSWORD", "keyPassword")
+    val releaseStoreType = resolveSigningValue("PHOTOCLOUD_KEYSTORE_TYPE", "KEYSTORE_TYPE", "storeType")
+    val resolvedKeystoreFile = resolveKeystoreFile(releaseKeystorePath)
     val hasReleaseSigningCredentials =
-        releaseKeystorePath.isNotBlank() &&
-            file(releaseKeystorePath).exists() &&
+        resolvedKeystoreFile != null &&
+            resolvedKeystoreFile.exists() &&
             releaseStorePassword.isNotBlank() &&
             releaseKeyAlias.isNotBlank() &&
             releaseKeyPassword.isNotBlank()
 
     signingConfigs {
         create("release") {
-            if (hasReleaseSigningCredentials) {
-                storeFile = file(releaseKeystorePath)
+            if (hasReleaseSigningCredentials && resolvedKeystoreFile != null) {
+                storeFile = resolvedKeystoreFile
                 storePassword = releaseStorePassword
                 keyAlias = releaseKeyAlias
                 keyPassword = releaseKeyPassword
+                if (releaseStoreType.isNotBlank()) {
+                    storeType = releaseStoreType
+                }
             }
             enableV1Signing = true
             enableV2Signing = true

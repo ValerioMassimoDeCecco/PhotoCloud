@@ -1160,6 +1160,57 @@ test('v1.3.2 Zero-Lag Focal-Point Pinch-to-Zoom Engine (Math, Web & Android Nati
   }
 });
 
+test('Persistent APK Signing Engine: Draft Release Vault + Secrets + Continuity Verification', async () => {
+  const root = process.cwd();
+  const read = (rel: string) => fs.readFileSync(path.resolve(root, rel), 'utf-8');
+
+  // 1. Release workflow must NEVER fall back to unpersisted `openssl rand` disposable keystores
+  const releaseWorkflow = read('.github/workflows/android-release.yml');
+  assert.equal(
+    releaseWorkflow.includes('openssl rand'),
+    false,
+    'android-release.yml must never generate disposable random keys per build'
+  );
+  assert.ok(releaseWorkflow.includes('photocloud-signing-vault'));
+  assert.ok(releaseWorkflow.includes('Provision Persistent Release Keystore'));
+  assert.ok(releaseWorkflow.includes('apksigner'));
+  assert.ok(releaseWorkflow.includes('signingCertSha256'));
+  assert.ok(releaseWorkflow.includes('allow_signature_rotation'));
+  assert.ok(releaseWorkflow.includes('concurrency:'));
+
+  // 2. Gradle supports env vars, Gradle props, and local gitignored signing.properties without hardcoded secrets
+  const buildGradle = read('android-app/app/build.gradle.kts');
+  assert.ok(buildGradle.includes('signing.properties'));
+  assert.ok(buildGradle.includes('.photocloud/signing.properties'));
+  assert.ok(buildGradle.includes('resolveKeystoreFile'));
+  assert.equal(buildGradle.includes('photocloud_release_2026'), false);
+
+  // 3. Gitignore blocks all keystore and signing.properties artifacts from ever entering git
+  const gitignore = read('.gitignore');
+  assert.ok(gitignore.includes('*.jks'));
+  assert.ok(gitignore.includes('*.p12'));
+  assert.ok(gitignore.includes('signing.properties'));
+  assert.ok(gitignore.includes('android-app/signing.properties'));
+
+  // 4. AppAutoUpdater tracks signingCertSha256 and verifies installed vs update signature
+  const updaterKt = read('android-app/app/src/main/java/com/valerio/photocloud/AppAutoUpdater.kt');
+  assert.ok(updaterKt.includes('val signingCertSha256: String = ""'));
+  assert.ok(updaterKt.includes('fun verifySignatureMatch('));
+  assert.ok(updaterKt.includes('fun isSigningCertificateCompatible('));
+  assert.ok(updaterKt.includes('signingCertificateHistory?.takeIf { it.isNotEmpty() }'));
+
+  // 5. CLI provisioning helper & APK certificate extractor work cleanly
+  const setupScript = read('scripts/setup-persistent-signing.ts');
+  assert.ok(setupScript.includes('createPersistentPkcs12Keystore'));
+  assert.ok(setupScript.includes('photocloud-signing-vault'));
+
+  const { extractApkSigningCertSha256 } = await import('./githubReleasePublisher');
+  const sampleApkBytes = fs.readFileSync(path.resolve(root, 'release/photocloud-release-v1.3.2-signed.apk'));
+  const certDigest = await extractApkSigningCertSha256(sampleApkBytes);
+  assert.match(certDigest, /^[0-9a-f]{64}$/);
+});
+
+
 
 
 

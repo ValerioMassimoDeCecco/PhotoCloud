@@ -9,13 +9,18 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag della Release GitHub (es. v1.3.0). Deve coincidere con versionName in android-app/app/build.gradle.kts'
+        description: 'Tag della Release GitHub (es. v1.3.2). Deve coincidere con versionName in android-app/app/build.gradle.kts'
         required: false
         default: ''
       publish_release:
         description: 'Pubblica l APK su GitHub Releases (solo su main o tag v*)'
         required: false
         default: true
+        type: boolean
+      allow_signature_rotation:
+        description: 'Consenti rotazione manuale della firma rispetto alla release precedente (richiede disinstallazione sul telefono)'
+        required: false
+        default: false
         type: boolean
       changelog:
         description: 'Changelog della release (opzionale, finisce nel manifest di auto-update)'
@@ -28,6 +33,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: android-release-persistent-signing
+  cancel-in-progress: false
 
 jobs:
   build-android-release:
@@ -82,47 +91,224 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Versione sorgente: v$VERSION_NAME (versionCode $VERSION_CODE)"
 
-      - name: Provision Release Keystore
+      # ----------------------------------------------------------------------
+      # PERSISTENT SIGNING ENGINE:
+      # 1. Se configurati, usa i GitHub Secrets (PHOTOCLOUD_KEYSTORE_*).
+      # 2. Altrimenti carica (o inizializza alla prima esecuzione) la chiave
+      #    persistente dal Draft Vault privato "photocloud-signing-vault"
+      #    accessibile solo ai manutentori tramite GITHUB_TOKEN.
+      #    Non genera MAI più chiavi usa-e-getta casuali ad ogni release.
+      # ----------------------------------------------------------------------
+      - name: Provision Persistent Release Keystore
+        id: signing
         working-directory: ./android-app/app
         env:
           KEYSTORE_BASE64: ${{ secrets.PHOTOCLOUD_KEYSTORE_BASE64 || secrets.KEYSTORE_BASE64 }}
           SECRET_STORE_PASS: ${{ secrets.PHOTOCLOUD_KEYSTORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
           SECRET_KEY_ALIAS: ${{ secrets.PHOTOCLOUD_KEY_ALIAS || secrets.KEY_ALIAS }}
           SECRET_KEY_PASS: ${{ secrets.PHOTOCLOUD_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+          SECRET_STORE_TYPE: ${{ secrets.PHOTOCLOUD_KEYSTORE_TYPE || secrets.KEYSTORE_TYPE }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$SECRET_STORE_PASS" ] && [ -n "$SECRET_KEY_ALIAS" ] && [ -n "$SECRET_KEY_PASS" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > release-signing.jks
-            STORE_PASS="$SECRET_STORE_PASS"
-            KEY_ALIAS="$SECRET_KEY_ALIAS"
-            KEY_PASS="$SECRET_KEY_PASS"
-            echo "Keystore di release caricato da GitHub Secrets."
-          else
-            echo "::notice::Secret PHOTOCLOUD_KEYSTORE_BASE64 non configurato nelle impostazioni del repository: generazione keystore RSA-2048 dedicato per la build CI."
-            STORE_PASS="$(openssl rand -hex 16)"
-            KEY_ALIAS="photocloud-release-key"
-            KEY_PASS="$STORE_PASS"
-            rm -f release-signing.jks
-            keytool -genkeypair -v \
-              -keystore release-signing.jks \
-              -alias "$KEY_ALIAS" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -storepass "$STORE_PASS" \
-              -keypass "$KEY_PASS" \
-              -dname "CN=PhotoCloud, OU=Mobile, O=Valerio, L=Rome, ST=RM, C=IT"
-          fi
-          keytool -list \
-            -keystore release-signing.jks \
-            -alias "$KEY_ALIAS" \
-            -storepass "$STORE_PASS" > /dev/null
-          {
-            echo "PHOTOCLOUD_KEYSTORE_PATH=release-signing.jks"
-            echo "PHOTOCLOUD_KEYSTORE_PASSWORD=$STORE_PASS"
-            echo "PHOTOCLOUD_KEY_ALIAS=$KEY_ALIAS"
-            echo "PHOTOCLOUD_KEY_PASSWORD=$KEY_PASS"
-          } >> "$GITHUB_ENV"
+          node <<'NODE'
+          const fs = require("fs");
+          const crypto = require("crypto");
+          const { execFileSync } = require("child_process");
+
+          const VAULT_TAG = "photocloud-signing-vault";
+          const VAULT_ASSET = "photocloud-signing-vault.tar.gz";
+          const KEYSTORE_FILENAME = "release-signing.jks";
+          const META_FILENAME = "signing-meta.json";
+
+          function exportCertSha256(keystorePath, alias, storePass) {
+            const derCert = execFileSync(
+              "keytool",
+              ["-exportcert", "-keystore", keystorePath, "-alias", alias, "-storepass", storePass],
+              { stdio: ["ignore", "pipe", "pipe"] }
+            );
+            return crypto.createHash("sha256").update(derCert).digest("hex").toLowerCase();
+          }
+
+          function writeOutputs(storePass, keyAlias, keyPass, storeType, certSha256, signingSource) {
+            console.log(`::add-mask::${storePass}`);
+            if (keyPass !== storePass) {
+              console.log(`::add-mask::${keyPass}`);
+            }
+            fs.appendFileSync(
+              process.env.GITHUB_ENV,
+              [
+                `PHOTOCLOUD_KEYSTORE_PATH=${KEYSTORE_FILENAME}`,
+                `PHOTOCLOUD_KEYSTORE_PASSWORD=${storePass}`,
+                `PHOTOCLOUD_KEY_ALIAS=${keyAlias}`,
+                `PHOTOCLOUD_KEY_PASSWORD=${keyPass}`,
+                `PHOTOCLOUD_KEYSTORE_TYPE=${storeType || ""}`,
+              ].join("\n") + "\n"
+            );
+            fs.appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              [
+                `CERT_SHA256=${certSha256}`,
+                `SIGNING_SOURCE=${signingSource}`,
+              ].join("\n") + "\n"
+            );
+            console.log(`✅ Firma persistente pronta (${signingSource}) — Certificato SHA-256: ${certSha256}`);
+          }
+
+          async function run() {
+            const secB64 = (process.env.KEYSTORE_BASE64 || "").trim();
+            const secStorePass = (process.env.SECRET_STORE_PASS || "").trim();
+            const secAlias = (process.env.SECRET_KEY_ALIAS || "").trim();
+            const secKeyPass = (process.env.SECRET_KEY_PASS || "").trim();
+            const secStoreType = (process.env.SECRET_STORE_TYPE || "").trim();
+
+            if (secB64 && secStorePass && secAlias && secKeyPass) {
+              fs.writeFileSync(KEYSTORE_FILENAME, Buffer.from(secB64, "base64"));
+              execFileSync("keytool", [
+                "-list",
+                "-keystore", KEYSTORE_FILENAME,
+                "-alias", secAlias,
+                "-storepass", secStorePass,
+              ], { stdio: "ignore" });
+              const certSha256 = exportCertSha256(KEYSTORE_FILENAME, secAlias, secStorePass);
+              writeOutputs(secStorePass, secAlias, secKeyPass, secStoreType, certSha256, "github-secrets");
+              return;
+            }
+
+            const token = (process.env.GH_TOKEN || "").trim();
+            const repo = (process.env.GITHUB_REPOSITORY || "").trim();
+            if (!token || !repo) {
+              throw new Error("Token GITHUB_TOKEN o GITHUB_REPOSITORY mancante: impossibile accedere al Draft Vault di firma.");
+            }
+
+            const apiHeaders = {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "PhotoCloud-Persistent-Signing",
+            };
+
+            let vaultRelease = null;
+            for (let page = 1; page <= 5; page++) {
+              const resp = await fetch(
+                `https://api.github.com/repos/${repo}/releases?per_page=100&page=${page}`,
+                { headers: apiHeaders }
+              );
+              if (!resp.ok) {
+                throw new Error(`Errore lettura GitHub Releases (${resp.status}): ${await resp.text()}`);
+              }
+              const list = await resp.json();
+              if (!Array.isArray(list) || list.length === 0) break;
+              const match = list.find(
+                (r) => r.draft === true && r.tag_name === VAULT_TAG && Array.isArray(r.assets) && r.assets.some((a) => a.name === VAULT_ASSET)
+              );
+              if (match) {
+                vaultRelease = match;
+                break;
+              }
+            }
+
+            if (vaultRelease) {
+              const asset = vaultRelease.assets.find((a) => a.name === VAULT_ASSET);
+              const dlResp = await fetch(asset.url, {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  Accept: "application/octet-stream",
+                  "User-Agent": "PhotoCloud-Persistent-Signing",
+                },
+              });
+              if (!dlResp.ok) {
+                throw new Error(`Impossibile scaricare l'archivio keystore dal Draft Vault (${dlResp.status})`);
+              }
+              fs.writeFileSync(VAULT_ASSET, Buffer.from(await dlResp.arrayBuffer()));
+              execFileSync("tar", ["-xzf", VAULT_ASSET]);
+              if (!fs.existsSync(KEYSTORE_FILENAME) || !fs.existsSync(META_FILENAME)) {
+                throw new Error("Draft Vault corrotto: release-signing.jks o signing-meta.json mancante.");
+              }
+              const meta = JSON.parse(fs.readFileSync(META_FILENAME, "utf8"));
+              const actualSha = exportCertSha256(KEYSTORE_FILENAME, meta.keyAlias, meta.storePassword);
+              if (meta.certSha256 && actualSha !== String(meta.certSha256).toLowerCase()) {
+                throw new Error(`Verifica integrità vault fallita: atteso ${meta.certSha256}, trovato ${actualSha}`);
+              }
+              fs.rmSync(VAULT_ASSET, { force: true });
+              fs.rmSync(META_FILENAME, { force: true });
+              writeOutputs(meta.storePassword, meta.keyAlias, meta.keyPassword, meta.storeType || "PKCS12", actualSha, "draft-release-vault");
+              return;
+            }
+
+            console.log("Inizializzazione prima volta del Draft Vault privato per la firma persistente Android...");
+            const storePass = crypto.randomBytes(24).toString("hex");
+            const keyAlias = "photocloud-release-key";
+            const keyPass = storePass;
+            console.log(`::add-mask::${storePass}`);
+
+            fs.rmSync(KEYSTORE_FILENAME, { force: true });
+            execFileSync("keytool", [
+              "-genkeypair", "-v",
+              "-keystore", KEYSTORE_FILENAME,
+              "-storetype", "PKCS12",
+              "-alias", keyAlias,
+              "-keyalg", "RSA",
+              "-keysize", "2048",
+              "-validity", "10000",
+              "-storepass", storePass,
+              "-keypass", keyPass,
+              "-dname", "CN=PhotoCloud Persistent Release, OU=Mobile, O=ValerioMassimoDeCecco, L=Rome, ST=RM, C=IT",
+            ], { stdio: "inherit" });
+
+            const certSha256 = exportCertSha256(KEYSTORE_FILENAME, keyAlias, storePass);
+            const meta = {
+              version: 1,
+              keyAlias,
+              storePassword: storePass,
+              keyPassword: keyPass,
+              storeType: "PKCS12",
+              certSha256,
+              createdAt: new Date().toISOString(),
+            };
+            fs.writeFileSync(META_FILENAME, JSON.stringify(meta, null, 2));
+            execFileSync("tar", ["-czf", VAULT_ASSET, KEYSTORE_FILENAME, META_FILENAME]);
+
+            const createResp = await fetch(`https://api.github.com/repos/${repo}/releases`, {
+              method: "POST",
+              headers: { ...apiHeaders, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                tag_name: VAULT_TAG,
+                name: "PhotoCloud Persistent Signing Vault (Private Draft - Do Not Delete)",
+                body: `Archivio privato automatico della chiave di firma persistente APK.\n\n- **Certificato SHA-256**: \`${certSha256}\`\n- **Alias**: \`${keyAlias}\`\n\nNon eliminare questa bozza privata: tutte le release future la riutilizzeranno per garantire aggiornamenti diretti senza disinstallare l'app.`,
+                draft: true,
+                prerelease: false,
+              }),
+            });
+            if (!createResp.ok) {
+              throw new Error(`Impossibile creare il Draft Vault su GitHub (${createResp.status}): ${await createResp.text()}`);
+            }
+            const createdRelease = await createResp.json();
+            const uploadBase = String(createdRelease.upload_url || "").replace(/\{\?name,label\}$/, "");
+            const tarBytes = fs.readFileSync(VAULT_ASSET);
+            const upResp = await fetch(`${uploadBase}?name=${encodeURIComponent(VAULT_ASSET)}`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/gzip",
+                "Content-Length": String(tarBytes.length),
+                "User-Agent": "PhotoCloud-Persistent-Signing",
+              },
+              body: tarBytes,
+            });
+            if (!upResp.ok) {
+              throw new Error(`Errore upload keystore nel Draft Vault (${upResp.status}): ${await upResp.text()}`);
+            }
+
+            fs.rmSync(VAULT_ASSET, { force: true });
+            fs.rmSync(META_FILENAME, { force: true });
+            writeOutputs(storePass, keyAlias, keyPass, "PKCS12", certSha256, "draft-release-vault-initialized");
+          }
+
+          run().catch((err) => {
+            console.error(`::error::${err && err.message ? err.message : String(err)}`);
+            process.exit(1);
+          });
+          NODE
 
       - name: Determine and validate Release Tag
         id: release_meta
@@ -162,9 +348,13 @@ jobs:
           sha256sum "../$APK_NAME" > "../$APK_NAME.sha256"
           echo "APK prodotto: $APK_NAME"
 
-      - name: Verify built APK declares the expected version
+      - name: Verify built APK declares the expected version and persistent signature
         id: apk_check
         working-directory: ./android-app
+        env:
+          EXPECTED_CERT_SHA256: ${{ steps.signing.outputs.CERT_SHA256 }}
+          ALLOW_ROTATION: ${{ github.event.inputs.allow_signature_rotation }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           APK_METADATA="app/build/outputs/apk/release/output-metadata.json"
@@ -185,11 +375,73 @@ jobs:
             echo "::error::L'APK dichiara versionCode $APK_VERSION_CODE ma la configurazione Gradle imposta $EXPECTED_CODE"
             exit 1
           fi
+
+          APK_FILE="../${{ steps.app_version.outputs.APK_NAME }}"
+          APKSIGNER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name "apksigner" 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner non trovato in Android SDK build-tools"
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose --print-certs "$APK_FILE"
+          APK_CERT_SHA256=$("$APKSIGNER" verify --print-certs "$APK_FILE" | grep -i 'SHA-256 digest:' | head -n 1 | awk '{print tolower($NF)}')
+          if [ -z "$APK_CERT_SHA256" ] || [ "$APK_CERT_SHA256" != "$EXPECTED_CERT_SHA256" ]; then
+            echo "::error::Certificato firma APK ($APK_CERT_SHA256) diverso dal keystore persistente atteso ($EXPECTED_CERT_SHA256)."
+            exit 1
+          fi
+
+          node <<'NODE'
+          const actualCert = (process.env.EXPECTED_CERT_SHA256 || "").toLowerCase();
+          const allowRotation = process.env.ALLOW_ROTATION === "true";
+          const repo = process.env.GITHUB_REPOSITORY;
+          const token = process.env.GH_TOKEN;
+
+          async function verifyContinuity() {
+            const resp = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: "application/vnd.github+json",
+                "User-Agent": "PhotoCloud-Signature-Continuity",
+              },
+            });
+            if (!resp.ok) {
+              console.log("Nessuna release pubblicata precedente trovata: inizializzazione continuità firma.");
+              return;
+            }
+            const rel = await resp.json();
+            const manifestAsset = Array.isArray(rel.assets)
+              ? rel.assets.find((a) => a.name === "photocloud-release-build.json")
+              : null;
+            if (!manifestAsset) return;
+            const mResp = await fetch(manifestAsset.browser_download_url, {
+              headers: { "User-Agent": "PhotoCloud-Signature-Continuity" },
+            });
+            if (!mResp.ok) return;
+            const prevManifest = await mResp.json();
+            const prevCert = String(prevManifest.signingCertSha256 || "").trim().toLowerCase();
+            if (!prevCert) {
+              console.log(`Prima release con tracciamento firma persistente: registrato certificato ${actualCert}.`);
+              return;
+            }
+            if (prevCert !== actualCert && !allowRotation) {
+              throw new Error(
+                `Blocco sicurezza firma persistente: la release precedente (${rel.tag_name}) usava il certificato ${prevCert}, mentre questa build ha ${actualCert}. Ripristina il keystore corretto oppure imposta allow_signature_rotation=true.`
+              );
+            }
+            console.log(`✅ Continuità firma verificata contro ${rel.tag_name}: ${actualCert}`);
+          }
+
+          verifyContinuity().catch((err) => {
+            console.error(`::error::${err && err.message ? err.message : String(err)}`);
+            process.exit(1);
+          });
+          NODE
+
           {
             echo "VERSION_NAME=$APK_VERSION_NAME"
             echo "VERSION_CODE=$APK_VERSION_CODE"
-            echo "SHA256=$(sha256sum "../${{ steps.app_version.outputs.APK_NAME }}" | awk '{print $1}')"
-            echo "SIZE_BYTES=$(stat -c%s "../${{ steps.app_version.outputs.APK_NAME }}" | awk '{print $1}')"
+            echo "SHA256=$(sha256sum "$APK_FILE" | awk '{print $1}')"
+            echo "SIZE_BYTES=$(stat -c%s "$APK_FILE" | awk '{print $1}')"
+            echo "CERT_SHA256=$APK_CERT_SHA256"
           } >> "$GITHUB_OUTPUT"
 
       - name: Generate auto-update manifest from the built APK
@@ -199,6 +451,8 @@ jobs:
           VERSION_CODE: ${{ steps.apk_check.outputs.VERSION_CODE }}
           SHA256: ${{ steps.apk_check.outputs.SHA256 }}
           SIZE_BYTES: ${{ steps.apk_check.outputs.SIZE_BYTES }}
+          CERT_SHA256: ${{ steps.apk_check.outputs.CERT_SHA256 }}
+          SIGNING_SOURCE: ${{ steps.signing.outputs.SIGNING_SOURCE }}
           TAG: ${{ steps.release_meta.outputs.TAG }}
           CHANGELOG: ${{ github.event.inputs.changelog }}
           FEATURES: ${{ github.event.inputs.features }}
@@ -225,6 +479,8 @@ jobs:
               apkDownloadUrl: `/release/${process.env.APK_NAME}`,
               sha256: process.env.SHA256,
               sizeBytes: Number(process.env.SIZE_BYTES),
+              signingCertSha256: process.env.CERT_SHA256,
+              signingSource: process.env.SIGNING_SOURCE,
               applicationId: "com.valerio.photocloud",
               versionName: process.env.VERSION_NAME,
               versionCode: Number(process.env.VERSION_CODE),
@@ -256,14 +512,15 @@ jobs:
           name: PhotoCloud Android Release ${{ steps.release_meta.outputs.TAG }}
           body: |
             ### PhotoCloud Android Release (${{ steps.release_meta.outputs.TAG }})
-            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con firma V1/V2/V3.
+            Compilato automaticamente tramite **GitHub Actions** (JDK 17 + Android SDK 35 + Gradle 8.10.2) con **firma persistente V1/V2/V3**.
 
             - **Application ID**: `com.valerio.photocloud`
             - **Versione**: `${{ steps.apk_check.outputs.VERSION_NAME }}` (`versionCode ${{ steps.apk_check.outputs.VERSION_CODE }}`)
             - **APK Firmato**: `${{ steps.app_version.outputs.APK_NAME }}`
-            - **Checksum SHA-256**: `${{ steps.apk_check.outputs.SHA256 }}`
+            - **Checksum File (SHA-256)**: `${{ steps.apk_check.outputs.SHA256 }}`
+            - **Certificato Firma Persistente (SHA-256)**: `${{ steps.apk_check.outputs.CERT_SHA256 }}` (`${{ steps.signing.outputs.SIGNING_SOURCE }}`)
 
-            La versione dell'APK è verificata automaticamente contro `android-app/app/build.gradle.kts`: la release non viene pubblicata se non coincidono.
+            La firma digitale è persistente e verificata contro la release precedente così tutti gli aggiornamenti futuri possono essere installati direttamente sopra questa build senza disinstallare.
           files: |
             ${{ steps.app_version.outputs.APK_NAME }}
             ${{ steps.app_version.outputs.APK_NAME }}.sha256

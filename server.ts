@@ -1732,6 +1732,10 @@ async function startServer() {
         apkDownloadUrl: `/release/${resolvedApk}`,
         sizeBytes: stat.size,
         sha256,
+        signingCertSha256:
+          typeof manifestData.signingCertSha256 === 'string'
+            ? manifestData.signingCertSha256.trim().toLowerCase()
+            : undefined,
         changelog,
         features,
         publishedAt: String(manifestData.publishedAt || new Date().toISOString()),

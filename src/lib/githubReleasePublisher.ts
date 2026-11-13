@@ -42,9 +42,34 @@ const DEFAULT_TAG = 'v1.3.2';
 const APK_FILENAME = 'photocloud-release-v1.3.2-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
 
+/** Best-effort extraction of APK X.509 signing certificate SHA-256 fingerprint using OpenSSL + ZIP. */
+export async function extractApkSigningCertSha256(apkBuffer: Buffer): Promise<string> {
+  try {
+    const JSZip = (await import('jszip')).default;
+    const zip = await JSZip.loadAsync(apkBuffer);
+    const certEntryName = Object.keys(zip.files).find((n) =>
+      /^META-INF\/.+\.(RSA|EC|DSA)$/i.test(n)
+    );
+    if (!certEntryName) return '';
+    const pkcs7Der = await zip.file(certEntryName)!.async('nodebuffer');
+    const { execFileSync } = await import('node:child_process');
+    const pemCert = execFileSync('openssl', ['pkcs7', '-inform', 'DER', '-print_certs'], {
+      input: pkcs7Der,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    const x509Der = execFileSync('openssl', ['x509', '-outform', 'DER'], {
+      input: pemCert,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    return crypto.createHash('sha256').update(x509Der).digest('hex').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
 /** Build a real APK using the installed Gradle and Android SDK. Never fabricate APKs. */
 export async function compileSignedAndroidApk(outputDir: string): Promise<{
-  apkPath: string; apkBuffer: Buffer; sha256: string; metadataPath: string;
+  apkPath: string; apkBuffer: Buffer; sha256: string; metadataPath: string; signingCertSha256: string;
 }> {
   const project = path.resolve(process.cwd(), 'android-app');
   let source = path.join(project, 'app/build/outputs/apk/release/app-release.apk');
@@ -52,7 +77,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     await promisify(execFile)('gradle', ['-p', project, 'assembleRelease', '--no-daemon'], {
       cwd: project, maxBuffer: 10 * 1024 * 1024,
     });
-  } catch (err) {
+  } catch {
     // If gradle binary is not present in local container, use pre-built signed release APK
     const fallbackCandidates = [
       path.join(outputDir, APK_FILENAME),
@@ -70,6 +95,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
   }
   const apkBuffer = fs.readFileSync(source);
   const sha256 = crypto.createHash('sha256').update(apkBuffer).digest('hex');
+  const signingCertSha256 = await extractApkSigningCertSha256(apkBuffer);
   fs.mkdirSync(outputDir, { recursive: true });
   const apkPath = path.join(outputDir, APK_FILENAME);
   fs.writeFileSync(apkPath, apkBuffer);
@@ -79,6 +105,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     apkDownloadUrl: `/release/${APK_FILENAME}`,
     sha256,
     sizeBytes: apkBuffer.length,
+    ...(signingCertSha256 ? { signingCertSha256 } : {}),
     applicationId: 'com.valerio.photocloud',
     versionName: '1.3.2',
     versionCode: 29,
@@ -93,7 +120,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.3.2',
     publishedAt: new Date().toISOString(),
   }, null, 2));
-  return { apkPath, apkBuffer, sha256, metadataPath };
+  return { apkPath, apkBuffer, sha256, metadataPath, signingCertSha256 };
 }
 
 /**
@@ -145,7 +172,10 @@ export async function triggerGitHubActionsBuild(options?: {
   // 2. Push/update the workflow and Android project files via GitHub Contents API if needed
   const filesToSync = [
     'README.md',
+    '.gitignore',
     '.github/workflows/android-release.yml',
+    '.github/workflows/android-ci.yml',
+    'scripts/setup-persistent-signing.ts',
     'android-app/settings.gradle.kts',
     'android-app/build.gradle.kts',
     'android-app/gradle.properties',

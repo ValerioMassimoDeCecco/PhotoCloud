@@ -115,10 +115,14 @@ android {
         buildConfigField("boolean", "ENABLE_OFFLINE_CACHE", "${Boolean(config.enableOfflineCache)}")
     }
 
-    val releaseKeystorePath = System.getenv("PHOTOCLOUD_KEYSTORE_PATH") ?: System.getenv("KEYSTORE_PATH") ?: ""
-    val releaseStorePassword = System.getenv("PHOTOCLOUD_KEYSTORE_PASSWORD") ?: System.getenv("KEYSTORE_PASSWORD") ?: ""
-    val releaseKeyAlias = System.getenv("PHOTOCLOUD_KEY_ALIAS") ?: "${safeAlias}"
-    val releaseKeyPassword = System.getenv("PHOTOCLOUD_KEY_PASSWORD") ?: System.getenv("KEY_PASSWORD") ?: ""
+    val localSigningProps = java.util.Properties().apply {
+        val f = rootProject.file("signing.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    val releaseKeystorePath = System.getenv("PHOTOCLOUD_KEYSTORE_PATH") ?: System.getenv("KEYSTORE_PATH") ?: localSigningProps.getProperty("storeFile") ?: ""
+    val releaseStorePassword = System.getenv("PHOTOCLOUD_KEYSTORE_PASSWORD") ?: System.getenv("KEYSTORE_PASSWORD") ?: localSigningProps.getProperty("storePassword") ?: ""
+    val releaseKeyAlias = System.getenv("PHOTOCLOUD_KEY_ALIAS") ?: localSigningProps.getProperty("keyAlias") ?: "${safeAlias}"
+    val releaseKeyPassword = System.getenv("PHOTOCLOUD_KEY_PASSWORD") ?: System.getenv("KEY_PASSWORD") ?: localSigningProps.getProperty("keyPassword") ?: ""
     val hasSigningSecrets = releaseKeystorePath.isNotBlank() && file(releaseKeystorePath).exists() && releaseStorePassword.isNotBlank() && releaseKeyPassword.isNotBlank()
 
     signingConfigs {

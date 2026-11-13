@@ -9,7 +9,8 @@
     "start": "node --import tsx server.ts",
     "lint": "tsc --noEmit",
     "test": "tsx --test src/lib/*.test.ts",
-    "release:apk": "tsx scripts/publish-github-release.ts"
+    "release:apk": "tsx scripts/publish-github-release.ts",
+    "android:signing:setup": "tsx scripts/setup-persistent-signing.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.5",
