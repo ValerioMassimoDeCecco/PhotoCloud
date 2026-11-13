@@ -101,7 +101,7 @@ test('streamDecryptedVaultFile preserves Accept-Ranges, Content-Range, 206, and 
     assert.equal(r3.headers.get('content-range'), 'bytes 16-19/20');
     assert.equal((r3.getBody() as Buffer).toString('utf-8'), 'ghij');
 
-    // invalid -> 416 must NOT fire onBeforeSend
+    // invalid -> 416 ALSO fires onBeforeSend in baseline (counter runs before Range validation, after decryption)
     const r4 = makeMockRes();
     await streamDecryptedVaultFile(
       { headers: { range: 'bytes=999-' } } as unknown as Request,
@@ -109,7 +109,7 @@ test('streamDecryptedVaultFile preserves Accept-Ranges, Content-Range, 206, and 
       { filePath, filename: 'sample.txt', apiKey, onBeforeSend: () => { hookCount += 1; } }
     );
     assert.equal(r4.getStatus(), 416);
-    assert.equal(hookCount, 2);
+    assert.equal(hookCount, 3);
     assert.equal(r4.headers.get('content-range'), 'bytes */20');
     assert.equal(r4.isEnded(), true);
 
@@ -121,7 +121,7 @@ test('streamDecryptedVaultFile preserves Accept-Ranges, Content-Range, 206, and 
       { filePath, filename: 'sample.txt', apiKey: 'wrong-key', onBeforeSend: () => { hookCount += 1; } }
     );
     assert.equal(r5.getStatus(), 500);
-    assert.equal(hookCount, 2);
+    assert.equal(hookCount, 3);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

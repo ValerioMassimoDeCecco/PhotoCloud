@@ -122,6 +122,10 @@ export async function streamDecryptedVaultFile(
       );
     }
 
+    if (onBeforeSend) {
+      onBeforeSend();
+    }
+
     const parsedRange = parseHttpByteRange(req.headers.range, decrypted.length);
     if (parsedRange.status === 'invalid') {
       res.status(416);
@@ -130,9 +134,6 @@ export async function streamDecryptedVaultFile(
       return;
     }
 
-    if (onBeforeSend) {
-      onBeforeSend();
-    }
     if (parsedRange.status === 'ok') {
       const chunk = decrypted.subarray(parsedRange.start, parsedRange.end + 1);
       res.status(206);
