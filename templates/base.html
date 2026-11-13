@@ -42,6 +42,9 @@
                 <button type="button" id="lightbox-share-btn" class="lightbox-icon-btn" title="Crea link pubblico temporaneo" aria-label="Condividi con link pubblico" style="display: none;">
                     <span class="material-icons">share</span>
                 </button>
+                <button type="button" id="lightbox-exif-btn" class="lightbox-icon-btn" title="Metadati EXIF (I)" aria-label="Mostra metadati EXIF: fotocamera, apertura, ISO, data originale" style="display: none;">
+                    <span class="material-icons">info</span>
+                </button>
                 <button type="button" id="lightbox-slideshow-btn" class="lightbox-icon-btn" title="Slideshow con transizioni (P)" aria-label="Avvia o ferma slideshow">
                     <span class="material-icons">slideshow</span>
                 </button>
@@ -905,10 +908,28 @@
         </div>
     </div>
     
+    <!-- v1.4.1 — Pannello metadati EXIF (bottom-sheet) -->
+    <div id="exif-panel" class="exif-panel" role="dialog" aria-label="Metadati EXIF della foto" hidden>
+        <div class="exif-panel-card">
+            <div class="exif-panel-header">
+                <span class="material-icons">photo_camera</span>
+                <strong id="exif-panel-title">Metadati EXIF</strong>
+                <button type="button" id="exif-panel-close" class="lightbox-icon-btn" aria-label="Chiudi pannello EXIF">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+            <div id="exif-panel-grid" class="exif-panel-grid"></div>
+            <a id="exif-panel-map-link" class="exif-panel-map-link" href="#" hidden>
+                <span class="material-icons">map</span> Vedi sulla mappa interattiva
+            </a>
+        </div>
+    </div>
+
     <script src="{{ url_for('static', filename='scripts/liquid-glass.js') }}"></script>
     <script src="{{ url_for('static', filename='scripts/lightbox.js') }}"></script>
     <script src="{{ url_for('static', filename='scripts/photo-editor.js') }}"></script>
     <script src="{{ url_for('static', filename='scripts/document-viewer.js') }}"></script>
+    <script src="{{ url_for('static', filename='scripts/exif-panel.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

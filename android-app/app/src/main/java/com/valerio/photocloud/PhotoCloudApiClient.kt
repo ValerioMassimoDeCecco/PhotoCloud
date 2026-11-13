@@ -1759,6 +1759,88 @@ class PhotoCloudApiClient(
     }
 
     // -----------------------------------------------------------------
+    // v1.4.1 — Metadati EXIF e Mappa foto GPS
+    // -----------------------------------------------------------------
+
+    /** URL base del server (senza slash finale) — usato anche dal WebView della mappa. */
+    fun getBaseUrl(): String = cleanBaseUrl()
+
+    /** Cookie di sessione della sessione corrente, pronti per il CookieManager del WebView. */
+    fun getWebViewCookiePairs(): List<Pair<String, String>> {
+        return loadCookieMap(currentHostKey()).entries.map { it.key to it.value }
+    }
+
+    /** Metadati EXIF di un file JPEG del vault (fotocamera, apertura, ISO, data, GPS). */
+    suspend fun fetchExifMetadata(filename: String): ExifMetadataModel? = withContext(Dispatchers.IO) {
+        try {
+            val encoded = URLEncoder.encode(filename, "UTF-8").replace("+", "%20")
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/exif/$encoded")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                val body = resp.body?.string() ?: ""
+                if (!body.trim().startsWith("{")) return@withContext null
+                val json = JSONObject(body)
+                val e = json.optJSONObject("exif") ?: JSONObject()
+                return@withContext ExifMetadataModel(
+                    filename = json.optString("filename", filename),
+                    supported = json.optBoolean("supported", true),
+                    camera = if (e.isNull("camera")) null else e.optString("camera", "").ifBlank { null },
+                    dateTimeOriginal = if (e.isNull("dateTimeOriginal")) null else e.optString("dateTimeOriginal", "").ifBlank { null },
+                    dateTimeOriginalMs = if (e.isNull("dateTimeOriginalMs")) null else e.optDouble("dateTimeOriginalMs", 0.0).toLong(),
+                    apertureFNumber = if (e.isNull("apertureFNumber")) null else e.optDouble("apertureFNumber"),
+                    iso = if (e.isNull("iso")) null else e.optInt("iso"),
+                    exposureTimeLabel = if (e.isNull("exposureTimeLabel")) null else e.optString("exposureTimeLabel", "").ifBlank { null },
+                    focalLengthMm = if (e.isNull("focalLengthMm")) null else e.optDouble("focalLengthMm"),
+                    latitude = if (e.isNull("latitude")) null else e.optDouble("latitude"),
+                    longitude = if (e.isNull("longitude")) null else e.optDouble("longitude"),
+                    altitudeM = if (e.isNull("altitudeM")) null else e.optDouble("altitudeM"),
+                    hasGps = e.optBoolean("hasGps", false)
+                )
+            }
+        } catch (_: Exception) {
+        }
+        null
+    }
+
+    /** Elenco dei media del vault che hanno coordinate GPS nei metadati EXIF. */
+    suspend fun fetchMapPhotos(): List<MapPhotoModel> = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/map-photos")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val arr = JSONObject(resp.body?.string() ?: "").optJSONArray("items")
+                    ?: return@withContext emptyList()
+                val out = ArrayList<MapPhotoModel>(arr.length())
+                for (i in 0 until arr.length()) {
+                    val m = arr.optJSONObject(i) ?: continue
+                    val fn = m.optString("filename", "")
+                    if (fn.isBlank()) continue
+                    out.add(
+                        MapPhotoModel(
+                            filename = fn,
+                            lat = m.optDouble("lat", 0.0),
+                            lon = m.optDouble("lon", 0.0),
+                            timestamp = m.optDouble("timestamp", 0.0),
+                            album = m.optString("album", "")
+                        )
+                    )
+                }
+                return@withContext out
+            }
+        } catch (_: Exception) {
+        }
+        emptyList()
+    }
+
+    // -----------------------------------------------------------------
     // v1.4.0 — Notifiche Push Web (VAPID) lato server
     // -----------------------------------------------------------------
     suspend fun fetchPushVapidKey(): String = withContext(Dispatchers.IO) {
@@ -4269,3 +4351,34 @@ data class SharedAlbumWithMeModel(
     val role: String,
     val itemCount: Int
 )
+
+// ---------------------------------------------------------------------------
+// v1.4.1 — Modelli per Metadati EXIF e Mappa GPS
+// ---------------------------------------------------------------------------
+
+/** Metadati EXIF di una foto JPEG del vault (null quando il campo manca nel file). */
+data class ExifMetadataModel(
+    val filename: String,
+    val supported: Boolean,
+    val camera: String?,
+    val dateTimeOriginal: String?,
+    val dateTimeOriginalMs: Long?,
+    val apertureFNumber: Double?,
+    val iso: Int?,
+    val exposureTimeLabel: String?,
+    val focalLengthMm: Double?,
+    val latitude: Double?,
+    val longitude: Double?,
+    val altitudeM: Double?,
+    val hasGps: Boolean
+)
+
+/** Un media con coordinate GPS EXIF, mostrato nella mappa interattiva /map. */
+data class MapPhotoModel(
+    val filename: String,
+    val lat: Double,
+    val lon: Double,
+    val timestamp: Double,
+    val album: String
+)
+

@@ -309,7 +309,16 @@ test('GitHub Actions workflow (.github/workflows/android-release.yml) and Androi
     'utf-8'
   );
 
-  assert.equal(mainActivityKt.includes('android.webkit.WebView'), false);
+  // v1.1.3: niente WebView-shell per l'app; v1.4.1: UNICO uso consentito di WebView
+  // è la schermata Mappa GPS (NativeMapOverlay) che carica /map con cookie sync
+  const webViewIdx = mainActivityKt.indexOf('android.webkit.WebView');
+  if (webViewIdx >= 0) {
+    const mapOverlayIdx = mainActivityKt.indexOf('private fun NativeMapOverlay(');
+    assert.ok(
+      mapOverlayIdx >= 0 && webViewIdx > mapOverlayIdx,
+      'WebView consentita solo dentro NativeMapOverlay (schermata Mappa foto GPS v1.4.1)'
+    );
+  }
   assert.equal(mainActivityKt.includes('showTransferPopup = true'), false);
   assert.ok(mainActivityKt.includes('hadRunningTransfers'));
   assert.ok(mainActivityKt.includes('gallerySortedItems'));
@@ -540,8 +549,8 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.1.3-signed.apk')));
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.4.0"'));
-  assert.ok(appBuildGradle.includes('versionCode = 30'));
+  assert.ok(appBuildGradle.includes('versionName = "1.4.1"'));
+  assert.ok(appBuildGradle.includes('versionCode = 31'));
   assert.equal(appBuildGradle.includes('photocloud_release_2026'), false, 'No hardcoded keystore password in build.gradle.kts');
   assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
   assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
@@ -549,7 +558,7 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.4.0');
+  assert.equal(pkgJson.version, '1.4.1');
 
   // 6. Multi-platform interactive CLI scripts (photocloud.bat & photocloud.sh)
   const batPath = path.resolve(process.cwd(), 'photocloud.bat');
@@ -592,8 +601,8 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   const baseConfig = {
     appName: 'PhotoCloud "Vault" <Test>',
     packageName: 'com.valerio.photocloud',
-    versionName: '1.4.0',
-    versionCode: 30,
+    versionName: '1.4.1',
+    versionCode: 31,
     serverUrl: 'http://10.0.2.2:3000',
     minSdk: 26,
     targetSdk: 35,
@@ -619,7 +628,7 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   assert.ok(!manifestXml.includes('android:label="PhotoCloud "Vault"'));
 
   const gradleKts = generateAppBuildGradleKts(baseConfig);
-  assert.ok(gradleKts.includes('versionName = "1.4.0"'));
+  assert.ok(gradleKts.includes('versionName = "1.4.1"'));
   assert.equal(gradleKts.includes('photocloud_release_2026'), false);
 
   const mainKt = generateMainActivityKt(baseConfig);
@@ -1338,6 +1347,48 @@ test('v1.4.0 Android Kotlin Compilation Safety: ParsedQuery properties, Icon imp
   assert.ok(apiKt.includes('data class MemorySectionModel('));
   assert.ok(apiKt.includes('data class PublicShareSummaryModel('));
   assert.ok(apiKt.includes('data class SharedAlbumWithMeModel('));
+
+  // 4b. v1.4.1 EXIF + Mappa GPS: metodi/data class Kotlin e hook UI coerenti
+  assert.ok(apiKt.includes('suspend fun fetchExifMetadata('));
+  assert.ok(apiKt.includes('suspend fun fetchMapPhotos()'));
+  assert.ok(apiKt.includes('fun getWebViewCookiePairs()'));
+  assert.ok(apiKt.includes('fun getBaseUrl()'));
+  assert.ok(apiKt.includes('data class ExifMetadataModel('));
+  assert.ok(apiKt.includes('data class MapPhotoModel('));
+  assert.ok(mainKt.includes('private fun NativeMapOverlay('));
+  assert.ok(mainKt.includes('private fun ExifRow('));
+  assert.ok(mainKt.includes('exifPanelVisible'));
+  assert.ok(mainKt.includes('fetchExifMetadata(currentItem.filename)'));
+  assert.ok(mainKt.includes('getWebViewCookiePairs()'));
+  // Ogni metodo apiClient.* chiamato da MainActivity deve esistere in PhotoCloudApiClient.kt
+  for (const m of mainKt.matchAll(/\bapiClient\.([a-z][A-Za-z0-9_]*)\s*\(/g)) {
+    assert.ok(
+      new RegExp(`fun ${m[1]}\\s*\\(`).test(apiKt),
+      `Metodo apiClient.${m[1]}(...) usato in MainActivity ma non dichiarato in PhotoCloudApiClient.kt`
+    );
+  }
+  // Campi di ExifMetadataModel referenziati devono esistere nella data class
+  const exifModelMatch = apiKt.match(/data class ExifMetadataModel\(\s*([\s\S]*?)\n\)/);
+  assert.ok(exifModelMatch, 'ExifMetadataModel deve esistere');
+  const exifModelFields = new Set([...exifModelMatch![1].matchAll(/\bval\s+([A-Za-z0-9_]+)\s*:/g)].map((m) => m[1]));
+  for (const m of mainKt.matchAll(/\bd\.([a-z][A-Za-z0-9_]*)\b/g)) {
+    assert.ok(
+      exifModelFields.has(m[1]) || ['1'].includes(m[1]),
+      `Campo d.${m[1]} usato nel pannello EXIF ma assente in ExifMetadataModel`
+    );
+  }
+
+  // 4c. Server v1.4.1: endpoint EXIF/mappa e pagina /map
+  const serverTs = read('server.ts');
+  assert.ok(serverTs.includes("app.get('/api/exif/:filename'"));
+  assert.ok(serverTs.includes("app.get('/api/map-photos'"));
+  assert.ok(serverTs.includes("app.get('/map'"));
+  assert.ok(serverTs.includes('parseExifFromJpeg'));
+  assert.ok(serverTs.includes('renderMapPage'));
+  assert.ok(fs.existsSync(path.resolve(root, 'static/scripts/map.js')));
+  assert.ok(fs.existsSync(path.resolve(root, 'static/scripts/exif-panel.js')));
+  assert.ok(fs.existsSync(path.resolve(root, 'src/lib/exif.ts')));
+  assert.ok(fs.existsSync(path.resolve(root, 'src/lib/mapPage.ts')));
 
   // 5. build.gradle.kts uses immutable ResolvedSigningCredentials (avoids Kotlin captured var smart-cast error)
   assert.ok(gradleKts.includes('data class ResolvedSigningCredentials('));
