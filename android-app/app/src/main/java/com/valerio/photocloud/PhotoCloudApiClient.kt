@@ -4528,7 +4528,7 @@ class PhotoCloudApiClient(
     /**
      * Uploads a single auto-backup media item via streaming:
      * - Files <= 24 MB go through POST /upload?skipList=1 with X-Backup-Origin: auto and original timestamp.
-     * - Large files (> 24 MB) stream 8 MB slices through /api/upload/chunked/* (supporting up to MAX_UPLOAD_MB).
+     * - Large files (> 24 MB) stream 8 MB slices through /api/upload/chunked/init and chunk endpoints (up to MAX_UPLOAD_MB).
      */
     suspend fun uploadAutoBackupCandidate(
         candidate: MediaBackupCandidate,
