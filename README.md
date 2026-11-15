@@ -521,6 +521,48 @@ npm run release:apk
 
 ---
 
+## 🌐 Deploy dietro reverse proxy
+
+Quando PhotoCloud viene esposto su HTTPS tramite un reverse proxy (Nginx, Caddy, Traefik, Cloudflare Tunnel, Cloud Run), è fondamentale configurare correttamente la variabile d'ambiente **`TRUST_PROXY`** e assicurarsi che il proxy sovrascriva in modo affidabile gli header di inoltro:
+
+1. **`TRUST_PROXY` (numero di hop o lista di subnet fidate):**
+   - **Disabilitato (default):** se `TRUST_PROXY` non è impostato (o vale `0` / `false`), il server ignora tutti gli header `X-Forwarded-*` e confronta `Origin` esclusivamente con l'header `Host` della connessione diretta.
+   - **Numero intero di hop (es. `TRUST_PROXY=1`, `TRUST_PROXY=2`):** indica a Express quanti hop proxy immediatamente a monte del server sono fidati (passato a Express come **numero**, es. `app.set('trust proxy', 1)`). Con `TRUST_PROXY=1`, Express estrae `req.ip` dall'ultimo hop non fidato prima del proxy: un client che invia `X-Forwarded-For` multipli (`spoofed-ip, real-ip`) **non può** scegliere o falsificare l'IP usato dai rate limiter.
+   - **Lista di subnet / IP fidati (es. `TRUST_PROXY=127.0.0.1,10.0.0.0/8` oppure `loopback,uniquelocal`):** accetta una lista separata da virgole di indirizzi IP, subnet CIDR IPv4/IPv6 o preset Express (`loopback`, `linklocal`, `uniquelocal`).
+   - ⚠️ **Cosa succede con `TRUST_PROXY="true"` (avvio + warning + rifiuto di `trust proxy`):** impostare `true` generico in Express farebbe fidare l'app di *tutti* gli hop di `X-Forwarded-For` (permettendo a qualsiasi client di falsificare l'IP più a sinistra). Con `TRUST_PROXY=true`, **il server si avvia regolarmente** (nessun crash bloccante), **stampa un warning esplicito all'avvio** (`[PhotoCloud][WARN] TRUST_PROXY="true" è stato rifiutato e ignorato...`) e **mantiene `trust proxy` disabilitato (`false`)**, ignorando `X-Forwarded-*`.
+   - ⚠️ **Rischio `429` a bucket unico senza `TRUST_PROXY` dietro reverse proxy:** se l'istanza è esposta dietro reverse proxy con `trust proxy` disabilitato (es. `TRUST_PROXY` non configurato oppure rifiutato perché impostato a `"true"`), `req.ip` coincide con l'indirizzo IP del proxy stesso (es. `127.0.0.1`) anziché con quello del client reale. Tutti gli utenti finiscono quindi nello **stesso bucket di rate limiting**, esponendo il traffico legittimo a falsi `HTTP 429` su `/share/*`, `/login` e `/share/:token/unlock` (oltre a possibili `403` CSRF se `Origin` è `https://` mentre il socket interno è `http://`). Per evitarlo, configurare sempre `TRUST_PROXY=<numero-hop>` o la lista delle subnet fidate del proxy.
+2. **`Host` / `X-Forwarded-Host`:**
+   - Il reverse proxy deve preservare o impostare l'hostname pubblico esterno (e l'eventuale porta non standard) affinché la protezione CSRF su `POST`/`PUT`/`DELETE`/`PATCH` possa verificare la corrispondenza `Origin === Host` (o `X-Forwarded-Host` quando `TRUST_PROXY` è attivo).
+3. **`X-Forwarded-Proto`:**
+   - Deve essere **impostato dal reverse proxy** (es. `$scheme` in Nginx, non concatenato/lasciato al client) al protocollo esterno reale (`https` o `http`). Con `TRUST_PROXY` attivo, il middleware CSRF rifiuta con `403` eventuali mismatch tra schema di `Origin` e `X-Forwarded-Proto`.
+
+### Esempio minimo Nginx
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name cloud.example.com;
+
+    client_max_body_size 0;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+    }
+}
+```
+Avvio corrispondente di PhotoCloud dietro Nginx locale (`1` hop):
+```bash
+TRUST_PROXY=1 PORT=3000 npm start
+```
+
+---
+
 ## 📂 Struttura del Progetto
 
 ```text

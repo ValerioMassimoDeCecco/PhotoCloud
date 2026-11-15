@@ -9,7 +9,8 @@
     "start": "node --import tsx server.ts",
     "lint": "tsc --noEmit",
     "test": "tsx --test src/lib/*.test.ts",
-    "release:apk": "tsx scripts/publish-github-release.ts",
+    "release:check": "tsx scripts/check-release-gate.ts",
+    "release:apk": "npm run release:check && tsx scripts/publish-github-release.ts",
     "android:signing:setup": "tsx scripts/setup-persistent-signing.ts"
   },
   "dependencies": {

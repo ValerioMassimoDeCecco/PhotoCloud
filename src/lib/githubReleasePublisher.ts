@@ -39,9 +39,179 @@ export interface GitHubActionsRunStatus {
 
 const REPO_OWNER = 'ValerioMassimoDeCecco';
 const REPO_NAME = 'PhotoCloud';
-const DEFAULT_TAG = 'v1.3.2';
-const APK_FILENAME = 'photocloud-release-v1.3.2-signed.apk';
 const WORKFLOW_FILE = 'android-release.yml';
+
+export function readCurrentAndroidReleaseVersion(rootDir: string = process.cwd()): {
+  versionName: string;
+  versionCode: number;
+  tagName: string;
+  apkFilename: string;
+} {
+  const gradlePath = path.resolve(rootDir, 'android-app/app/build.gradle.kts');
+  if (!fs.existsSync(gradlePath)) {
+    throw new Error(`File non trovato: ${gradlePath}`);
+  }
+  const gradle = fs.readFileSync(gradlePath, 'utf-8');
+  const nameMatch = gradle.match(/versionName\s*=\s*"([^"]+)"/);
+  const codeMatch = gradle.match(/versionCode\s*=\s*([0-9]+)/);
+  const versionName = nameMatch?.[1]?.trim().replace(/^v/, '') || '';
+  const versionCode = codeMatch?.[1] ? Number(codeMatch[1]) : NaN;
+  if (!versionName) {
+    throw new Error(`Impossibile estrarre versionName da ${gradlePath}`);
+  }
+  if (!Number.isInteger(versionCode) || versionCode <= 0) {
+    throw new Error(`Impossibile estrarre versionCode valido da ${gradlePath}`);
+  }
+  const tagName = `v${versionName}`;
+  const apkFilename = `photocloud-release-v${versionName}-signed.apk`;
+  return { versionName, versionCode, tagName, apkFilename };
+}
+
+const ALLOWED_SYNC_EXTENSIONS = new Set([
+  '.kt',
+  '.kts',
+  '.xml',
+  '.pro',
+  '.yml',
+  '.yaml',
+  '.js',
+  '.ts',
+  '.md',
+]);
+
+const ALLOWED_EXACT_FILENAMES = new Set(['.gitignore', 'gradle-wrapper.properties']);
+
+const EXCLUDED_SYNC_DIRS = new Set(['.git', 'node_modules', 'build', '.gradle', 'release']);
+
+const EXPLICIT_SYNC_FILES = [
+  'README.md',
+  '.gitignore',
+  '.github/workflows/android-ci.yml',
+  '.github/workflows/android-release.yml',
+  'scripts/setup-persistent-signing.ts',
+  'scripts/check-release-gate.ts',
+  'static/scripts/cloud-features.js',
+  'static/scripts/document-viewer.js',
+  'static/scripts/duplicates.js',
+  'static/scripts/exif-panel.js',
+  'static/scripts/grouping.js',
+  'static/scripts/lightbox.js',
+  'static/scripts/liquid-glass.js',
+  'static/scripts/map.js',
+  'static/scripts/photo-editor.js',
+  'static/scripts/selection.js',
+  'static/scripts/similar-duplicates.js',
+  'static/scripts/slideshow.js',
+  'static/scripts/timeline-scrubber.js',
+  'static/scripts/trash.js',
+  'static/scripts/upload.js',
+  'src/lib/androidBuilder.ts',
+  'src/lib/crypto.ts',
+  'src/lib/documentEngine.ts',
+  'src/lib/exif.ts',
+  'src/lib/githubReleasePublisher.ts',
+  'src/lib/grouping.ts',
+  'src/lib/liquidGlassEngine.ts',
+  'src/lib/mapPage.ts',
+  'src/lib/nlSearch.ts',
+  'src/lib/persistentSigning.ts',
+  'src/lib/phash.ts',
+  'src/lib/photoEditorMath.ts',
+  'src/lib/pushService.ts',
+  'src/lib/sharePage.ts',
+  'src/lib/sharing.ts',
+  'src/lib/templateRenderer.ts',
+  'src/lib/trustProxy.ts',
+  'src/lib/vaultStorage.ts',
+];
+
+function isDeniedSyncFile(entryName: string): boolean {
+  const lower = entryName.toLowerCase();
+  if (lower === 'local.properties') return true;
+  if (
+    lower.endsWith('.jks') ||
+    lower.endsWith('.keystore') ||
+    lower.endsWith('.p12') ||
+    lower.endsWith('.apk') ||
+    lower.endsWith('.pem') ||
+    lower.endsWith('.key')
+  ) {
+    return true;
+  }
+  if (lower.startsWith('.env') || lower.includes('.env.')) return true;
+  if (lower.startsWith('signing')) return true;
+  if (lower.includes('keystore') || lower.includes('secret') || lower.includes('credential')) {
+    return true;
+  }
+  return false;
+}
+
+function hasAllowedSyncExtension(entryName: string): boolean {
+  if (ALLOWED_EXACT_FILENAMES.has(entryName)) return true;
+  if (entryName.endsWith('.gradle.kts')) return true;
+  const ext = path.extname(entryName).toLowerCase();
+  return ALLOWED_SYNC_EXTENSIONS.has(ext);
+}
+
+function hasExcludedDirSegment(relPath: string): boolean {
+  const segments = relPath.replace(/\\/g, '/').split('/');
+  for (let i = 0; i < segments.length - 1; i++) {
+    if (EXCLUDED_SYNC_DIRS.has(segments[i])) return true;
+  }
+  return false;
+}
+
+export function collectFilesToSync(rootDir: string = process.cwd()): string[] {
+  const result: string[] = [];
+  const addIfAllowed = (relPath: string) => {
+    const normalized = relPath.replace(/\\/g, '/');
+    if (hasExcludedDirSegment(normalized)) return;
+    const base = path.basename(normalized);
+    if (isDeniedSyncFile(base) || !hasAllowedSyncExtension(base)) return;
+    if (fs.existsSync(path.resolve(rootDir, normalized)) && !result.includes(normalized)) {
+      result.push(normalized);
+    }
+  };
+
+  for (const explicitFile of EXPLICIT_SYNC_FILES) {
+    addIfAllowed(explicitFile);
+  }
+
+  const walkAndroidDir = (relDir: string) => {
+    const absDir = path.resolve(rootDir, relDir);
+    if (!fs.existsSync(absDir)) return;
+    for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
+      const relChild = `${relDir}/${entry.name}`.replace(/\\/g, '/');
+      if (entry.isDirectory()) {
+        if (EXCLUDED_SYNC_DIRS.has(entry.name)) continue;
+        walkAndroidDir(relChild);
+      } else if (entry.isFile()) {
+        if (hasExcludedDirSegment(relChild)) continue;
+        if (isDeniedSyncFile(entry.name) || !hasAllowedSyncExtension(entry.name)) continue;
+        const ext = path.extname(entry.name).toLowerCase();
+        const isAllowedAndroidFile =
+          ALLOWED_EXACT_FILENAMES.has(entry.name) ||
+          entry.name.endsWith('.gradle.kts') ||
+          ['.kt', '.kts', '.xml', '.pro'].includes(ext);
+        if (!isAllowedAndroidFile) continue;
+        if (!result.includes(relChild)) {
+          result.push(relChild);
+        }
+      }
+    }
+  };
+
+  walkAndroidDir('android-app');
+
+  return result;
+}
+
+const {
+  versionName: CURRENT_VERSION_NAME,
+  versionCode: CURRENT_VERSION_CODE,
+  tagName: DEFAULT_TAG,
+  apkFilename: APK_FILENAME,
+} = readCurrentAndroidReleaseVersion();
 
 /** Best-effort extraction of APK X.509 signing certificate SHA-256 fingerprint using OpenSSL + ZIP. */
 export async function extractApkSigningCertSha256(apkBuffer: Buffer): Promise<string> {
@@ -86,6 +256,7 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     // If gradle binary is not present in local container, use pre-built signed release APK
     const fallbackCandidates = [
       path.join(outputDir, APK_FILENAME),
+      path.join(outputDir, 'photocloud-release-v1.3.2-signed.apk'),
       path.join(outputDir, 'photocloud-release-v1.3.1-signed.apk'),
       path.join(outputDir, 'photocloud-release-v1.3.0-signed.apk'),
       path.join(outputDir, 'photocloud-release-v1.2.9-signed.apk'),
@@ -105,6 +276,14 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
   const apkPath = path.join(outputDir, APK_FILENAME);
   fs.writeFileSync(apkPath, apkBuffer);
   const metadataPath = path.join(outputDir, 'photocloud-release-build.json');
+  let existingManifest: Record<string, unknown> = {};
+  if (fs.existsSync(metadataPath)) {
+    try {
+      existingManifest = JSON.parse(fs.readFileSync(metadataPath, 'utf-8'));
+    } catch {
+      existingManifest = {};
+    }
+  }
   fs.writeFileSync(metadataPath, JSON.stringify({
     apkFilename: APK_FILENAME,
     apkDownloadUrl: `/release/${APK_FILENAME}`,
@@ -112,17 +291,14 @@ export async function compileSignedAndroidApk(outputDir: string): Promise<{
     sizeBytes: apkBuffer.length,
     ...(signingCertSha256 ? { signingCertSha256 } : {}),
     applicationId: 'com.valerio.photocloud',
-    versionName: '1.3.2',
-    versionCode: 29,
-    changelog: 'Release 1.3.2 — Riscrittura completa del motore di Pinch-to-Zoom (Web & Android Nativo): risposta istantanea 1:1 alle dita a 120Hz senza lag di animazione, ancoraggio matematico esatto al punto medio focale (zero scivolamenti), transizione fluida 1↔2 dita senza salti di centroide, blocco intelligente di HorizontalPager durante zoom/pinch e ritaglio dei bordi basato sulle proporzioni reali del media.',
-    features: [
-      'Pinch-to-Zoom Perfetto & Istantaneo 1:1 (v1.3.2): eliminato ogni ritardo di animazione durante il gesto su Android Compose (graphicsLayer lambda phase) e Web',
-      'Ancoraggio Focale al Punto Medio (Zero Scivolamenti): il punto toccato tra le due dita resta perfettamente inchiodato al centro del pinch durante espansione, contrazione e rotazione dita',
-      'Transizione Multi-Dito Senza Salti: tracciamento individuale per PointerId così sollevare o appoggiare un dito durante lo zoom continua il pan senza alcun scatto o attivazione involontaria di swipe/chiusura',
-      'Blocco Pager & Bordi Media Reali: HorizontalPager disabilitato automaticamente durante pinch/zoom su Android e limiti di scorrimento calcolati sulle dimensioni Fitted reali della foto',
-      'Include tutte le novità v1.3.1: Player Video & Studio Editing Unificato Foto + Video con esportazione hardware reale e workflow CI/Release puliti'
-    ],
-    githubRelease: 'https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.3.2',
+    versionName: CURRENT_VERSION_NAME,
+    versionCode: CURRENT_VERSION_CODE,
+    changelog:
+      typeof existingManifest.changelog === 'string' && existingManifest.changelog.trim().length > 0
+        ? existingManifest.changelog
+        : `Release ${CURRENT_VERSION_NAME} — PhotoCloud Android & Web Vault.`,
+    features: Array.isArray(existingManifest.features) ? existingManifest.features : [],
+    githubRelease: `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/tag/${DEFAULT_TAG}`,
     publishedAt: new Date().toISOString(),
   }, null, 2));
   return { apkPath, apkBuffer, sha256, metadataPath, signingCertSha256 };
@@ -175,42 +351,7 @@ export async function triggerGitHubActionsBuild(options?: {
   }
 
   // 2. Push/update the workflow and Android project files via GitHub Contents API if needed
-  const filesToSync = [
-    'README.md',
-    '.gitignore',
-    '.env.example',
-    '.github/workflows/android-release.yml',
-    '.github/workflows/android-ci.yml',
-    'scripts/setup-persistent-signing.ts',
-    'src/lib/persistentSigning.ts',
-    'android-app/settings.gradle.kts',
-    'android-app/build.gradle.kts',
-    'android-app/gradle.properties',
-    'android-app/gradle/wrapper/gradle-wrapper.properties',
-    'android-app/app/build.gradle.kts',
-    'android-app/app/proguard-rules.pro',
-    'android-app/app/src/main/AndroidManifest.xml',
-    'android-app/app/src/main/res/xml/file_paths.xml',
-    'android-app/app/src/main/res/drawable/ic_launcher_color.xml',
-    'android-app/app/src/main/res/drawable/ic_launcher_bw.xml',
-    'android-app/app/src/main/res/values/strings.xml',
-    'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt',
-    'android-app/app/src/main/java/com/valerio/photocloud/LiquidGlassDesignSystem.kt',
-    'android-app/app/src/main/java/com/valerio/photocloud/PhotoCloudApiClient.kt',
-    'android-app/app/src/main/java/com/valerio/photocloud/GalleryDragSelectionController.kt',
-    'android-app/app/src/main/java/com/valerio/photocloud/AiModelDownloadManager.kt',
-    'android-app/app/src/main/java/com/valerio/photocloud/AppAutoUpdater.kt',
-    'android-app/app/src/main/java/com/valerio/photocloud/LocalPhotoCategorizer.kt',
-    'android-app/app/src/main/java/com/valerio/photocloud/PhotoAiDatabase.kt',
-    'android-app/app/src/main/java/com/valerio/photocloud/PhotoAiIndexingWorker.kt',
-    'static/scripts/grouping.js',
-    'static/scripts/photo-editor.js',
-    'static/scripts/document-viewer.js',
-    'static/scripts/upload.js',
-    'src/lib/templateRenderer.ts',
-    'src/lib/photoEditorMath.ts',
-    'src/lib/documentEngine.ts',
-  ];
+  const filesToSync = collectFilesToSync(process.cwd());
 
   for (const relPath of filesToSync) {
     const absPath = path.resolve(process.cwd(), relPath);

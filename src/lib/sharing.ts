@@ -196,23 +196,31 @@ export function verifySharePassword(record: PublicShareRecord, password: string)
 export function resolveShareByToken(
   rootDir: string,
   token: string
-): { id: string; record: PublicShareRecord } | { error: 'invalid' | 'expired' | 'exhausted' } {
+):
+  | { id: string; record: PublicShareRecord }
+  | { error: 'invalid' | 'expired' }
+  | { error: 'exhausted'; id: string; record: PublicShareRecord } {
   if (!SHARE_TOKEN_REGEX.test(token)) return { error: 'invalid' };
   const id = hashLookupToken(token);
   const shares = loadPublicShares(rootDir);
   const record = shares[id];
   if (!record) return { error: 'invalid' };
   if (record.expiresAt > 0 && record.expiresAt <= Date.now()) return { error: 'expired' };
-  if (record.maxDownloads !== null && record.downloadCount >= record.maxDownloads) return { error: 'exhausted' };
+  if (record.maxDownloads !== null && record.downloadCount >= record.maxDownloads) {
+    return { error: 'exhausted', id, record };
+  }
   return { id, record };
 }
 
-export function incrementShareDownloadCount(rootDir: string, id: string): void {
+export function incrementShareDownloadCount(rootDir: string, id: string): boolean {
   const shares = loadPublicShares(rootDir);
   const rec = shares[id];
-  if (!rec) return;
+  if (!rec) return false;
+  if (rec.expiresAt > 0 && rec.expiresAt <= Date.now()) return false;
+  if (rec.maxDownloads !== null && rec.downloadCount >= rec.maxDownloads) return false;
   rec.downloadCount += 1;
   savePublicShares(rootDir, shares);
+  return true;
 }
 
 /**

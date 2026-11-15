@@ -25,6 +25,7 @@ export interface SharePageModel {
   label: string;
   owner: string;
   expiresAt: number;
+  maxDownloads?: number | null;
 }
 
 const PAGE_STYLE = `
@@ -71,10 +72,14 @@ body{background:radial-gradient(1200px 600px at 80% -10%,#1d2c4d 0%,var(--bg) 55
 const PAGE_SCRIPT = `
 (function(){
   var grid = document.getElementById('share-grid');
+  var hasQuota = Boolean(grid && grid.getAttribute('data-max-downloads') && parseInt(grid.getAttribute('data-max-downloads'), 10) > 0);
   var items = [];
   if (grid) {
     grid.querySelectorAll('.share-card').forEach(function(card){
-      items.push({ url: card.getAttribute('data-url'), kind: card.getAttribute('data-kind'), name: card.getAttribute('data-name') });
+      var u = card.getAttribute('data-url');
+      var pu = card.getAttribute('data-preview-url') || (u ? u + '?preview=thumb' : '');
+      var lu = card.getAttribute('data-large-url') || (u ? u + '?preview=large' : pu);
+      items.push({ url: u, previewUrl: pu, largeUrl: lu, kind: card.getAttribute('data-kind'), name: card.getAttribute('data-name') });
     });
   }
   var lb = document.getElementById('lb');
@@ -107,13 +112,13 @@ const PAGE_SCRIPT = `
     var cls = (transition || 'fade') + '-out';
     lbImg.classList.add(cls);
     setTimeout(function(){
-      if(item.kind === 'video'){
+      if(item.kind === 'video' && !hasQuota){
         lbImg.style.display='none'; lbVid.style.display='block';
         lbVid.src = item.url;
         lbVid.play().catch(function(){});
       } else {
         if(lbVid){ lbVid.pause(); lbVid.removeAttribute('src'); lbVid.load && lbVid.load(); lbVid.style.display='none'; }
-        lbImg.style.display='block'; lbImg.src = item.url;
+        lbImg.style.display='block'; lbImg.src = item.largeUrl || item.previewUrl || (item.url + '?preview=large');
       }
       lbImg.classList.remove('fade-out','slide-out','zoom-out');
       lbCounter.textContent = (idx+1)+' / '+items.length+' — '+item.name;
@@ -184,23 +189,27 @@ export function renderSharePage(model: SharePageModel): string {
     .map((fn) => {
       const kind = mediaKind(fn);
       const url = `/share/${model.token}/media/${encodeURIComponent(fn)}`;
+      const previewUrl = `${url}?preview=thumb`;
+      const largeUrl = `${url}?preview=large`;
       const safeName = escapeHtml(fn);
       let inner = '';
-      if (kind === 'image') {
-        inner = `<img loading="lazy" src="${url}" alt="${safeName}">`;
-      } else if (kind === 'video') {
-        inner = `<video preload="metadata" muted src="${url}#t=0.5"></video>`;
+      if (kind === 'image' || kind === 'video') {
+        inner = `<img loading="lazy" src="${previewUrl}" data-src="${previewUrl}" data-retry="0" onerror="(function(el){var r=parseInt(el.getAttribute('data-retry')||'0',10);var d=[1000,2000,4000][r];if(!d)return;el.setAttribute('data-retry',String(r+1));setTimeout(function(){var b=el.getAttribute('data-src')||el.src.split('&retry=')[0];el.src=b+(b.indexOf('?')>=0?'&':'?')+'retry='+(r+1);},d);})(this)" alt="${safeName}">`;
       } else {
         const ext = (path.extname(fn).slice(1) || 'FILE').toUpperCase();
         inner = `<div class="file-chip"><span class="ext">${escapeHtml(ext)}</span></div>`;
       }
-      return `<a class="share-card" href="${url}?download=1" data-url="${url}" data-kind="${kind}" data-name="${safeName}">${inner}<span class="file-name">${safeName}</span></a>`;
+      return `<a class="share-card" href="${url}?download=1" data-url="${url}" data-preview-url="${previewUrl}" data-large-url="${largeUrl}" data-kind="${kind}" data-name="${safeName}">${inner}<span class="file-name">${safeName}</span></a>`;
     })
     .join('\n');
 
   const slideshowBtn = model.filenames.some((f) => mediaKind(f) !== 'file')
     ? `<button type="button" class="share-btn" id="ss-main-btn">▶ Slideshow</button>`
     : '';
+  const maxDownloadsAttr =
+    typeof model.maxDownloads === 'number' && model.maxDownloads > 0
+      ? ` data-max-downloads="${model.maxDownloads}"`
+      : '';
 
   return `<!DOCTYPE html>
 <html lang="it">
@@ -220,7 +229,7 @@ export function renderSharePage(model: SharePageModel): string {
   </div>
 </header>
 <p class="share-meta">${model.filenames.length} elementi · condivisi da <strong>${escapeHtml(model.owner)}</strong> · scade il ${escapeHtml(expiresStr)}</p>
-<main class="share-grid" id="share-grid">
+<main class="share-grid" id="share-grid"${maxDownloadsAttr}>
 ${cards}
 </main>
 <div class="lightbox" id="lb">

@@ -60,6 +60,7 @@ import {
   upsertAlbumShare,
   verifySharePassword,
 } from './src/lib/sharing';
+import { parseTrustProxyConfig } from './src/lib/trustProxy';
 import {
   addUserSubscription,
   getVapidPublicKey,
@@ -572,13 +573,20 @@ export function parseHttpByteRange(
   rangeHeader: string | undefined,
   totalLength: number
 ): { status: 'none' } | { status: 'invalid' } | { status: 'ok'; start: number; end: number } {
-  if (!rangeHeader || !rangeHeader.startsWith('bytes=')) {
+  if (!rangeHeader || rangeHeader.trim() === '') {
+    return { status: 'none' };
+  }
+  if (!rangeHeader.startsWith('bytes=')) {
     return { status: 'none' };
   }
   if (totalLength <= 0) {
     return { status: 'invalid' };
   }
-  const spec = rangeHeader.slice('bytes='.length).split(',')[0].trim();
+  const rawSpec = rangeHeader.slice('bytes='.length).trim();
+  if (!rawSpec || rawSpec.includes(',')) {
+    return { status: 'invalid' };
+  }
+  const spec = rawSpec;
   const dashIdx = spec.indexOf('-');
   if (dashIdx === -1) {
     return { status: 'invalid' };
@@ -670,8 +678,9 @@ function cleanupUploadedFiles(req: Request): void {
 async function startServer() {
   const app = express();
   app.disable('x-powered-by');
-  if (process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true') {
-    app.set('trust proxy', 1);
+  const trustProxyConfig = parseTrustProxyConfig(process.env.TRUST_PROXY);
+  if (trustProxyConfig !== false) {
+    app.set('trust proxy', trustProxyConfig);
   }
 
   // Global Security Headers & CSRF Origin Defense Middleware
@@ -687,17 +696,56 @@ async function startServer() {
     );
 
     if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+      const secFetchSite = String(req.headers['sec-fetch-site'] || '').trim().toLowerCase();
+      if (secFetchSite === 'cross-site') {
+        res.status(403).json({ error: 'Richiesta cross-site bloccata (CSRF protection).' });
+        return;
+      }
       const origin = req.headers.origin;
-      if (typeof origin === 'string' && origin.length > 0 && origin !== 'null') {
+      if (typeof origin === 'string' && origin.trim().length > 0) {
+        if (origin.trim().toLowerCase() === 'null') {
+          res.status(403).json({ error: 'Header Origin null bloccato (CSRF protection).' });
+          return;
+        }
         try {
-          const originHost = new URL(origin).host.toLowerCase();
-          const targetHost = String(req.headers['x-forwarded-host'] || req.headers.host || '')
+          const originUrl = new URL(origin);
+          const originHost = originUrl.host.toLowerCase();
+          const originProto = originUrl.protocol.replace(/:$/, '').toLowerCase();
+          const trustProxyEnabled = Boolean(app.get('trust proxy'));
+
+          const rawForwardedProto = trustProxyEnabled
+            ? String(req.headers['x-forwarded-proto'] || '')
+                .split(',')[0]
+                .trim()
+                .toLowerCase()
+            : '';
+          if ((rawForwardedProto === 'http' || rawForwardedProto === 'https') && originProto !== rawForwardedProto) {
+            res.status(403).json({ error: 'Richiesta cross-origin bloccata (protocol mismatch CSRF protection).' });
+            return;
+          }
+
+          let rawTargetHost = String(
+            (trustProxyEnabled ? req.headers['x-forwarded-host'] : '') || req.headers.host || ''
+          )
             .split(',')[0]
             .trim()
             .toLowerCase();
-          if (targetHost && originHost !== targetHost) {
-            res.status(403).json({ error: 'Richiesta cross-origin bloccata (CSRF protection).' });
-            return;
+          const rawForwardedPort = trustProxyEnabled
+            ? String(req.headers['x-forwarded-port'] || '')
+                .split(',')[0]
+                .trim()
+            : '';
+          if (rawTargetHost && !rawTargetHost.includes(':') && /^[0-9]{1,5}$/.test(rawForwardedPort)) {
+            rawTargetHost = `${rawTargetHost}:${rawForwardedPort}`;
+          }
+
+          if (rawTargetHost) {
+            const effectiveProto = rawForwardedProto === 'http' || rawForwardedProto === 'https' ? rawForwardedProto : originProto;
+            const normalizedTargetHost = new URL(`${effectiveProto}://${rawTargetHost}`).host.toLowerCase();
+            if (originHost !== normalizedTargetHost) {
+              res.status(403).json({ error: 'Richiesta cross-origin bloccata (CSRF protection).' });
+              return;
+            }
           }
         } catch {
           res.status(403).json({ error: 'Header Origin non valido.' });
@@ -1323,6 +1371,8 @@ async function startServer() {
     }
     delete all[id];
     savePublicShares(UPLOAD_FOLDER, all);
+    evictSharePreviewCache(id);
+    evictSharePlaybackGrants(id);
     res.json({ success: true });
   });
 
@@ -1337,6 +1387,32 @@ async function startServer() {
       String(req.params.token || '')
     );
   }
+
+  const SHARE_IP_RATE_WINDOW_MS = 60 * 1000;
+  const SHARE_IP_RATE_MAX = Math.max(10, Number(process.env.SHARE_RATE_LIMIT_MAX || 600));
+  const shareIpRateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+  app.use('/share', (req: Request, res: Response, next: NextFunction) => {
+    const now = Date.now();
+    if (shareIpRateBuckets.size > 500) {
+      for (const [k, v] of shareIpRateBuckets.entries()) {
+        if (now >= v.resetAt) shareIpRateBuckets.delete(k);
+      }
+    }
+    const clientIp = String(req.ip || req.socket.remoteAddress || 'unknown');
+    let bucket = shareIpRateBuckets.get(clientIp);
+    if (!bucket || now >= bucket.resetAt) {
+      bucket = { count: 0, resetAt: now + SHARE_IP_RATE_WINDOW_MS };
+      shareIpRateBuckets.set(clientIp, bucket);
+    }
+    bucket.count += 1;
+    if (bucket.count > SHARE_IP_RATE_MAX) {
+      const retryAfterSec = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
+      res.status(429).setHeader('Retry-After', String(retryAfterSec)).send('Troppe richieste su /share. Riprova tra poco.');
+      return;
+    }
+    next();
+  });
 
   app.get('/share/:token', (req: Request, res: Response) => {
     const token = String(req.params.token || '');
@@ -1368,6 +1444,7 @@ async function startServer() {
         label: record.label,
         owner: record.owner,
         expiresAt: record.expiresAt,
+        maxDownloads: record.maxDownloads,
       })
     );
   });
@@ -1406,6 +1483,98 @@ async function startServer() {
     res.redirect(`/share/${token}`);
   });
 
+  const SHARE_PLAYBACK_WINDOW_MS = 2 * 60 * 60 * 1000;
+  const SHARE_PLAYBACK_BUDGET_FACTOR = 1.5;
+  interface SharePlaybackGrant {
+    grantedAt: number;
+    bytesUsed: number;
+    maxBytes: number;
+  }
+  const SHARE_PLAYBACK_GRANTS = new Map<string, SharePlaybackGrant>();
+
+  function pruneSharePlaybackGrants(now: number): void {
+    for (const [k, grant] of SHARE_PLAYBACK_GRANTS.entries()) {
+      if (now - grant.grantedAt > SHARE_PLAYBACK_WINDOW_MS) {
+        SHARE_PLAYBACK_GRANTS.delete(k);
+      }
+    }
+  }
+
+  function evictSharePlaybackGrants(shareId: string): void {
+    const prefix = `${shareId}:`;
+    for (const key of SHARE_PLAYBACK_GRANTS.keys()) {
+      if (key.startsWith(prefix)) {
+        SHARE_PLAYBACK_GRANTS.delete(key);
+      }
+    }
+  }
+
+  const MAX_SHARE_PREVIEW_CACHE_ENTRIES = 120;
+  const MAX_CONCURRENT_JIMP_PREVIEWS = 2;
+  const MAX_JIMP_PREVIEW_QUEUE_LENGTH = Math.max(1, Number(process.env.MAX_JIMP_PREVIEW_QUEUE || 32));
+  const MAX_JIMP_QUEUE_WAIT_MS = Math.max(50, Number(process.env.MAX_JIMP_QUEUE_WAIT_MS || 10000));
+  const SHARE_PREVIEW_CACHE = new Map<string, { buffer: Buffer; etag: string }>();
+  const SHARE_PREVIEW_INFLIGHT = new Map<string, Promise<{ buffer: Buffer; etag: string }>>();
+  let activeJimpPreviews = 0;
+  const jimpPreviewQueue: Array<() => void> = [];
+
+  function evictSharePreviewCache(shareId: string): void {
+    const prefix = `${shareId}:`;
+    for (const key of SHARE_PREVIEW_CACHE.keys()) {
+      if (key.startsWith(prefix)) {
+        SHARE_PREVIEW_CACHE.delete(key);
+      }
+    }
+    for (const key of SHARE_PREVIEW_INFLIGHT.keys()) {
+      if (key.startsWith(prefix)) {
+        SHARE_PREVIEW_INFLIGHT.delete(key);
+      }
+    }
+  }
+
+  function runWithJimpConcurrency<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      let waitTimer: ReturnType<typeof setTimeout> | null = null;
+      const execute = () => {
+        if (waitTimer) {
+          clearTimeout(waitTimer);
+          waitTimer = null;
+        }
+        activeJimpPreviews++;
+        task()
+          .then(resolve, reject)
+          .finally(() => {
+            activeJimpPreviews--;
+            const next = jimpPreviewQueue.shift();
+            if (next) next();
+          });
+      };
+      if (activeJimpPreviews < MAX_CONCURRENT_JIMP_PREVIEWS) {
+        execute();
+      } else if (jimpPreviewQueue.length >= MAX_JIMP_PREVIEW_QUEUE_LENGTH) {
+        reject(new Error('JIMP_QUEUE_FULL'));
+      } else {
+        waitTimer = setTimeout(() => {
+          const idx = jimpPreviewQueue.indexOf(execute);
+          if (idx >= 0) {
+            jimpPreviewQueue.splice(idx, 1);
+          }
+          reject(new Error('JIMP_QUEUE_TIMEOUT'));
+        }, MAX_JIMP_QUEUE_WAIT_MS);
+        jimpPreviewQueue.push(execute);
+      }
+    });
+  }
+
+  function escapeSvgText(raw: string): string {
+    return String(raw)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   app.get('/share/:token/media/:filename', async (req: Request, res: Response) => {
     const token = String(req.params.token || '');
     if (!SHARE_TOKEN_REGEX.test(token)) {
@@ -1413,7 +1582,8 @@ async function startServer() {
       return;
     }
     const resolved = resolveShareByToken(UPLOAD_FOLDER, token);
-    if ('error' in resolved) {
+    if ('error' in resolved && resolved.error !== 'exhausted') {
+      evictSharePreviewCache(crypto.createHash('sha256').update(token).digest('hex'));
       res.status(410).send('Link scaduto o non valido');
       return;
     }
@@ -1439,10 +1609,15 @@ async function startServer() {
       return;
     }
     try {
-      const encrypted = await fs.promises.readFile(safeFilepath);
-      const decrypted = await decryptFileAsync(encrypted, apiKey);
       const spec = resolveFileViewerSpec(filename);
       const isExplicitDownload = req.query.download === '1' || req.query.download === 'true';
+      const rawPreview = String(req.query.preview || '').trim().toLowerCase();
+      const previewVariant: 'thumb' | 'large' | null =
+        !isExplicitDownload && (rawPreview === '1' || rawPreview === 'true' || rawPreview === 'thumb')
+          ? 'thumb'
+          : !isExplicitDownload && rawPreview === 'large'
+          ? 'large'
+          : null;
       const isDangerousExt = ACTIVE_SCRIPT_EXTS.has(spec.extension);
 
       res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -1450,6 +1625,160 @@ async function startServer() {
         'Content-Security-Policy',
         "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox"
       );
+
+      if (previewVariant !== null) {
+        if ('error' in resolved) {
+          evictSharePreviewCache(id);
+          res.status(410).send('Limite download raggiunto');
+          return;
+        }
+        const stat = await fs.promises.stat(safeFilepath);
+        const maxDim = previewVariant === 'large' ? 1280 : 360;
+        const jpegQuality = previewVariant === 'large' ? 75 : 68;
+        const cacheKey = `${id}:${filename}:${stat.mtimeMs}:${previewVariant}`;
+
+        if (isPHashSupportedFilename(filename)) {
+          try {
+            let cached = SHARE_PREVIEW_CACHE.get(cacheKey);
+            if (!cached) {
+              let inflight = SHARE_PREVIEW_INFLIGHT.get(cacheKey);
+              if (!inflight) {
+                inflight = runWithJimpConcurrency(async () => {
+                  const encryptedBuf = await fs.promises.readFile(safeFilepath);
+                  const decryptedBuf = await decryptFileAsync(encryptedBuf, apiKey);
+                  const { Jimp } = await import('jimp');
+                  const image = await Jimp.fromBuffer(decryptedBuf);
+                  const srcW = Math.max(1, image.bitmap.width || 64);
+                  const srcH = Math.max(1, image.bitmap.height || 64);
+                  const scale = Math.max(srcW, srcH) > maxDim ? maxDim / Math.max(srcW, srcH) : 1;
+                  const targetW = Math.max(1, Math.round(srcW * scale));
+                  const targetH = Math.max(1, Math.round(srcH * scale));
+                  if (scale !== 1) {
+                    image.resize({ w: targetW, h: targetH });
+                  }
+                  const previewJpeg = Buffer.from(await image.getBuffer('image/jpeg', { quality: jpegQuality }));
+                  const etag = `"prev-${id.slice(0, 12)}-${previewVariant}-${crypto.createHash('sha256').update(previewJpeg).digest('hex').slice(0, 24)}"`;
+                  return { buffer: previewJpeg, etag };
+                });
+                SHARE_PREVIEW_INFLIGHT.set(cacheKey, inflight);
+              }
+              try {
+                cached = await inflight;
+                if (SHARE_PREVIEW_CACHE.size >= MAX_SHARE_PREVIEW_CACHE_ENTRIES) {
+                  const oldestKey = SHARE_PREVIEW_CACHE.keys().next().value;
+                  if (oldestKey) SHARE_PREVIEW_CACHE.delete(oldestKey);
+                }
+                SHARE_PREVIEW_CACHE.set(cacheKey, cached);
+              } finally {
+                SHARE_PREVIEW_INFLIGHT.delete(cacheKey);
+              }
+            }
+
+            res.setHeader('ETag', cached.etag);
+            res.setHeader('Cache-Control', 'private, no-cache');
+            if (req.headers['if-none-match'] === cached.etag) {
+              res.status(304).end();
+              return;
+            }
+            res.setHeader('Content-Type', 'image/jpeg');
+            res.setHeader('Content-Disposition', `inline; filename="preview_${encodeURIComponent(filename)}.jpg"`);
+            res.setHeader('Content-Length', String(cached.buffer.length));
+            res.send(cached.buffer);
+            return;
+          } catch (jimpErr) {
+            if (
+              jimpErr instanceof Error &&
+              (jimpErr.message === 'JIMP_QUEUE_FULL' || jimpErr.message === 'JIMP_QUEUE_TIMEOUT')
+            ) {
+              res.status(503).setHeader('Retry-After', '2').send('Servizio anteprime temporaneamente sovraccarico');
+              return;
+            }
+            // fallback to SVG poster below
+          }
+        }
+        const extLabel = (spec.extension || 'FILE').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'MEDIA';
+        const safeSvgName = escapeSvgText(filename.slice(0, 48));
+        const svgPoster = Buffer.from(
+          `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240"><title>${safeSvgName}</title><rect width="240" height="240" fill="#111a2e"/><circle cx="120" cy="104" r="34" fill="rgba(79,140,255,0.18)" stroke="#4f8cff" stroke-width="2"/><polygon points="112,88 112,120 138,104" fill="#9dbbff"/><text x="120" y="168" text-anchor="middle" fill="#9dbbff" font-family="sans-serif" font-size="14" font-weight="bold">${extLabel}</text><text x="120" y="192" text-anchor="middle" fill="#8ca0c6" font-family="sans-serif" font-size="11">${safeSvgName}</text></svg>`,
+          'utf-8'
+        );
+        const posterEtag = `"svg-${id.slice(0, 12)}-${crypto.createHash('sha256').update(svgPoster).digest('hex').slice(0, 24)}"`;
+        res.setHeader('ETag', posterEtag);
+        res.setHeader('Cache-Control', 'private, no-cache');
+        if (req.headers['if-none-match'] === posterEtag) {
+          res.status(304).end();
+          return;
+        }
+        res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+        res.setHeader('Content-Disposition', 'inline; filename="poster.svg"');
+        res.setHeader('Content-Length', String(svgPoster.length));
+        res.send(svgPoster);
+        return;
+      }
+
+      const encrypted = fs.readFileSync(safeFilepath);
+      const plaintextSize = encryptedPlaintextSize(encrypted);
+
+      const parsedRange = parseHttpByteRange(req.headers.range, plaintextSize);
+      if (parsedRange.status === 'invalid') {
+        res.status(416).setHeader('Content-Range', `bytes */${plaintextSize}`).end();
+        return;
+      }
+
+      const isAudioOrVideo = spec.mimeType.startsWith('video/') || spec.mimeType.startsWith('audio/');
+      const now = Date.now();
+      pruneSharePlaybackGrants(now);
+      const cookies = parseCookies(req.headers.cookie);
+      const rawVisitorToken = String(cookies['pc_pb'] || req.query.pt || req.headers['x-playback-token'] || '').trim();
+      const validVisitorToken = /^[0-9a-f]{32}$/.test(rawVisitorToken) ? rawVisitorToken : '';
+      const responseBytes =
+        parsedRange.status === 'ok' ? parsedRange.end - parsedRange.start + 1 : plaintextSize;
+      const maxGrantBytes = Math.max(1, Math.floor(plaintextSize * SHARE_PLAYBACK_BUDGET_FACTOR));
+
+      // Prenotazione sincrona dei byte PRIMA di decryptFileAsync e invio (fail-closed in caso di disconnessione a metà)
+      let shouldCountDownload = true;
+      if (
+        isAudioOrVideo &&
+        !isExplicitDownload &&
+        parsedRange.status === 'ok' &&
+        validVisitorToken
+      ) {
+        const grantKey = `${id}:${validVisitorToken}:${filename}`;
+        const grant = SHARE_PLAYBACK_GRANTS.get(grantKey);
+        if (
+          grant !== undefined &&
+          now - grant.grantedAt <= SHARE_PLAYBACK_WINDOW_MS &&
+          grant.bytesUsed + responseBytes <= grant.maxBytes
+        ) {
+          grant.bytesUsed += responseBytes;
+          shouldCountDownload = false;
+        }
+      }
+
+      let newlyIssuedVisitorToken = '';
+      if (shouldCountDownload) {
+        if (!incrementShareDownloadCount(UPLOAD_FOLDER, id)) {
+          res.status(410).send('Limite download raggiunto');
+          return;
+        }
+        if (isAudioOrVideo && !isExplicitDownload && responseBytes <= maxGrantBytes) {
+          const visitorToken = validVisitorToken || crypto.randomBytes(16).toString('hex');
+          SHARE_PLAYBACK_GRANTS.set(`${id}:${visitorToken}:${filename}`, {
+            grantedAt: now,
+            bytesUsed: responseBytes,
+            maxBytes: maxGrantBytes,
+          });
+          if (!validVisitorToken) {
+            newlyIssuedVisitorToken = visitorToken;
+          }
+        }
+      }
+
+      const decrypted = await decryptFileAsync(encrypted, apiKey);
+      if (req.destroyed || res.destroyed || res.writableEnded) {
+        return;
+      }
+
       res.setHeader('Accept-Ranges', 'bytes');
       const mime = isDangerousExt && !isExplicitDownload ? 'text/plain; charset=utf-8' : spec.mimeType;
       res.setHeader('Content-Type', mime);
@@ -1457,16 +1786,13 @@ async function startServer() {
         'Content-Disposition',
         `${isExplicitDownload || isDangerousExt ? 'attachment' : 'inline'}; filename="${encodeURIComponent(filename)}"`
       );
-
-      if (isExplicitDownload) {
-        incrementShareDownloadCount(UPLOAD_FOLDER, id);
+      if (newlyIssuedVisitorToken) {
+        res.append(
+          'Set-Cookie',
+          `pc_pb=${newlyIssuedVisitorToken}; Path=/share/${token}; HttpOnly; SameSite=Lax; Max-Age=7200${req.secure ? '; Secure' : ''}`
+        );
       }
 
-      const parsedRange = parseHttpByteRange(req.headers.range, decrypted.length);
-      if (parsedRange.status === 'invalid') {
-        res.status(416).setHeader('Content-Range', `bytes */${decrypted.length}`).end();
-        return;
-      }
       if (parsedRange.status === 'ok') {
         const chunk = decrypted.subarray(parsedRange.start, parsedRange.end + 1);
         res.status(206);
@@ -1676,6 +2002,10 @@ async function startServer() {
         `${isDangerousExt ? 'attachment' : 'inline'}; filename="${encodeURIComponent(filename)}"`
       );
       const parsedRange = parseHttpByteRange(req.headers.range, decrypted.length);
+      if (parsedRange.status === 'invalid') {
+        res.status(416).setHeader('Content-Range', `bytes */${decrypted.length}`).end();
+        return;
+      }
       if (parsedRange.status === 'ok') {
         const chunk = decrypted.subarray(parsedRange.start, parsedRange.end + 1);
         res.status(206);

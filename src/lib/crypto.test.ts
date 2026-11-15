@@ -1401,6 +1401,295 @@ test('v1.4.0 Android Kotlin Compilation Safety: ParsedQuery properties, Icon imp
   assert.equal(gradleKts.includes('var resolvedKeystoreFile'), false);
 });
 
+test('githubReleasePublisher aligns version with build.gradle.kts, fails if versionName/versionCode missing, and dynamically syncs all real sources', async () => {
+  const root = process.cwd();
+  const gradle = fs.readFileSync(path.resolve(root, 'android-app/app/build.gradle.kts'), 'utf-8');
+  const expectedVersionName = gradle.match(/versionName\s*=\s*"([^"]+)"/)?.[1]?.trim() || '1.4.1';
+  const expectedTag = `v${expectedVersionName}`;
+
+  const {
+    triggerGitHubActionsBuild,
+    readCurrentAndroidReleaseVersion,
+    collectFilesToSync,
+  } = (await import('./githubReleasePublisher')) as any;
+
+  // 1. Deve fallire (throw) se build.gradle.kts manca o non contiene versionName / versionCode
+  const os = await import('os');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'photocloud-gradle-parse-'));
+  try {
+    assert.throws(
+      () => readCurrentAndroidReleaseVersion(tmpDir),
+      /build\.gradle\.kts|versionName|versionCode/i,
+      'readCurrentAndroidReleaseVersion deve lanciare un errore se build.gradle.kts non esiste'
+    );
+    fs.mkdirSync(path.join(tmpDir, 'android-app/app'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'android-app/app/build.gradle.kts'),
+      'android { defaultConfig { applicationId = "com.valerio.photocloud" } }',
+      'utf-8'
+    );
+    assert.throws(
+      () => readCurrentAndroidReleaseVersion(tmpDir),
+      /versionName|versionCode/i,
+      'readCurrentAndroidReleaseVersion deve lanciare un errore se versionName o versionCode mancano'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  const statusNoToken = await triggerGitHubActionsBuild({ githubToken: '' });
+  assert.equal(statusNoToken.releaseTag, expectedTag, `releaseTag di default deve essere ${expectedTag}`);
+
+  // 2. collectFilesToSync deve includere tutti i file reali in android-app, static/scripts e src/lib (non-test)
+  assert.equal(typeof collectFilesToSync, 'function', 'githubReleasePublisher deve esportare collectFilesToSync');
+  const syncedFiles: string[] = collectFilesToSync(root);
+
+  const ktDir = path.resolve(root, 'android-app/app/src/main/java/com/valerio/photocloud');
+  const allKtFiles = fs
+    .readdirSync(ktDir)
+    .filter((f) => f.endsWith('.kt'))
+    .map((f) => `android-app/app/src/main/java/com/valerio/photocloud/${f}`);
+  for (const ktRelPath of allKtFiles) {
+    assert.ok(
+      syncedFiles.includes(ktRelPath),
+      `collectFilesToSync deve includere il file Kotlin reale ${ktRelPath}`
+    );
+  }
+
+  const staticScriptsDir = path.resolve(root, 'static/scripts');
+  const allStaticScripts = fs
+    .readdirSync(staticScriptsDir)
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => `static/scripts/${f}`);
+  for (const jsRelPath of allStaticScripts) {
+    assert.ok(
+      syncedFiles.includes(jsRelPath),
+      `collectFilesToSync deve includere lo script statico reale ${jsRelPath}`
+    );
+  }
+
+  const srcLibDir = path.resolve(root, 'src/lib');
+  const allSrcLibModules = fs
+    .readdirSync(srcLibDir)
+    .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+    .map((f) => `src/lib/${f}`);
+  for (const libRelPath of allSrcLibModules) {
+    assert.ok(
+      syncedFiles.includes(libRelPath),
+      `collectFilesToSync deve includere il modulo reale ${libRelPath}`
+    );
+  }
+
+  // 3. collectFilesToSync:
+  //    - rimuove .properties dall'allowlist (eccezione esatta: gradle-wrapper.properties)
+  //    - denylist: local.properties, *.jks, *.keystore, .env*, signing*, *keystore*, *secret*, *credential*, *.pem, *.key
+  //    - limita la scansione a android-app/ più file espliciti
+  //    - esclude .git, node_modules, build/, release/
+  const tmpSyncDir = fs.mkdtempSync(path.join(os.tmpdir(), 'photocloud-sync-filter-'));
+  try {
+    fs.mkdirSync(path.join(tmpSyncDir, 'android-app/app/src/main/java/com/valerio/photocloud'), {
+      recursive: true,
+    });
+    fs.mkdirSync(path.join(tmpSyncDir, 'android-app/gradle/wrapper'), { recursive: true });
+    fs.mkdirSync(path.join(tmpSyncDir, 'android-app/app/build/generated'), { recursive: true });
+    fs.mkdirSync(path.join(tmpSyncDir, 'android-app/.git/objects'), { recursive: true });
+    fs.mkdirSync(path.join(tmpSyncDir, 'android-app/node_modules/pkg'), { recursive: true });
+    fs.mkdirSync(path.join(tmpSyncDir, 'android-app/release'), { recursive: true });
+    fs.mkdirSync(path.join(tmpSyncDir, 'src/lib'), { recursive: true });
+    fs.mkdirSync(path.join(tmpSyncDir, 'static/scripts'), { recursive: true });
+    fs.mkdirSync(path.join(tmpSyncDir, '.github/workflows'), { recursive: true });
+
+    // File validi che DEVONO essere inclusi (android-app/ + file espliciti + eccezione gradle-wrapper.properties)
+    const allowedRelPaths = [
+      'README.md',
+      '.gitignore',
+      'android-app/settings.gradle.kts',
+      'android-app/gradle/wrapper/gradle-wrapper.properties',
+      'android-app/app/build.gradle.kts',
+      'android-app/app/proguard-rules.pro',
+      'android-app/app/src/main/AndroidManifest.xml',
+      'android-app/app/src/main/java/com/valerio/photocloud/MainActivity.kt',
+      'src/lib/crypto.ts',
+      'static/scripts/lightbox.js',
+      '.github/workflows/android-release.yml',
+    ];
+    for (const rel of allowedRelPaths) {
+      fs.writeFileSync(path.join(tmpSyncDir, rel), '// valid content\n', 'utf-8');
+    }
+
+    // File .properties con password finte + denylist (*keystore*, *secret*, *credential*, *.pem, *.key) + dir escluse
+    const forbiddenRelPaths = [
+      'android-app/keystore.properties',
+      'android-app/secrets.properties',
+      'android-app/gradle.properties',
+      'android-app/local.properties',
+      'android-app/app/local.properties',
+      'android-app/release.jks',
+      'android-app/app/upload-key.keystore',
+      'android-app/app/my_keystore_backup.xml',
+      'android-app/app/api_secret_config.kt',
+      'android-app/app/user_credentials_store.kt',
+      'android-app/app/cert.pem',
+      'android-app/app/private.key',
+      'android-app/signing.properties',
+      'android-app/signing-config.kts',
+      'android-app/.env',
+      'android-app/.env.production',
+      '.env',
+      '.env.local',
+      'android-app/app/build/generated/BuildConfig.kt',
+      'android-app/.git/objects/info.kt',
+      'android-app/node_modules/pkg/index.kt',
+      'android-app/release/leaked.kt',
+      'src/lib/unlistedRandomModule.ts',
+      'static/scripts/unlistedRandomScript.js',
+    ];
+    for (const rel of forbiddenRelPaths) {
+      fs.writeFileSync(
+        path.join(tmpSyncDir, rel),
+        'storePassword=FakeSuperSecretPassword123!\nkeyPassword=FakeKeyPass456!\n',
+        'utf-8'
+      );
+    }
+
+    const filtered = collectFilesToSync(tmpSyncDir);
+    for (const allowed of allowedRelPaths) {
+      assert.ok(filtered.includes(allowed), `File consentito mancante: ${allowed}`);
+    }
+    for (const forbidden of forbiddenRelPaths) {
+      assert.equal(
+        filtered.includes(forbidden),
+        false,
+        `File sensibile o non consentito NON deve essere sincronizzato: ${forbidden}`
+      );
+    }
+  } finally {
+    fs.rmSync(tmpSyncDir, { recursive: true, force: true });
+  }
+});
+
+test('generateAppBuildGradleKts is aligned with real android-app/app/build.gradle.kts (KSP, Room, WorkManager, MediaPipe, OkHttp, JVM 17)', async () => {
+  const { generateAppBuildGradleKts } = await import('./androidBuilder');
+  const generated = generateAppBuildGradleKts({
+    appName: 'PhotoCloud',
+    packageName: 'com.valerio.photocloud',
+    versionName: '1.4.1',
+    versionCode: 31,
+    serverUrl: 'http://10.0.2.2:3000',
+    minSdk: 26,
+    targetSdk: 35,
+    enableBiometricLock: true,
+    enableOfflineCache: true,
+    enableAutoBackup: true,
+    signingMode: 'release',
+    keystoreAlias: 'photocloud-release-key',
+  });
+
+  assert.ok(generated.includes('id("com.google.devtools.ksp")'), 'must include KSP plugin');
+  assert.ok(generated.includes('DEFAULT_SERVER_URL'), 'must define DEFAULT_SERVER_URL BuildConfig field');
+  assert.ok(generated.includes('noCompress += "tflite"'), 'must keep tflite uncompressed');
+  assert.ok(generated.includes('JavaVersion.VERSION_17'), 'must target JavaVersion.VERSION_17');
+  assert.ok(generated.includes('jvmTarget = "17"'), 'must target Kotlin JVM 17');
+  assert.ok(generated.includes('com.squareup.okhttp3:okhttp:4.12.0'), 'must include OkHttp');
+  assert.ok(generated.includes('com.google.mediapipe:tasks-vision:0.10.14'), 'must include MediaPipe Tasks Vision');
+  assert.ok(generated.includes('androidx.work:work-runtime-ktx:2.9.0'), 'must include WorkManager');
+  assert.ok(generated.includes('androidx.exifinterface:exifinterface:1.3.7'), 'must include ExifInterface');
+  assert.ok(generated.includes('androidx.room:room-runtime:2.6.1'), 'must include Room runtime');
+  assert.ok(generated.includes('androidx.room:room-ktx:2.6.1'), 'must include Room KTX');
+  assert.ok(generated.includes('ksp("androidx.room:room-compiler:2.6.1")'), 'must include Room KSP compiler');
+});
+
+test('release:check gate fails when declared APK is missing or sha256/sizeBytes are zeroed, and AppAutoUpdater handles 404 gracefully', async () => {
+  const root = process.cwd();
+  const pkgJson = JSON.parse(fs.readFileSync(path.resolve(root, 'package.json'), 'utf-8'));
+  assert.equal(
+    pkgJson.scripts?.['release:check'],
+    'tsx scripts/check-release-gate.ts',
+    'package.json deve definire lo script release:check'
+  );
+  assert.ok(
+    String(pkgJson.scripts?.['release:apk'] || '').startsWith('npm run release:check &&'),
+    'release:apk deve eseguire npm run release:check come gate iniziale'
+  );
+
+  // Check AppAutoUpdater.kt 404 handling
+  const autoUpdaterKt = fs.readFileSync(
+    path.resolve(root, 'android-app/app/src/main/java/com/valerio/photocloud/AppAutoUpdater.kt'),
+    'utf-8'
+  );
+  assert.ok(
+    autoUpdaterKt.includes('if (!resp.isSuccessful) return null'),
+    'AppAutoUpdater.kt deve restituire null senza eccezioni quando il manifest risponde 404'
+  );
+  assert.ok(
+    autoUpdaterKt.includes('hasCheckedSinceProcessStart'),
+    'AppAutoUpdater.kt deve limitare il check automatico a una volta per avvio processo senza retry aggressivi'
+  );
+
+  const { validateReleaseGate } = await import('../../scripts/check-release-gate');
+
+  // 1. On current workspace (where v1.4.1 APK is missing and sha256 is 0000... / sizeBytes is 0), gate must fail
+  const currentRepoResult = validateReleaseGate(root);
+  assert.equal(currentRepoResult.ok, false, 'release:check deve fallire quando manca APK v1.4.1 o sha256/sizeBytes sono a zero');
+  assert.ok(currentRepoResult.errors.length >= 1);
+
+  // 2. Fixture test with temp directory
+  const os = await import('os');
+  const cryptoMod = await import('crypto');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'photocloud-release-gate-'));
+  try {
+    fs.mkdirSync(path.join(tmpDir, 'android-app/app'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, 'release'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'photocloud-mobile', version: '1.4.1' }),
+      'utf-8'
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'android-app/app/build.gradle.kts'),
+      'android {\n  defaultConfig {\n    versionCode = 31\n    versionName = "1.4.1"\n  }\n}\n',
+      'utf-8'
+    );
+
+    const apkName = 'photocloud-release-v1.4.1-signed.apk';
+    const apkBytes = Buffer.alloc(150 * 1024, 0x50);
+    const validSha = cryptoMod.createHash('sha256').update(apkBytes).digest('hex');
+
+    // Case A: APK exists, but sha256 is all zeros and sizeBytes is 0 -> must fail
+    fs.writeFileSync(path.join(tmpDir, 'release', apkName), apkBytes);
+    fs.writeFileSync(
+      path.join(tmpDir, 'release/photocloud-release-build.json'),
+      JSON.stringify({
+        apkFilename: apkName,
+        versionName: '1.4.1',
+        versionCode: 31,
+        sha256: '0'.repeat(64),
+        sizeBytes: 0,
+      }),
+      'utf-8'
+    );
+    const zeroMetaResult = validateReleaseGate(tmpDir);
+    assert.equal(zeroMetaResult.ok, false, 'deve fallire se sha256 è a zeri o sizeBytes è 0');
+
+    // Case B: Valid APK + valid sha256 + valid sizeBytes -> must pass
+    fs.writeFileSync(
+      path.join(tmpDir, 'release/photocloud-release-build.json'),
+      JSON.stringify({
+        apkFilename: apkName,
+        versionName: '1.4.1',
+        versionCode: 31,
+        sha256: validSha,
+        sizeBytes: apkBytes.length,
+      }),
+      'utf-8'
+    );
+    const validResult = validateReleaseGate(tmpDir);
+    assert.equal(validResult.ok, true, `deve passare con APK e manifest validi, errori: ${validResult.errors.join('; ')}`);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 
 
 

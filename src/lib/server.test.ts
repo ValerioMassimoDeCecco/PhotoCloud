@@ -329,6 +329,368 @@ test('server protects vaults, preserves collisions, and handles real media flows
     assert.equal(owEditJson.filename, `${uploadedStem}.webm`);
     assert.equal(owEditJson.mediaFiles.some((f: any) => f.filename === uploadedMp4Name), false);
     assert.equal(owEditJson.mediaFiles.some((f: any) => f.filename === `${uploadedStem}.webm`), true);
+
+    // --- CSRF Origin / Sec-Fetch-Site defense & session cookie flags ---
+    const loginCookieCheck = await fetch(base + '/login', json({ username: 'alice', api_key: 'password123' }));
+    const rawSetCookie = String(loginCookieCheck.headers.get('set-cookie') || '');
+    assert.match(rawSetCookie, /photocloud_sid=/);
+    assert.match(rawSetCookie, /HttpOnly/i);
+    assert.match(rawSetCookie, /SameSite=(Lax|Strict)/i);
+
+    // 1. Cross-origin Origin -> 403
+    const csrfCrossOrigin = await fetch(base + '/api/albums/create', {
+      method: 'POST',
+      headers: { Cookie: alice, 'Content-Type': 'application/json', Origin: 'https://evil.example.com' },
+      body: JSON.stringify({ name: 'CsrfCrossOrigin' }),
+    });
+    assert.equal(csrfCrossOrigin.status, 403);
+
+    // 2. Origin: "null" (e.g. sandboxed iframe form POST) -> 403
+    const csrfNullOrigin = await fetch(base + '/api/albums/create', {
+      method: 'POST',
+      headers: { Cookie: alice, 'Content-Type': 'application/json', Origin: 'null' },
+      body: JSON.stringify({ name: 'CsrfNullOrigin' }),
+    });
+    assert.equal(csrfNullOrigin.status, 403, 'Origin: null must be rejected with 403');
+
+    // 3. Sec-Fetch-Site: cross-site (even without Origin) -> 403
+    const csrfFetchSiteCross = await fetch(base + '/api/albums/create', {
+      method: 'POST',
+      headers: { Cookie: alice, 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'cross-site' },
+      body: JSON.stringify({ name: 'CsrfFetchSiteCross' }),
+    });
+    assert.equal(csrfFetchSiteCross.status, 403, 'Sec-Fetch-Site: cross-site must be rejected with 403');
+
+    // 4. Same-origin Origin + Sec-Fetch-Site: same-origin -> 200
+    const csrfSameOrigin = await fetch(base + '/api/albums/create', {
+      method: 'POST',
+      headers: {
+        Cookie: alice,
+        'Content-Type': 'application/json',
+        Origin: base,
+        'Sec-Fetch-Site': 'same-origin',
+      },
+      body: JSON.stringify({ name: 'CsrfSameOriginOk' }),
+    });
+    assert.equal(csrfSameOrigin.status, 200);
+
+    // 5. No Origin and no Sec-Fetch-Site (native OkHttp / CLI client) -> 200
+    const csrfNativeClient = await fetch(base + '/api/albums/create', {
+      method: 'POST',
+      headers: { Cookie: alice, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'CsrfNativeClientOk' }),
+    });
+    assert.equal(csrfNativeClient.status, 200);
+
+    // 6. Reverse proxy (X-Forwarded-*) con trust proxy DISATTIVATO (default):
+    // X-Forwarded-Host e X-Forwarded-Proto devono essere ignorati se TRUST_PROXY non è abilitato -> 403
+    const csrfUntrustedProxyHeaders = await fetch(base + '/api/albums/create', {
+      method: 'POST',
+      headers: {
+        Cookie: alice,
+        'Content-Type': 'application/json',
+        Origin: 'https://cloud.example.com',
+        'X-Forwarded-Host': 'cloud.example.com:443, 10.0.0.1',
+        'X-Forwarded-Proto': 'https, http',
+      },
+      body: JSON.stringify({ name: 'CsrfUntrustedProxyBlocked' }),
+    });
+    assert.equal(
+      csrfUntrustedProxyHeaders.status,
+      403,
+      'Con trust proxy disattivato, X-Forwarded-* deve essere ignorato e Origin https://cloud.example.com rifiutato con 403'
+    );
+
+    // Con trust proxy disattivato, header X-Forwarded-* contraffatti non devono bloccare una richiesta same-origin legittima su Host reale
+    const csrfUntrustedSpoofedIgnored = await fetch(base + '/api/albums/create', {
+      method: 'POST',
+      headers: {
+        Cookie: alice,
+        'Content-Type': 'application/json',
+        Origin: base,
+        'X-Forwarded-Host': 'evil.example.com',
+        'X-Forwarded-Proto': 'https',
+      },
+      body: JSON.stringify({ name: 'CsrfUntrustedSpoofedIgnored' }),
+    });
+    assert.equal(
+      csrfUntrustedSpoofedIgnored.status,
+      200,
+      'Con trust proxy disattivato, X-Forwarded-* contraffatti devono essere ignorati quando Origin combacia con Host reale'
+    );
+
+    // 7-10. Reverse proxy (X-Forwarded-*) con TRUST_PROXY=1 abilitato via config
+    const proxySock = net.createServer();
+    proxySock.listen(0, '127.0.0.1');
+    await once(proxySock, 'listening');
+    const proxyPort = (proxySock.address() as net.AddressInfo).port;
+    await new Promise<void>((resolve) => proxySock.close(() => resolve()));
+    const proxyChild = spawn(
+      process.execPath,
+      ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')],
+      {
+        cwd: dir,
+        env: { ...process.env, PORT: String(proxyPort), GITHUB_TOKEN: '', TRUST_PROXY: '1' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    );
+    const proxyBase = `http://127.0.0.1:${proxyPort}`;
+    try {
+      let proxyReady = false;
+      for (let i = 0; i < 100; i++) {
+        if (proxyChild.exitCode !== null) throw new Error('Proxy server exited during startup');
+        try {
+          await fetch(proxyBase + '/api/session');
+          proxyReady = true;
+          break;
+        } catch {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
+      assert.ok(proxyReady, 'proxy server did not start');
+      const proxyLoginRes = await fetch(proxyBase + '/login', json({ username: 'alice', api_key: 'password123' }));
+      assert.equal(proxyLoginRes.status, 200);
+      const proxyAlice = proxyLoginRes.headers.get('set-cookie')!.split(';')[0];
+
+      // 7. TRUST_PROXY=1: X-Forwarded-Host con porta default :443 e Origin https senza :443 -> 200
+      const csrfProxyDefaultPort = await fetch(proxyBase + '/api/albums/create', {
+        method: 'POST',
+        headers: {
+          Cookie: proxyAlice,
+          'Content-Type': 'application/json',
+          Origin: 'https://cloud.example.com',
+          'X-Forwarded-Host': 'cloud.example.com:443, 10.0.0.1',
+          'X-Forwarded-Proto': 'https, http',
+        },
+        body: JSON.stringify({ name: 'CsrfProxyDefault443' }),
+      });
+      assert.equal(csrfProxyDefaultPort.status, 200, 'Con TRUST_PROXY=1, X-Forwarded-Host con :443 deve combaciare con Origin https://cloud.example.com');
+
+      // 8. TRUST_PROXY=1: X-Forwarded-Host senza porta + X-Forwarded-Port: 8443 e Origin https://cloud.example.com:8443 -> 200
+      const csrfProxyCustomPort = await fetch(proxyBase + '/api/albums/create', {
+        method: 'POST',
+        headers: {
+          Cookie: proxyAlice,
+          'Content-Type': 'application/json',
+          Origin: 'https://cloud.example.com:8443',
+          'X-Forwarded-Host': 'cloud.example.com',
+          'X-Forwarded-Port': '8443',
+          'X-Forwarded-Proto': 'https',
+        },
+        body: JSON.stringify({ name: 'CsrfProxyPort8443' }),
+      });
+      assert.equal(csrfProxyCustomPort.status, 200, 'Con TRUST_PROXY=1, X-Forwarded-Host + X-Forwarded-Port: 8443 deve combaciare con Origin https://cloud.example.com:8443');
+
+      // 9. TRUST_PROXY=1: X-Forwarded-Proto: https ma Origin: http://cloud.example.com (protocol mismatch) -> 403
+      const csrfProxyProtoMismatch = await fetch(proxyBase + '/api/albums/create', {
+        method: 'POST',
+        headers: {
+          Cookie: proxyAlice,
+          'Content-Type': 'application/json',
+          Origin: 'http://cloud.example.com',
+          'X-Forwarded-Host': 'cloud.example.com',
+          'X-Forwarded-Proto': 'https',
+        },
+        body: JSON.stringify({ name: 'CsrfProxyProtoMismatch' }),
+      });
+      assert.equal(csrfProxyProtoMismatch.status, 403, 'Con TRUST_PROXY=1, disallineamento protocollo Origin (http) vs X-Forwarded-Proto (https) deve restituire 403');
+
+      // 10. TRUST_PROXY=1: Origin cross-origin diverso da X-Forwarded-Host -> 403
+      const csrfProxyCrossHost = await fetch(proxyBase + '/api/albums/create', {
+        method: 'POST',
+        headers: {
+          Cookie: proxyAlice,
+          'Content-Type': 'application/json',
+          Origin: 'https://evil.example.com',
+          'X-Forwarded-Host': 'cloud.example.com',
+          'X-Forwarded-Proto': 'https',
+        },
+        body: JSON.stringify({ name: 'CsrfProxyCrossHost' }),
+      });
+      assert.equal(csrfProxyCrossHost.status, 403);
+
+      // 11. TRUST_PROXY=1: X-Forwarded-For multiplo non permette di scegliere l'IP del rate limit su /share/*
+      const rlShareCreate = await fetch(proxyBase + '/api/shares/create', {
+        method: 'POST',
+        headers: { Cookie: proxyAlice, 'Content-Type': 'application/json', Origin: proxyBase },
+        body: JSON.stringify({ filenames: ['test.txt'], expiresInHours: 24, label: 'RateLimitProxyTest' }),
+      });
+      assert.equal(rlShareCreate.status, 200);
+      const rlShare = (await rlShareCreate.json()) as { url: string };
+
+      const rlSock = net.createServer();
+      rlSock.listen(0, '127.0.0.1');
+      await once(rlSock, 'listening');
+      const rlPort = (rlSock.address() as net.AddressInfo).port;
+      await new Promise<void>((resolve) => rlSock.close(() => resolve()));
+      const rlChild = spawn(
+        process.execPath,
+        ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')],
+        {
+          cwd: dir,
+          env: {
+            ...process.env,
+            PORT: String(rlPort),
+            GITHUB_TOKEN: '',
+            TRUST_PROXY: '1',
+            SHARE_RATE_LIMIT_MAX: '10',
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
+      );
+      const rlBase = `http://127.0.0.1:${rlPort}`;
+      try {
+        let rlReady = false;
+        for (let i = 0; i < 100; i++) {
+          if (rlChild.exitCode !== null) throw new Error('RL proxy server exited during startup');
+          try {
+            await fetch(rlBase + '/api/session');
+            rlReady = true;
+            break;
+          } catch {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+        }
+        assert.ok(rlReady, 'RL proxy server did not start');
+
+        // 10 richieste con IP client reale (rightmost prima del proxy) = 203.0.113.50 ma IP leftmost contraffatto diverso ogni volta
+        for (let i = 0; i < 10; i++) {
+          const r = await fetch(rlBase + rlShare.url, {
+            headers: { 'X-Forwarded-For': `198.51.100.${i + 1}, 203.0.113.50` },
+          });
+          assert.equal(r.status, 200, `Richiesta ${i + 1}/10 da 203.0.113.50 deve passare (200)`);
+        }
+        // L'11ª richiesta, anche cambiando nuovamente il leftmost IP, con TRUST_PROXY=1 usa 203.0.113.50 e deve scattare 429
+        const blocked11 = await fetch(rlBase + rlShare.url, {
+          headers: { 'X-Forwarded-For': '198.51.100.250, 203.0.113.50' },
+        });
+        assert.equal(
+          blocked11.status,
+          429,
+          'Con TRUST_PROXY=1 un X-Forwarded-For multiplo non deve permettere di scegliere l\'IP sinistro per aggirare il rate limit'
+        );
+      } finally {
+        rlChild.kill();
+        await once(rlChild, 'exit').catch(() => {});
+      }
+
+      // 12. TRUST_PROXY="true" deve essere rifiutato/ignorato con warning all'avvio (X-Forwarded-* ignorati)
+      const trueSock = net.createServer();
+      trueSock.listen(0, '127.0.0.1');
+      await once(trueSock, 'listening');
+      const truePort = (trueSock.address() as net.AddressInfo).port;
+      await new Promise<void>((resolve) => trueSock.close(() => resolve()));
+      let trueOutput = '';
+      const trueChild = spawn(
+        process.execPath,
+        ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')],
+        {
+          cwd: dir,
+          env: { ...process.env, PORT: String(truePort), GITHUB_TOKEN: '', TRUST_PROXY: 'true' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
+      );
+      trueChild.stdout?.on('data', (d) => { trueOutput += String(d); });
+      trueChild.stderr?.on('data', (d) => { trueOutput += String(d); });
+      const trueBase = `http://127.0.0.1:${truePort}`;
+      try {
+        let trueReady = false;
+        for (let i = 0; i < 100; i++) {
+          if (trueChild.exitCode !== null) throw new Error('TRUST_PROXY=true server exited during startup');
+          try {
+            await fetch(trueBase + '/api/session');
+            trueReady = true;
+            break;
+          } catch {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+        }
+        assert.ok(trueReady, 'TRUST_PROXY=true server did not start');
+        assert.match(
+          trueOutput,
+          /TRUST_PROXY.*true/i,
+          'TRUST_PROXY="true" deve emettere un warning esplicito all\'avvio'
+        );
+        const trueLoginRes = await fetch(trueBase + '/login', json({ username: 'alice', api_key: 'password123' }));
+        assert.equal(trueLoginRes.status, 200);
+        const trueAlice = trueLoginRes.headers.get('set-cookie')!.split(';')[0];
+        const trueIgnoredRes = await fetch(trueBase + '/api/albums/create', {
+          method: 'POST',
+          headers: {
+            Cookie: trueAlice,
+            'Content-Type': 'application/json',
+            Origin: 'https://cloud.example.com',
+            'X-Forwarded-Host': 'cloud.example.com',
+            'X-Forwarded-Proto': 'https',
+          },
+          body: JSON.stringify({ name: 'TrustProxyTrueIgnored' }),
+        });
+        assert.equal(
+          trueIgnoredRes.status,
+          403,
+          'TRUST_PROXY="true" deve essere rifiutato/ignorato e quindi non fidarsi di X-Forwarded-*'
+        );
+      } finally {
+        trueChild.kill();
+        await once(trueChild, 'exit').catch(() => {});
+      }
+
+      // 13. TRUST_PROXY con lista di subnet (es. 127.0.0.0/8,10.0.0.0/8) è supportato
+      const subnetSock = net.createServer();
+      subnetSock.listen(0, '127.0.0.1');
+      await once(subnetSock, 'listening');
+      const subnetPort = (subnetSock.address() as net.AddressInfo).port;
+      await new Promise<void>((resolve) => subnetSock.close(() => resolve()));
+      const subnetChild = spawn(
+        process.execPath,
+        ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')],
+        {
+          cwd: dir,
+          env: { ...process.env, PORT: String(subnetPort), GITHUB_TOKEN: '', TRUST_PROXY: '127.0.0.0/8, 10.0.0.0/8' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
+      );
+      const subnetBase = `http://127.0.0.1:${subnetPort}`;
+      try {
+        let subnetReady = false;
+        for (let i = 0; i < 100; i++) {
+          if (subnetChild.exitCode !== null) throw new Error('Subnet proxy server exited during startup');
+          try {
+            await fetch(subnetBase + '/api/session');
+            subnetReady = true;
+            break;
+          } catch {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+        }
+        assert.ok(subnetReady, 'subnet proxy server did not start');
+        const subnetLoginRes = await fetch(subnetBase + '/login', json({ username: 'alice', api_key: 'password123' }));
+        assert.equal(subnetLoginRes.status, 200);
+        const subnetAlice = subnetLoginRes.headers.get('set-cookie')!.split(';')[0];
+        const subnetAcceptedRes = await fetch(subnetBase + '/api/albums/create', {
+          method: 'POST',
+          headers: {
+            Cookie: subnetAlice,
+            'Content-Type': 'application/json',
+            Origin: 'https://cloud.example.com',
+            'X-Forwarded-Host': 'cloud.example.com',
+            'X-Forwarded-Proto': 'https',
+          },
+          body: JSON.stringify({ name: 'TrustProxySubnetOk' }),
+        });
+        assert.equal(
+          subnetAcceptedRes.status,
+          200,
+          'TRUST_PROXY con lista di subnet (127.0.0.0/8, 10.0.0.0/8) deve accettare X-Forwarded-* dal proxy fidato'
+        );
+      } finally {
+        subnetChild.kill();
+        await once(subnetChild, 'exit').catch(() => {});
+      }
+    } finally {
+      proxyChild.kill();
+      await once(proxyChild, 'exit').catch(() => {});
+    }
   } finally {
     child.kill(); await once(child, 'exit').catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });
