@@ -1,4 +1,4 @@
-# PhotoCloud — Archivio Foto, Video, Backup Automatico, Cache Miniature, AI On-Device & File Manager Cloud Crittografato (Web & Android Nativo v1.5.0)
+# PhotoCloud — Archivio Foto, Video, Backup Automatico, Cache Miniature, AI On-Device & File Manager Cloud Crittografato (Web & Android Nativo v1.5.1)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
@@ -11,11 +11,16 @@
 > 2. **Draft Release Vault Privato (`photocloud-signing-vault`)** su GitHub Actions (`android-release.yml`): se i Secrets non sono configurati, inizializza una sola volta la chiave RSA-2048 nella bozza privata protetta da `GITHUB_TOKEN` (invisibile al pubblico) e la riutilizza in modo identico su tutte le release future verificando la continuità del certificato `SHA-256` tramite `apksigner`;
 > 3. **Locale (`android-app/signing.properties` o `~/.photocloud/signing.properties`)**: generabile/sincronizzabile in un comando con `npm run android:signing:setup`.
 >
-> Gli upload temporanei e gli archivi ZIP esportati transitano su disco in `temp_uploads/` e vengono rimossi automaticamente dopo il completamento/download. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow GitHub Actions.
+> Gli upload temporanei e gli archivi ZIP esportati transitano su disco in `temp_uploads/` e vengono rimossi automaticamente dopo il completamento/download (con pulizia automatica all'avvio di eventuali `chunked_*.part` orfani dopo riavvii del server). Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow GitHub Actions.
 
 ---
 
-## ⚡ Novità Principali della Release `v1.5.0` (`versionCode 32`) — Backup Automatico Android & Cache Persistente Cifrata Miniature
+## ⚡ Novità delle Release `v1.5.1` (`versionCode 33`) & `v1.5.0` (`versionCode 32`) — Backup Automatico Android, Integrità End-to-End & Cache Persistente Miniature
+
+### 0. Aggiornamenti `v1.5.1` (`versionCode 33`)
+- **Pulizia `.part` Orfani all'Avvio (`cleanupOrphanTempFiles`)**: al boot del server eventuali file `temp_uploads/chunked_*.part` rimasti da un riavvio a metà caricamento vengono eliminati subito (oltre alla scadenza TTL periodica dei file non attivi).
+- **Checksum SHA-256 Obbligatorio per Backup Automatico**: `/api/upload/chunked/init` richiede `sha256` valido (64 hex) per tutte le sessioni di backup automatico (`X-Backup-Origin: auto`), e `POST /upload` verifica end-to-end `sha256[]` inviato da Android anche per i file `≤ 24 MB`.
+- **Stabilità Compilazione Release Android**: risolti tutti i problemi di parsing KSP/Kotlin (`PhotoCloudApiClient.kt`, `AutoBackupWorker.kt`, `MainActivity.kt`).
 
 ### 1. Backup Automatico della Camera Roll su Android (`AutoBackupWorker`, `PhotoAiDatabase` v2, `/api/backup/check`, `/api/upload/chunked/*`)
 - **WorkManager Persistente & Trigger Reattivi**: pianificazione periodica (`15m`), trigger automatico su nuovi media (`ContentUriTrigger` per immagini e video) e servizio in foreground `dataSync` (compatibile con Android 12/13/14/15) con notifica e azioni **Pausa / Annulla**.
@@ -23,14 +28,14 @@
 - **Avviso Esplicito su `http://`**: se il server non usa `https://`, l'attivazione del backup richiede conferma esplicita dell'utente prima di avviare i trasferimenti in background.
 - **Deduplica Attiva SHA-256 & Upload Streaming/Chunked**:
   - Calcolo streaming SHA-256 a blocchi da `64 KB` (zero picchi di RAM), verifica contro `.hashes.json` via `POST /api/backup/check` **solo sui file attivi** (se una foto è stata spostata nel Cestino viene ricaricata).
-  - File `≤ 24 MB` caricati via `POST /upload?skipList=1` con header `X-Backup-Origin: auto` (che silenzia notifiche push automatiche); file/video grandi `> 24 MB` caricati in streaming a blocchi da `8 MB` su `/api/upload/chunked/init`, `PUT /api/upload/chunked/:uploadId/:chunkIndex` e `POST /api/upload/chunked/:uploadId/complete` con supporto fino a `MAX_UPLOAD_MB` (default `2048 MB`) e cifratura streaming `AES-256-GCM` (`encryptFileStream`).
+  - File `≤ 24 MB` caricati via `POST /upload?skipList=1` con header `X-Backup-Origin: auto` e checksum `sha256[]` verificato lato server; file/video grandi `> 24 MB` caricati in streaming a blocchi da `8 MB` su `/api/upload/chunked/init`, `PUT /api/upload/chunked/:uploadId/:chunkIndex` e `POST /api/upload/chunked/:uploadId/complete` con supporto fino a `MAX_UPLOAD_MB` (default `2048 MB`) e cifratura streaming `AES-256-GCM` (`encryptFileStream`).
 
 ### 2. Cache Persistente delle Miniature Cifrata (`thumbCache.ts`, Web & Android)
 - **Varianti Cifrate JPEG q=80 su Disco**: il server genera e salva sotto `user_media/<utente>/.thumbs/` le varianti `thumb` (`320px`) e `large` (`1280px`) cifrate in `AES-256-GCM`, con `ETag` + `304 Not Modified`, cache negativa TTL, coda/eviction LRU configurabile (`THUMB_CACHE_MAX_MB`, default `512 MB`) e invalidazione automatica su modifica, cestino, ripristino ed eliminazione definitiva.
 - **Poster Video & API Dedicate**: `PUT /api/thumbs/:filename` consente al client Android di caricare il fotogramma poster estratto localmente per i video; `GET /api/thumbs/stats` e `POST /api/thumbs/rebuild` espongono stato ed eventuale ricostruzione dalla sezione **Impostazioni → Cache miniature** (Web & Android).
 - **Griglia & Lightbox Progressivo**: la griglia Web e Android usa `?preview=thumb` (`loading="lazy"`, `decoding="async"`); la lightbox mostra immediatamente l'anteprima `?preview=large` (1280px) e scarica l'originale completo al superamento di `1.15x` zoom; su Android è inoltre attiva una cache LRU su disco (`thumb_cache/`, default `150 MB`, configurabile).
 
-### Variabili d'Ambiente Principali v1.5.0
+### Variabili d'Ambiente Principali v1.5.1
 | Variabile | Default | Descrizione |
 | :--- | :--- | :--- |
 | `THUMB_CACHE_MAX_MB` | `512` | Limite massimo su disco per utente della cache miniature cifrata (`.thumbs/`). |

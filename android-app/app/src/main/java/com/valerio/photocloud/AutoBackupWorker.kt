@@ -30,6 +30,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class AutoBackupActionReceiver : BroadcastReceiver() {
@@ -115,11 +116,13 @@ class AutoBackupWorker(
                     continue
                 }
 
-                val sha = if (prev != null && prev.sizeBytes == cand.sizeBytes && prev.sha256.length == 64) {
+                val rawSha = if (prev != null && prev.sizeBytes == cand.sizeBytes && AutoBackupLogic.isValidSha256Hex(prev.sha256)) {
                     prev.sha256
                 } else {
                     apiClient.computeUriSha256(Uri.parse(cand.uriString))
-                } ?: continue
+                }
+                val sha = rawSha?.takeIf { AutoBackupLogic.isValidSha256Hex(it) }?.trim()?.lowercase(Locale.ROOT)
+                    ?: continue
 
                 toCheckWithServer.add(cand to sha)
             }

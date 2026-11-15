@@ -92,6 +92,13 @@ object AutoBackupLogic {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
+    fun isValidSha256Hex(raw: String?): Boolean {
+        val clean = raw?.trim() ?: return false
+        return clean.length == 64 && clean.all {
+            it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F'
+        }
+    }
+
     /**
      * Evaluates whether a MediaStore item matches user-configured bucket, type, timestamp, and video size cap filters.
      */

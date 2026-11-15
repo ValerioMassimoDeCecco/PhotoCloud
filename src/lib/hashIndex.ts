@@ -55,6 +55,73 @@ export function normalizeSha256Hex(raw: unknown): string | null {
   return SHA256_HEX_REGEX.test(clean) ? clean : null;
 }
 
+export interface OrphanTempCleanupOptions {
+  activePartPaths?: ReadonlySet<string>;
+  cleanAllChunkedParts?: boolean;
+  staleTempMaxAgeMs?: number;
+  nowMs?: number;
+}
+
+/**
+ * Cleans up orphaned chunked `.part` files (and expired `upload_*.tmp` files) inside [tempUploadDir].
+ * On server startup, [cleanAllChunkedParts] is true because the in-memory session Map is empty,
+ * so any leftover `chunked_*.part` from a crashed/restarted server is immediately reclaimed.
+ */
+export function cleanupOrphanTempFiles(
+  tempUploadDir: string,
+  options: OrphanTempCleanupOptions = {}
+): number {
+  if (!fs.existsSync(tempUploadDir)) return 0;
+  const nowMs = typeof options.nowMs === 'number' ? options.nowMs : Date.now();
+  const maxAgeMs = Math.max(0, options.staleTempMaxAgeMs ?? 2 * 60 * 60 * 1000);
+  const cleanAllChunked = Boolean(options.cleanAllChunkedParts);
+  const activeSet = options.activePartPaths;
+
+  let removed = 0;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(tempUploadDir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const isChunkPart = entry.name.startsWith('chunked_') && entry.name.endsWith('.part');
+    const isMulterTmp = entry.name.startsWith('upload_') && entry.name.endsWith('.tmp');
+    if (!isChunkPart && !isMulterTmp) continue;
+
+    const fullPath = path.resolve(tempUploadDir, entry.name);
+    if (!fullPath.startsWith(path.resolve(tempUploadDir) + path.sep)) continue;
+
+    if (isChunkPart && cleanAllChunked) {
+      try {
+        fs.unlinkSync(fullPath);
+        removed++;
+      } catch {
+        // ignore concurrent unlink
+      }
+      continue;
+    }
+
+    if (isChunkPart && activeSet?.has(fullPath)) {
+      continue;
+    }
+
+    try {
+      const stat = fs.statSync(fullPath);
+      if (nowMs - stat.mtimeMs >= maxAgeMs) {
+        fs.unlinkSync(fullPath);
+        removed++;
+      }
+    } catch {
+      // ignore disappearing temp file
+    }
+  }
+
+  return removed;
+}
+
 export class VaultHashIndex {
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly backfillInFlight = new Set<string>();

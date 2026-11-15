@@ -20,6 +20,11 @@ test('v1.5.0 integration: persistent encrypted thumbs & auto-backup check + chun
     }
   }
 
+  const tempDir = path.join(dir, 'temp_uploads');
+  fs.mkdirSync(tempDir, { recursive: true });
+  const preExistingOrphanPart = path.join(tempDir, 'chunked_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.part');
+  fs.writeFileSync(preExistingOrphanPart, Buffer.alloc(1024, 0xaa));
+
   const socket = net.createServer();
   socket.listen(0, '127.0.0.1');
   await once(socket, 'listening');
@@ -60,7 +65,12 @@ test('v1.5.0 integration: persistent encrypted thumbs & auto-backup check + chun
         await new Promise((r) => setTimeout(r, 50));
       }
     }
-    assert.ok(ready, 'v1.5.0 test server did not become ready');
+    assert.ok(ready, 'v1.5.1 test server did not become ready');
+    assert.equal(
+      fs.existsSync(preExistingOrphanPart),
+      false,
+      'Server startup must clean up leftover chunked_*.part files from previous runs'
+    );
 
     // Register & login alice
     const regForm = new FormData();
@@ -344,6 +354,53 @@ test('v1.5.0 integration: persistent encrypted thumbs & auto-backup check + chun
       jsonReq('POST', { items: [{ sha256: largeVideoSha, sizeBytes: largeVideoBytes.length }] }, aliceCookie)
     );
     assert.deepEqual(((await checkChunked.json()) as any).existingSha256, [largeVideoSha]);
+
+    // Auto-backup chunked init WITHOUT sha256 must fail with 400 and leave no orphan .part files
+    const missingShaInit = await fetch(
+      `${base}/api/upload/chunked/init`,
+      jsonReq(
+        'POST',
+        {
+          filename: 'no_sha_auto.mp4',
+          totalSize: 1024,
+          chunkSizeBytes: 512,
+        },
+        aliceCookie,
+        { 'X-Backup-Origin': 'auto' }
+      )
+    );
+    assert.equal(missingShaInit.status, 400);
+    assert.equal(
+      fs.readdirSync(tempDir).filter((f) => f.startsWith('chunked_') && f.endsWith('.part')).length,
+      0,
+      'Rejected auto-backup init must not leave any .part file in temp_uploads/'
+    );
+
+    // Auto-backup /upload?skipList=1 with mismatched sha256[] must fail with 400
+    const mismatchForm = new FormData();
+    mismatchForm.append('skipList', '1');
+    mismatchForm.append('sha256[]', 'f'.repeat(64));
+    mismatchForm.append('file[]', new Blob([new Uint8Array(samplePngBuffer)], { type: 'image/png' }), 'mismatch.png');
+    const mismatchUpResp = await fetch(`${base}/upload?skipList=1`, {
+      method: 'POST',
+      headers: { Cookie: aliceCookie, 'X-Backup-Origin': 'auto' },
+      body: mismatchForm,
+    });
+    assert.equal(mismatchUpResp.status, 400);
+
+    // Auto-backup /upload?skipList=1 with matching sha256[] succeeds 200
+    const matchingBuf = Buffer.from('auto-backup-small-payload-verified');
+    const matchingSha = crypto.createHash('sha256').update(matchingBuf).digest('hex');
+    const validAutoForm = new FormData();
+    validAutoForm.append('skipList', '1');
+    validAutoForm.append('sha256[]', matchingSha);
+    validAutoForm.append('file[]', new Blob([new Uint8Array(matchingBuf)], { type: 'image/jpeg' }), 'auto_small.jpg');
+    const validAutoResp = await fetch(`${base}/upload?skipList=1`, {
+      method: 'POST',
+      headers: { Cookie: aliceCookie, 'X-Backup-Origin': 'auto' },
+      body: validAutoForm,
+    });
+    assert.equal(validAutoResp.status, 200);
   } finally {
     child.kill();
     await once(child, 'exit').catch(() => undefined);

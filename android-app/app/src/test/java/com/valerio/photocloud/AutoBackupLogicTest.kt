@@ -21,6 +21,11 @@ class AutoBackupLogicTest {
             .joinToString("") { "%02x".format(it) }
         val actual = AutoBackupLogic.computeSha256HexStream(ByteArrayInputStream(payload))
         assertEquals(expected, actual)
+        assertTrue(AutoBackupLogic.isValidSha256Hex(actual))
+        assertTrue(AutoBackupLogic.isValidSha256Hex("  ${actual.uppercase()} "))
+        assertFalse(AutoBackupLogic.isValidSha256Hex(""))
+        assertFalse(AutoBackupLogic.isValidSha256Hex("z".repeat(64)))
+        assertFalse(AutoBackupLogic.isValidSha256Hex("a".repeat(63)))
     }
 
     @Test

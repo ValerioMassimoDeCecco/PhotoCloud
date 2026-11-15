@@ -2,6 +2,18 @@
 
 Tutte le modifiche rilevanti di PhotoCloud sono documentate in questo file.
 
+## [1.5.1] - Android versionCode 33
+
+### Corretto & Rafforzato
+- **Pulizia file `.part` / `.tmp` orfani all'avvio (`src/lib/hashIndex.ts`, `server.ts`)**: aggiunto `cleanupOrphanTempFiles(...)` eseguito allo startup del server (rimozione immediata di eventuali `temp_uploads/chunked_*.part` rimasti da un riavvio a metà upload quando la Map in memoria è vuota) e durante lo sweep TTL periodico; migliorata anche la pulizia se l'allocazione iniziale di `/api/upload/chunked/init` fallisce.
+- **Checksum SHA-256 obbligatorio per Backup Automatico (`server.ts`, `AutoBackupLogic.kt`, `AutoBackupWorker.kt`, `PhotoCloudApiClient.kt`)**:
+  - `POST /api/upload/chunked/init` rifiuta con `400` richieste di backup automatico (`X-Backup-Origin: auto` o `backupOrigin: "auto"`) prive di `sha256` valido (64 hex), o richieste con `sha256` malformato.
+  - `POST /upload` accetta e verifica end-to-end `sha256[]` quando inviato dal client (rimuovendo il file scritto e rispondendo `400` in caso di mismatch).
+  - Su Android, `AutoBackupWorker` valida sempre gli hash con `AutoBackupLogic.isValidSha256Hex(...)` e `PhotoCloudApiClient.uploadAutoBackupCandidate` invia sempre `sha256` sia su `/api/upload/chunked/init` che come campo `sha256[]` su `POST /upload?skipList=1`.
+- **Fix Compilazione Android Release (`PhotoCloudApiClient.kt`, `AutoBackupWorker.kt`, `MainActivity.kt`)**:
+  - Rimosso `/*` annidato nel commento KDoc di `PhotoCloudApiClient.kt` che causava `:app:kspReleaseKotlin FAILED`.
+  - Corretto `apiClient.syncGallerySession()` in `AutoBackupWorker.kt` e sostituite le chiamate `SettingsToggleRow` con `SettingsSwitchRow(title, subtitle, ...)` in `MainActivity.kt`.
+
 ## [1.5.0] - Android versionCode 32
 
 ### Aggiunto (Funzionalità B — Cache Persistente Miniature)

@@ -17,7 +17,7 @@ import {
   calculateBufferHash,
   findDuplicateGroups,
 } from './src/lib/crypto';
-import { normalizeSha256Hex, vaultHashIndex } from './src/lib/hashIndex';
+import { cleanupOrphanTempFiles, normalizeSha256Hex, vaultHashIndex } from './src/lib/hashIndex';
 import {
   renderLoginTemplate,
   renderGalleryTemplate,
@@ -673,6 +673,13 @@ const chunkCleanupTimer = setInterval(() => {
       }
     }
   }
+  const activeParts = new Set(Array.from(CHUNKED_UPLOADS.values()).map((s) => path.resolve(s.tempPartPath)));
+  cleanupOrphanTempFiles(TEMP_UPLOAD_DIR, {
+    activePartPaths: activeParts,
+    cleanAllChunkedParts: false,
+    staleTempMaxAgeMs: CHUNKED_UPLOAD_TTL_MS,
+    nowMs: now,
+  });
 }, 5 * 60 * 1000);
 chunkCleanupTimer.unref();
 
@@ -2424,6 +2431,13 @@ async function startServer() {
           ? [rawTimestamps]
           : [];
 
+        const rawChecksums = req.body?.['sha256[]'] || req.body?.sha256;
+        const expectedChecksums = Array.isArray(rawChecksums)
+          ? rawChecksums
+          : rawChecksums
+          ? [rawChecksums]
+          : [];
+
         const rawAlbum = String(req.body?.album || '').trim();
         const targetAlbum = rawAlbum && isValidAlbumName(rawAlbum) ? rawAlbum : '';
         const skipList = req.body?.skipList === '1' || req.query?.skipList === '1';
@@ -2431,6 +2445,24 @@ async function startServer() {
         const uploadedFilenames: string[] = [];
 
         for (let i = 0; i < files.length; i++) {
+          const rawExpectedSha = expectedChecksums[i];
+          const hasExpectedSha = rawExpectedSha !== undefined && String(rawExpectedSha).trim() !== '';
+          const expectedSha = hasExpectedSha ? normalizeSha256Hex(rawExpectedSha) : null;
+          if (hasExpectedSha && !expectedSha) {
+            for (const prevName of uploadedFilenames) {
+              try {
+                fs.unlinkSync(path.join(userFolder, prevName));
+              } catch {
+                // ignore
+              }
+            }
+            if (uploadedFilenames.length > 0) {
+              await vaultHashIndex.removeManyFileHashes(userFolder, uploadedFilenames);
+            }
+            res.status(400).json({ error: 'Checksum SHA-256 non valido (attesi 64 caratteri esadecimali)' });
+            return;
+          }
+
           const file = files[i];
           const rawOrig = path.basename(file.originalname || `file_${Date.now()}`);
           const { filename, filepath } = allocateUniqueVaultFilename(userFolder, rawOrig);
@@ -2452,6 +2484,24 @@ async function startServer() {
             plaintextSize = rawBuf.length;
             const encrypted = await encryptFileAsync(rawBuf, sess.apiKey);
             await fs.promises.writeFile(filepath, encrypted);
+          }
+
+          if (expectedSha && sha256 !== expectedSha) {
+            try {
+              if (fs.existsSync(filepath)) await fs.promises.unlink(filepath);
+            } catch {
+              // ignore
+            }
+            for (const prevName of uploadedFilenames) {
+              try {
+                fs.unlinkSync(path.join(userFolder, prevName));
+              } catch {
+                // ignore
+              }
+              await vaultHashIndex.removeFileHash(userFolder, prevName);
+            }
+            res.status(400).json({ error: 'Checksum SHA-256 non corrispondente' });
+            return;
           }
 
           uploadedFilenames.push(filename);
@@ -2601,8 +2651,19 @@ async function startServer() {
     const targetAlbum = rawAlbum && isValidAlbumName(rawAlbum) ? rawAlbum : '';
     const timestampMsRaw = Number(req.body?.timestampMs);
     const timestampMs = Number.isFinite(timestampMsRaw) && timestampMsRaw > 0 ? timestampMsRaw : undefined;
-    const expectedSha256 = normalizeSha256Hex(req.body?.sha256) ?? undefined;
+    const rawSha256 = req.body?.sha256;
+    const hasRawSha256 = rawSha256 !== undefined && String(rawSha256).trim() !== '';
+    const expectedSha256 = normalizeSha256Hex(rawSha256) ?? undefined;
     const isAutoBackup = String(req.headers['x-backup-origin'] || req.body?.backupOrigin || '').trim().toLowerCase() === 'auto';
+
+    if (hasRawSha256 && !expectedSha256) {
+      res.status(400).json({ error: 'Checksum SHA-256 non valido (attesi 64 caratteri esadecimali)' });
+      return;
+    }
+    if (isAutoBackup && !expectedSha256) {
+      res.status(400).json({ error: 'Checksum SHA-256 obbligatorio per backup automatico' });
+      return;
+    }
 
     fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
     const uploadId = crypto.randomUUID();
@@ -2610,9 +2671,17 @@ async function startServer() {
 
     try {
       const fh = await fs.promises.open(tempPartPath, 'w');
-      await fh.truncate(totalSize);
-      await fh.close();
+      try {
+        await fh.truncate(totalSize);
+      } finally {
+        await fh.close();
+      }
     } catch {
+      try {
+        if (fs.existsSync(tempPartPath)) await fs.promises.unlink(tempPartPath);
+      } catch {
+        // ignore cleanup error
+      }
       res.status(500).json({ error: 'Impossibile allocare file temporaneo upload' });
       return;
     }
@@ -4077,6 +4146,18 @@ async function startServer() {
       res.sendFile(targetPath);
     }
   });
+
+  try {
+    const cleanedParts = cleanupOrphanTempFiles(TEMP_UPLOAD_DIR, {
+      cleanAllChunkedParts: true,
+      staleTempMaxAgeMs: CHUNKED_UPLOAD_TTL_MS,
+    });
+    if (cleanedParts > 0) {
+      console.log(`PhotoCloud startup cleanup: rimossi ${cleanedParts} file temporanei orfani da temp_uploads/`);
+    }
+  } catch {
+    // ignore startup temp cleanup error
+  }
 
   const port = Number(process.env.PORT) || 3000;
   app.listen(port, '0.0.0.0', () => {

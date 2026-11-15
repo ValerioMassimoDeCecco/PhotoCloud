@@ -1,19 +1,18 @@
 {
-  "apkFilename": "photocloud-release-v1.5.0-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.5.0-signed.apk",
+  "apkFilename": "photocloud-release-v1.5.1-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.5.1-signed.apk",
   "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "sizeBytes": 0,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.5.0",
-  "versionCode": 32,
-  "changelog": "Release 1.5.0 — Cache persistente cifrata delle miniature (JPEG q=80 320px/1280px sotto .thumbs/, LRU THUMB_CACHE_MAX_MB, ETag/304, lightbox progressivo Web+Android, video frame upload PUT /api/thumbs) e Backup automatico camera roll su Android (WorkManager + ContentUriTrigger, deduplica attiva SHA-256 /api/backup/check escluso Cestino, upload chunked streaming oltre 24 MB fino a MAX_UPLOAD_MB=2048). Firma invariata rispetto a v1.4.0.",
+  "versionName": "1.5.1",
+  "versionCode": 33,
+  "changelog": "Release 1.5.1 — Pulizia automatica all'avvio e via TTL dei file orfani temp_uploads/chunked_*.part dopo riavvii del server, checksum SHA-256 obbligatorio per il backup automatico su /api/upload/chunked/init (e verifica end-to-end su /upload?skipList=1), e fix completi di compilazione Kotlin/KSP per Android Release (PhotoCloudApiClient, AutoBackupWorker, MainActivity).",
   "features": [
-    "Backup Automatico Camera Roll Android (v1.5.0): caricamento in background con WorkManager, selettore cartelle (Camera default), solo Wi-Fi/ricarica/risparmio energetico, deduplica attiva SHA-256 (ri-carica se nel Cestino) e upload chunked streaming per video grandi",
-    "Cache Persistente Miniature Server (v1.5.0): varianti cifrate AES-256-GCM thumb (320px) e large (1280px) JPEG q=80, ETag/304, cache negativa, eviction LRU configurabile (THUMB_CACHE_MAX_MB) e ricostruzione on-demand (/api/thumbs/stats, /api/thumbs/rebuild)",
-    "Lightbox Progressivo Web & Android (v1.5.0): anteprima rapida 1280px con upgrade automatico al formato originale oltre 1.15x zoom e cache miniature su disco LRU su Android",
-    "Mappa Foto GPS (v1.4.1): vista geografica interattiva su /map e chip Mappa nell'app — marker con thumbnail, popup con data/album/coordinate, zoom/pan stile Google Maps, tile pubbliche OpenStreetMap",
-    "Pannello Metadati EXIF (v1.4.1): fotocamera, data originale, apertura f/, ISO, esposizione, focale, GPS e altitudine — in lightbox web (pulsante ℹ️ / tasto I) e app Android"
+    "Affidabilità Server & Backup v1.5.1: pulizia automatica all'avvio dei file temp_uploads/chunked_*.part orfani dopo riavvio e validazione/verifica SHA-256 obbligatoria per gli upload di backup automatico",
+    "Fix Compilazione Android Release (v1.5.1): risolti errori Kotlin/KSP su PhotoCloudApiClient, AutoBackupWorker (syncGallerySession) e MainActivity (SettingsSwitchRow)",
+    "Backup Automatico Camera Roll Android: caricamento in background con WorkManager, selettore cartelle (Camera default), solo Wi-Fi/ricarica/risparmio energetico, deduplica attiva SHA-256 e upload chunked streaming per video grandi",
+    "Cache Persistente Miniature Server: varianti cifrate AES-256-GCM thumb (320px) e large (1280px) JPEG q=80, ETag/304, eviction LRU configurabile (THUMB_CACHE_MAX_MB) e ricostruzione on-demand"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.5.0",
-  "notes": "Pre-release v1.5.0: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release, firmato con la stessa firma persistente di v1.4.0 (nessun segreto committato)."
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.5.1",
+  "notes": "Pre-release v1.5.1: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release, firmato con la stessa firma persistente (nessun segreto committato)."
 }

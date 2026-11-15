@@ -13,7 +13,7 @@ import {
   encryptFileStream,
   findDuplicateGroups,
 } from './crypto';
-import { VaultHashIndex } from './hashIndex';
+import { cleanupOrphanTempFiles, VaultHashIndex } from './hashIndex';
 
 function encryptLegacyCfb(plaintext: Buffer, apiKey: string): Buffer {
   const salt = crypto.randomBytes(16);
@@ -111,6 +111,55 @@ test('VaultHashIndex tracks active files only (excludes trash) and reuses index 
     const all = await index.resolveAllActiveHashes(userDir, apiKey);
     const dups = findDuplicateGroups(all);
     assert.deepEqual(dups, [['a1.jpg', 'a2.jpg']]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('cleanupOrphanTempFiles removes leftover .part on startup and respects active sessions during sweeps', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-temp-clean-'));
+  try {
+    const activePart = path.join(dir, 'chunked_11111111-1111-1111-1111-111111111111.part');
+    const orphanPart = path.join(dir, 'chunked_22222222-2222-2222-2222-222222222222.part');
+    const staleTmp = path.join(dir, 'upload_1234_abcd.tmp');
+    const freshTmp = path.join(dir, 'upload_9999_efgh.tmp');
+    const unrelatedFile = path.join(dir, 'keep_me.txt');
+
+    fs.writeFileSync(activePart, 'part-a');
+    fs.writeFileSync(orphanPart, 'part-b');
+    fs.writeFileSync(staleTmp, 'old-tmp');
+    fs.writeFileSync(freshTmp, 'new-tmp');
+    fs.writeFileSync(unrelatedFile, 'unrelated');
+
+    const nowMs = Date.now();
+    const oldDate = new Date(nowMs - 3 * 60 * 60 * 1000);
+    fs.utimesSync(orphanPart, oldDate, oldDate);
+    fs.utimesSync(staleTmp, oldDate, oldDate);
+
+    // Periodic sweep mode: preserves activePart even if old, preserves freshTmp, removes stale unreferenced orphanPart + staleTmp
+    const swept = cleanupOrphanTempFiles(dir, {
+      activePartPaths: new Set([path.resolve(activePart)]),
+      cleanAllChunkedParts: false,
+      staleTempMaxAgeMs: 2 * 60 * 60 * 1000,
+      nowMs,
+    });
+    assert.equal(swept, 2);
+    assert.equal(fs.existsSync(orphanPart), false);
+    assert.equal(fs.existsSync(staleTmp), false);
+    assert.equal(fs.existsSync(activePart), true);
+    assert.equal(fs.existsSync(freshTmp), true);
+    assert.equal(fs.existsSync(unrelatedFile), true);
+
+    // Startup mode (cleanAllChunkedParts=true): wipes ALL chunked_*.part even if fresh
+    const removedAtStartup = cleanupOrphanTempFiles(dir, {
+      cleanAllChunkedParts: true,
+      staleTempMaxAgeMs: 2 * 60 * 60 * 1000,
+      nowMs,
+    });
+    assert.equal(removedAtStartup, 1);
+    assert.equal(fs.existsSync(activePart), false);
+    assert.equal(fs.existsSync(freshTmp), true);
+    assert.equal(fs.existsSync(unrelatedFile), true);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -4535,6 +4535,15 @@ class PhotoCloudApiClient(
         sha256: String,
         serverMaxUploadMb: Int? = null
     ): BackupUploadOutcome = withContext(Dispatchers.IO) {
+        val normalizedSha = sha256.trim().lowercase(Locale.ROOT)
+        if (!AutoBackupLogic.isValidSha256Hex(normalizedSha)) {
+            return@withContext BackupUploadOutcome(
+                uploaded = false,
+                retryable = false,
+                errorMessage = "Checksum SHA-256 obbligatorio o non valido"
+            )
+        }
+
         val maxServerBytes = (serverMaxUploadMb ?: 2048).toLong() * 1024L * 1024L
         if (candidate.sizeBytes > maxServerBytes) {
             return@withContext BackupUploadOutcome(
@@ -4559,6 +4568,7 @@ class PhotoCloudApiClient(
                 val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("skipList", "1")
                     .addFormDataPart("timestamp[]", effectiveTimestampMs.toString())
+                    .addFormDataPart("sha256[]", normalizedSha)
                     .addFormDataPart("file[]", candidate.displayName, fileBody)
                     .build()
 
@@ -4603,7 +4613,7 @@ class PhotoCloudApiClient(
                 put("totalSize", candidate.sizeBytes)
                 put("chunkSizeBytes", 8 * 1024 * 1024)
                 if (effectiveTimestampMs > 0L) put("timestampMs", effectiveTimestampMs)
-                if (sha256.length == 64) put("sha256", sha256)
+                put("sha256", normalizedSha)
                 put("backupOrigin", "auto")
             }.toString()
 
