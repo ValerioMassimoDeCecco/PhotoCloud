@@ -10,18 +10,27 @@ import {
   verifyKey,
   encryptFile,
   encryptFileAsync,
+  encryptFileStream,
   decryptFile,
   decryptFileAsync,
   encryptedPlaintextSize,
   calculateBufferHash,
   findDuplicateGroups,
 } from './src/lib/crypto';
+import { normalizeSha256Hex, vaultHashIndex } from './src/lib/hashIndex';
 import {
   renderLoginTemplate,
   renderGalleryTemplate,
   renderTrashTemplate,
   computeCloudStorageStats,
+  formatFileSize,
 } from './src/lib/templateRenderer';
+import {
+  MAX_CLIENT_THUMB_UPLOAD_BYTES,
+  parsePreviewVariant,
+  THUMB_CLIENT_CACHE_MAX_AGE_SEC,
+  thumbCache,
+} from './src/lib/thumbCache';
 import {
   resolveFileViewerSpec,
   parseDocumentBuffer,
@@ -537,9 +546,11 @@ function listMediaFiles(folderPath: string, username?: string): MediaItem[] {
   if (!fs.existsSync(folderPath)) return [];
   const files = fs.readdirSync(folderPath);
   const albumsData = username ? loadUserAlbums(username) : { albums: [], fileAlbums: Object.create(null) };
+  const isTrashFolder = path.basename(folderPath) === 'trash';
+  const thumbSet = !isTrashFolder ? thumbCache.listFilesWithThumb(folderPath, 'thumb') : null;
   const details: MediaItem[] = [];
   for (const f of files) {
-    if (f.startsWith('.') || !isValidVaultFilename(f)) continue; // skip .albums.json and hidden files
+    if (f.startsWith('.') || !isValidVaultFilename(f)) continue; // skip .albums.json, .thumbs and hidden files
     const full = path.join(folderPath, f);
     let stat: fs.Stats;
     try {
@@ -557,6 +568,7 @@ function listMediaFiles(folderPath: string, username?: string): MediaItem[] {
         isMedia,
         category,
         album: albumsData.fileAlbums[f] || '',
+        hasThumb: thumbSet ? thumbSet.has(f) : undefined,
       });
     }
   }
@@ -625,6 +637,79 @@ export function parseHttpByteRange(
   return { status: 'ok', start, end };
 }
 
+const MAX_UPLOAD_MB = Math.min(16384, Math.max(50, Number(process.env.MAX_UPLOAD_MB || 2048) || 2048));
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+const MAX_CHUNKED_PART_BYTES = 16 * 1024 * 1024;
+const DEFAULT_CHUNKED_PART_BYTES = 8 * 1024 * 1024;
+const CHUNKED_UPLOAD_TTL_MS = 2 * 60 * 60 * 1000;
+
+interface ChunkedUploadSession {
+  id: string;
+  owner: string;
+  filename: string;
+  totalSize: number;
+  chunkSizeBytes: number;
+  expectedTotalChunks: number;
+  receivedChunks: Set<number>;
+  tempPartPath: string;
+  timestampMs?: number;
+  album: string;
+  expectedSha256?: string;
+  isAutoBackup: boolean;
+  expiresAt: number;
+}
+
+const CHUNKED_UPLOADS = new Map<string, ChunkedUploadSession>();
+
+const chunkCleanupTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [id, s] of CHUNKED_UPLOADS.entries()) {
+    if (s.expiresAt <= now) {
+      CHUNKED_UPLOADS.delete(id);
+      try {
+        if (fs.existsSync(s.tempPartPath)) fs.unlinkSync(s.tempPartPath);
+      } catch {
+        // ignore cleanup error
+      }
+    }
+  }
+}, 5 * 60 * 1000);
+chunkCleanupTimer.unref();
+
+function allocateUniqueVaultFilename(userFolder: string, rawOrigName: string): { filename: string; filepath: string; isMedia: boolean } {
+  const rawOrig = path.basename(rawOrigName || `file_${Date.now()}`);
+  const ext = path.extname(rawOrig) || '.bin';
+  const baseClean =
+    path
+      .basename(rawOrig, ext)
+      .replace(/[^a-zA-Z0-9._-]/g, '_')
+      .slice(0, 64)
+      .replace(/^\.+/, '') || 'file';
+
+  const { isMedia } = classifyFileExtension(rawOrig);
+  let filename = '';
+  let filepath = '';
+
+  if (!isMedia) {
+    const candidate = `${baseClean}${ext}`;
+    if (!fs.existsSync(path.join(userFolder, candidate))) {
+      filename = candidate;
+      filepath = path.join(userFolder, candidate);
+    }
+  }
+
+  if (!filename) {
+    while (true) {
+      const suffix = crypto.randomBytes(4).toString('hex');
+      filename = isMedia ? `${crypto.randomBytes(8).toString('hex')}${ext}` : `${baseClean}_${suffix}${ext}`;
+      filepath = path.join(userFolder, filename);
+      if (!fs.existsSync(filepath)) break;
+    }
+  }
+
+  return { filename, filepath, isMedia };
+}
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => {
@@ -636,7 +721,7 @@ const upload = multer({
     },
   }),
   limits: {
-    fileSize: 250 * 1024 * 1024, // 250 MB max per file
+    fileSize: MAX_UPLOAD_BYTES,
     files: 500, // Support large multi-file batches without LIMIT_FILE_COUNT crash
     fieldSize: 25 * 1024 * 1024,
   },
@@ -827,7 +912,11 @@ async function startServer() {
       albums: albumsData.albums,
       fileAlbums: albumsData.fileAlbums,
       favorites,
-      storageStats: computeCloudStorageStats(activeMediaFiles, trashedMediaFiles),
+      storageStats: computeCloudStorageStats(
+        activeMediaFiles,
+        trashedMediaFiles,
+        thumbCache.getUserStats(userFolder).diskBytes
+      ),
     });
   });
 
@@ -2338,50 +2427,33 @@ async function startServer() {
         const rawAlbum = String(req.body?.album || '').trim();
         const targetAlbum = rawAlbum && isValidAlbumName(rawAlbum) ? rawAlbum : '';
         const skipList = req.body?.skipList === '1' || req.query?.skipList === '1';
+        const isAutoBackup = String(req.headers['x-backup-origin'] || '').trim().toLowerCase() === 'auto';
         const uploadedFilenames: string[] = [];
 
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           const rawOrig = path.basename(file.originalname || `file_${Date.now()}`);
-          const ext = path.extname(rawOrig) || '.bin';
-          const baseClean =
-            path
-              .basename(rawOrig, ext)
-              .replace(/[^a-zA-Z0-9._-]/g, '_')
-              .slice(0, 64)
-              .replace(/^\.+/, '') || 'file';
+          const { filename, filepath } = allocateUniqueVaultFilename(userFolder, rawOrig);
 
-          const { isMedia } = classifyFileExtension(rawOrig);
-          let filename = '';
-          let filepath = '';
-
-          if (!isMedia) {
-            const candidate = `${baseClean}${ext}`;
-            if (!fs.existsSync(path.join(userFolder, candidate))) {
-              filename = candidate;
-              filepath = path.join(userFolder, candidate);
-            }
-          }
-
-          if (!filename) {
-            while (true) {
-              const suffix = crypto.randomBytes(4).toString('hex');
-              filename = isMedia ? `${crypto.randomBytes(8).toString('hex')}${ext}` : `${baseClean}_${suffix}${ext}`;
-              filepath = path.join(userFolder, filename);
-              if (!fs.existsSync(filepath)) break;
-            }
-          }
-
-          const rawBuf = readUploadedFileBuffer(file);
-          const encrypted = await encryptFileAsync(rawBuf, sess.apiKey);
-          await fs.promises.writeFile(filepath, encrypted);
+          let sha256: string;
+          let plaintextSize: number;
           if (file.path && fs.existsSync(file.path)) {
+            const streamed = await encryptFileStream(file.path, filepath, sess.apiKey);
+            sha256 = streamed.sha256;
+            plaintextSize = streamed.plaintextSize;
             try {
               await fs.promises.unlink(file.path);
             } catch {
               // ignore
             }
+          } else {
+            const rawBuf = readUploadedFileBuffer(file);
+            sha256 = calculateBufferHash(rawBuf);
+            plaintextSize = rawBuf.length;
+            const encrypted = await encryptFileAsync(rawBuf, sess.apiKey);
+            await fs.promises.writeFile(filepath, encrypted);
           }
+
           uploadedFilenames.push(filename);
 
           if (timestamps[i]) {
@@ -2394,6 +2466,8 @@ async function startServer() {
               }
             }
           }
+
+          await vaultHashIndex.recordFileHash(userFolder, filename, sha256, plaintextSize);
         }
 
         if (targetAlbum && uploadedFilenames.length > 0) {
@@ -2408,12 +2482,17 @@ async function startServer() {
           saveUserAlbums(sess.username, albumsData);
         }
 
+        if (uploadedFilenames.length > 0) {
+          thumbCache.enqueueBackgroundGeneration(userFolder, uploadedFilenames, sess.apiKey, ['thumb', 'large']);
+        }
+
         const activeMediaFiles = skipList ? undefined : listMediaFiles(userFolder, sess.username);
         const storageStats = skipList
           ? undefined
           : computeCloudStorageStats(
               activeMediaFiles ?? listMediaFiles(userFolder, sess.username),
-              listMediaFiles(trashFolder, sess.username)
+              listMediaFiles(trashFolder, sess.username),
+              thumbCache.getUserStats(userFolder).diskBytes
             );
 
         res.json({
@@ -2425,7 +2504,7 @@ async function startServer() {
           storageStats,
         });
 
-        if (uploadedFilenames.length > 0) {
+        if (uploadedFilenames.length > 0 && !isAutoBackup) {
           notifyUserAsync(
             sess.username,
             '☁️ PhotoCloud — Upload completato',
@@ -2441,6 +2520,308 @@ async function startServer() {
       }
     }
   );
+
+  // --- AUTO BACKUP DEDUPLICATION CHECK (Active Files Only, Excludes Trash) ---
+  app.post('/api/backup/check', async (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+
+    const rawItems: unknown = req.body?.items;
+    if (!Array.isArray(rawItems)) {
+      res.status(400).json({ error: 'Campo items non valido: atteso array' });
+      return;
+    }
+
+    const normalizedItems: Array<{ sha256: string; sizeBytes?: number }> = [];
+    for (const entry of rawItems.slice(0, 500)) {
+      if (typeof entry === 'string') {
+        const sha = normalizeSha256Hex(entry);
+        if (sha) normalizedItems.push({ sha256: sha });
+      } else if (entry && typeof entry === 'object') {
+        const rec = entry as { sha256?: unknown; sizeBytes?: unknown };
+        const sha = normalizeSha256Hex(rec.sha256);
+        const sizeNum = Number(rec.sizeBytes);
+        if (sha) {
+          normalizedItems.push({
+            sha256: sha,
+            sizeBytes: Number.isFinite(sizeNum) && sizeNum >= 0 ? Math.floor(sizeNum) : undefined,
+          });
+        }
+      }
+    }
+
+    try {
+      const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+      fs.mkdirSync(userFolder, { recursive: true });
+      const checkRes = await vaultHashIndex.checkBackupItems(userFolder, sess.apiKey, normalizedItems);
+      res.json({
+        existingSha256: checkRes.existingSha256,
+        backfillPending: checkRes.backfillPending,
+        maxUploadMb: MAX_UPLOAD_MB,
+      });
+    } catch {
+      res.status(500).json({ error: 'Errore verifica duplicati backup' });
+    }
+  });
+
+  // --- CHUNKED STREAMING UPLOAD (Large Videos & Flaky Mobile Connections) ---
+  app.post('/api/upload/chunked/init', async (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+
+    const rawFilename = String(req.body?.filename || '').trim();
+    const cleanOrig = path.basename(rawFilename);
+    if (!cleanOrig || cleanOrig.length > 255) {
+      res.status(400).json({ error: 'Nome file non valido' });
+      return;
+    }
+
+    const totalSize = Number(req.body?.totalSize);
+    if (!Number.isFinite(totalSize) || totalSize < 0 || !Number.isInteger(totalSize)) {
+      res.status(400).json({ error: 'totalSize non valido' });
+      return;
+    }
+    if (totalSize > MAX_UPLOAD_BYTES) {
+      res.status(413).json({ error: `File oltre il limite massimo consentito (${MAX_UPLOAD_MB} MB)` });
+      return;
+    }
+
+    const requestedChunkSize = Number(req.body?.chunkSizeBytes);
+    const chunkSizeBytes = Number.isFinite(requestedChunkSize) && requestedChunkSize > 0
+      ? Math.min(MAX_CHUNKED_PART_BYTES, Math.max(1, Math.floor(requestedChunkSize)))
+      : DEFAULT_CHUNKED_PART_BYTES;
+
+    const rawAlbum = String(req.body?.album || '').trim();
+    const targetAlbum = rawAlbum && isValidAlbumName(rawAlbum) ? rawAlbum : '';
+    const timestampMsRaw = Number(req.body?.timestampMs);
+    const timestampMs = Number.isFinite(timestampMsRaw) && timestampMsRaw > 0 ? timestampMsRaw : undefined;
+    const expectedSha256 = normalizeSha256Hex(req.body?.sha256) ?? undefined;
+    const isAutoBackup = String(req.headers['x-backup-origin'] || req.body?.backupOrigin || '').trim().toLowerCase() === 'auto';
+
+    fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
+    const uploadId = crypto.randomUUID();
+    const tempPartPath = path.join(TEMP_UPLOAD_DIR, `chunked_${uploadId}.part`);
+
+    try {
+      const fh = await fs.promises.open(tempPartPath, 'w');
+      await fh.truncate(totalSize);
+      await fh.close();
+    } catch {
+      res.status(500).json({ error: 'Impossibile allocare file temporaneo upload' });
+      return;
+    }
+
+    const expectedTotalChunks = totalSize === 0 ? 1 : Math.ceil(totalSize / chunkSizeBytes);
+    CHUNKED_UPLOADS.set(uploadId, {
+      id: uploadId,
+      owner: sess.username,
+      filename: cleanOrig,
+      totalSize,
+      chunkSizeBytes,
+      expectedTotalChunks,
+      receivedChunks: new Set<number>(),
+      tempPartPath,
+      timestampMs,
+      album: targetAlbum,
+      expectedSha256,
+      isAutoBackup,
+      expiresAt: Date.now() + CHUNKED_UPLOAD_TTL_MS,
+    });
+
+    res.json({
+      uploadId,
+      chunkSizeBytes,
+      totalChunks: expectedTotalChunks,
+      maxUploadMb: MAX_UPLOAD_MB,
+    });
+  });
+
+  app.put(
+    '/api/upload/chunked/:uploadId/:chunkIndex',
+    (req: Request, res: Response, next: NextFunction) => {
+      const sess = getSession(req);
+      if (!sess) {
+        res.status(403).json({ error: 'Accesso negato' });
+        return;
+      }
+      const uploadId = String(req.params.uploadId || '');
+      if (!UUID_REGEX.test(uploadId)) {
+        res.status(404).json({ error: 'Sessione upload non valida' });
+        return;
+      }
+      const session = CHUNKED_UPLOADS.get(uploadId);
+      if (!session || session.owner !== sess.username) {
+        res.status(404).json({ error: 'Sessione upload non trovata' });
+        return;
+      }
+      express.raw({ type: () => true, limit: MAX_CHUNKED_PART_BYTES + 4096 })(req, res, (err: unknown) => {
+        if (err) {
+          res.status(413).json({ error: 'Chunk oltre il limite consentito (16 MB).' });
+          return;
+        }
+        next();
+      });
+    },
+    async (req: Request, res: Response) => {
+      const sess = getSession(req);
+      if (!sess) {
+        res.status(403).json({ error: 'Accesso negato' });
+        return;
+      }
+      const uploadId = String(req.params.uploadId || '');
+      const session = CHUNKED_UPLOADS.get(uploadId);
+      if (!session || session.owner !== sess.username) {
+        res.status(404).json({ error: 'Sessione upload non trovata' });
+        return;
+      }
+
+      const rawIdx = String(req.params.chunkIndex || '');
+      if (!/^[0-9]+$/.test(rawIdx)) {
+        res.status(400).json({ error: 'Indice chunk non valido' });
+        return;
+      }
+      const chunkIndex = Number(rawIdx);
+      if (!Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= session.expectedTotalChunks) {
+        res.status(400).json({ error: 'Indice chunk fuori intervallo' });
+        return;
+      }
+
+      const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      const offset = chunkIndex * session.chunkSizeBytes;
+      const expectedLen = Math.min(session.chunkSizeBytes, Math.max(0, session.totalSize - offset));
+      if (buf.length !== expectedLen) {
+        res.status(400).json({ error: `Dimensione chunk errata (attesi ${expectedLen} byte, ricevuti ${buf.length})` });
+        return;
+      }
+
+      let fh: fs.promises.FileHandle | null = null;
+      try {
+        fh = await fs.promises.open(session.tempPartPath, 'r+');
+        if (buf.length > 0) {
+          await fh.write(buf, 0, buf.length, offset);
+        }
+        session.receivedChunks.add(chunkIndex);
+        session.expiresAt = Date.now() + CHUNKED_UPLOAD_TTL_MS;
+        res.json({
+          success: true,
+          chunkIndex,
+          receivedChunks: session.receivedChunks.size,
+          totalChunks: session.expectedTotalChunks,
+        });
+      } catch {
+        res.status(500).json({ error: 'Errore scrittura chunk su disco' });
+      } finally {
+        try {
+          await fh?.close();
+        } catch {
+          // ignore
+        }
+      }
+    }
+  );
+
+  app.post('/api/upload/chunked/:uploadId/complete', async (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const uploadId = String(req.params.uploadId || '');
+    if (!UUID_REGEX.test(uploadId)) {
+      res.status(404).json({ error: 'Sessione upload non trovata' });
+      return;
+    }
+    const session = CHUNKED_UPLOADS.get(uploadId);
+    if (!session || session.owner !== sess.username) {
+      res.status(404).json({ error: 'Sessione upload non trovata' });
+      return;
+    }
+    if (session.receivedChunks.size < session.expectedTotalChunks) {
+      res.status(400).json({
+        error: `Upload incompleto (${session.receivedChunks.size}/${session.expectedTotalChunks} chunk ricevuti)`,
+      });
+      return;
+    }
+
+    CHUNKED_UPLOADS.delete(uploadId);
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const trashFolder = path.join(userFolder, 'trash');
+    fs.mkdirSync(userFolder, { recursive: true });
+    fs.mkdirSync(trashFolder, { recursive: true });
+
+    const skipList = req.body?.skipList === true || req.body?.skipList === '1' || req.query?.skipList === '1';
+    const { filename, filepath } = allocateUniqueVaultFilename(userFolder, session.filename);
+
+    try {
+      const streamed = await encryptFileStream(session.tempPartPath, filepath, sess.apiKey);
+      if (session.expectedSha256 && streamed.sha256 !== session.expectedSha256) {
+        try {
+          if (fs.existsSync(filepath)) await fs.promises.unlink(filepath);
+        } catch {
+          // ignore
+        }
+        res.status(400).json({ error: 'Checksum SHA-256 non corrispondente' });
+        return;
+      }
+
+      if (session.timestampMs && session.timestampMs > 0) {
+        const mtimeSec = session.timestampMs / 1000;
+        try {
+          fs.utimesSync(filepath, mtimeSec, mtimeSec);
+        } catch {
+          // ignore
+        }
+      }
+
+      await vaultHashIndex.recordFileHash(userFolder, filename, streamed.sha256, streamed.plaintextSize);
+
+      if (session.album) {
+        const albumsData = loadUserAlbums(sess.username);
+        if (!albumsData.albums.includes(session.album)) {
+          albumsData.albums.push(session.album);
+          albumsData.albums.sort((a, b) => a.localeCompare(b, 'it'));
+        }
+        albumsData.fileAlbums[filename] = session.album;
+        saveUserAlbums(sess.username, albumsData);
+      }
+
+      thumbCache.enqueueBackgroundGeneration(userFolder, [filename], sess.apiKey, ['thumb', 'large']);
+
+      const activeMediaFiles = skipList ? undefined : listMediaFiles(userFolder, sess.username);
+      const storageStats = skipList
+        ? undefined
+        : computeCloudStorageStats(
+            activeMediaFiles ?? listMediaFiles(userFolder, sess.username),
+            listMediaFiles(trashFolder, sess.username),
+            thumbCache.getUserStats(userFolder).diskBytes
+          );
+
+      res.json({
+        success: true,
+        filename,
+        uploadedFilenames: [filename],
+        sha256: streamed.sha256,
+        plaintextSize: streamed.plaintextSize,
+        mediaFiles: activeMediaFiles,
+        storageStats,
+      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      res.status(500).json({ error: `Errore finalizzazione upload chunked: ${msg}` });
+    } finally {
+      try {
+        if (fs.existsSync(session.tempPartPath)) await fs.promises.unlink(session.tempPartPath);
+      } catch {
+        // ignore cleanup
+      }
+    }
+  });
 
   // --- MEDIA EDITOR SAVE ENDPOINT (Supports Photos & Videos in "copy" and "overwrite" modes) ---
   app.post(
@@ -2576,6 +2957,22 @@ async function startServer() {
           saveUserAlbums(sess.username, albumsData);
         }
 
+        if (originalFilename) {
+          thumbCache.invalidateFile(safeUserFolder, originalFilename);
+        }
+        if (replacedOldFilename) {
+          thumbCache.invalidateFile(safeUserFolder, replacedOldFilename);
+          await vaultHashIndex.removeFileHash(safeUserFolder, replacedOldFilename);
+        }
+        await vaultHashIndex.recordFileHash(
+          safeUserFolder,
+          targetFilename,
+          calculateBufferHash(mediaBuffer),
+          mediaBuffer.length
+        );
+        thumbCache.invalidateFile(safeUserFolder, targetFilename);
+        thumbCache.enqueueBackgroundGeneration(safeUserFolder, [targetFilename], sess.apiKey, ['thumb', 'large']);
+
         const activeMediaFiles = listMediaFiles(userFolder, sess.username);
         const trashedMediaFiles = listMediaFiles(trashFolder, sess.username);
 
@@ -2594,7 +2991,11 @@ async function startServer() {
               ? 'Video modificato salvato come nuova copia.'
               : 'Foto modificata salvata come nuova copia.',
           mediaFiles: activeMediaFiles,
-          storageStats: computeCloudStorageStats(activeMediaFiles, trashedMediaFiles),
+          storageStats: computeCloudStorageStats(
+            activeMediaFiles,
+            trashedMediaFiles,
+            thumbCache.getUserStats(safeUserFolder).diskBytes
+          ),
         });
       } catch {
         res.status(500).json({ error: 'Errore salvataggio media modificato.' });
@@ -2679,10 +3080,51 @@ async function startServer() {
     }
 
     try {
-      const encrypted = await fs.promises.readFile(safeFilepath);
-      const decrypted = await decryptFileAsync(encrypted, sess.apiKey);
       const spec = resolveFileViewerSpec(filename);
       const isExplicitDownload = forceDownload || req.query.download === '1' || req.query.download === 'true';
+      const previewVariant = !fromTrash ? parsePreviewVariant(req.query.preview, isExplicitDownload) : null;
+
+      if (previewVariant) {
+        const thumbRes = await thumbCache.getOrCreateThumbnail(userFolder, filename, previewVariant, sess.apiKey);
+        if (thumbRes.status === 'ok') {
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader(
+            'Content-Security-Policy',
+            "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox"
+          );
+          res.setHeader('ETag', thumbRes.etag);
+          res.setHeader('Last-Modified', new Date(thumbRes.lastModifiedMs).toUTCString());
+          res.setHeader('Cache-Control', `private, max-age=${THUMB_CLIENT_CACHE_MAX_AGE_SEC}`);
+
+          const ifNoneMatch = typeof req.headers['if-none-match'] === 'string' ? req.headers['if-none-match'].trim() : '';
+          if (ifNoneMatch && ifNoneMatch === thumbRes.etag) {
+            res.status(304).end();
+            return;
+          }
+          const ifModSince = typeof req.headers['if-modified-since'] === 'string' ? req.headers['if-modified-since'] : '';
+          if (!ifNoneMatch && ifModSince) {
+            const imsMs = Date.parse(ifModSince);
+            if (!Number.isNaN(imsMs) && Math.floor(thumbRes.lastModifiedMs / 1000) <= Math.floor(imsMs / 1000)) {
+              res.status(304).end();
+              return;
+            }
+          }
+
+          res.setHeader('Content-Type', 'image/jpeg');
+          res.setHeader('Content-Disposition', `inline; filename="preview_${encodeURIComponent(filename)}.jpg"`);
+          res.setHeader('Content-Length', String(thumbRes.buffer.length));
+          res.send(thumbRes.buffer);
+          return;
+        }
+        if (thumbRes.status === 'busy') {
+          res.status(503).setHeader('Retry-After', '2').send('Servizio miniature temporaneamente occupato');
+          return;
+        }
+        // Fallback trasparente sull'originale se il formato non è supportato o privo di miniatura
+      }
+
+      const encrypted = await fs.promises.readFile(safeFilepath);
+      const decrypted = await decryptFileAsync(encrypted, sess.apiKey);
       const isDangerousExt = ACTIVE_SCRIPT_EXTS.has(spec.extension);
 
       // Sandbox all /media responses so scripts can NEVER execute in the origin context
@@ -2744,6 +3186,96 @@ async function startServer() {
     void handleMediaRequest(req, res, true, true);
   });
 
+  // --- PERSISTENT ENCRYPTED THUMBNAIL SERVICE ENDPOINTS ---
+  app.put(
+    '/api/thumbs/:filename',
+    (req: Request, res: Response, next: NextFunction) => {
+      const sess = getSession(req);
+      if (!sess) {
+        res.status(403).json({ error: 'Accesso negato' });
+        return;
+      }
+      express.raw({ type: () => true, limit: MAX_CLIENT_THUMB_UPLOAD_BYTES + 1024 })(req, res, (err: unknown) => {
+        if (err) {
+          res.status(413).json({ error: 'Miniatura oltre il limite massimo consentito (1 MB).' });
+          return;
+        }
+        next();
+      });
+    },
+    async (req: Request, res: Response) => {
+      const sess = getSession(req);
+      if (!sess) {
+        res.status(403).json({ error: 'Accesso negato' });
+        return;
+      }
+      const filename = String(req.params.filename || '');
+      if (!isValidVaultFilename(filename)) {
+        res.status(400).json({ error: 'Nome file non valido.' });
+        return;
+      }
+      const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+      const variant = parsePreviewVariant(req.query.variant || 'thumb', false) || 'thumb';
+
+      try {
+        const result = await thumbCache.putClientThumbnail(userFolder, filename, rawBody, sess.apiKey, variant);
+        res.json({ success: true, filename, ...result });
+      } catch (err) {
+        const code = err instanceof Error ? err.message : '';
+        if (code === 'SOURCE_NOT_FOUND') {
+          res.status(404).json({ error: 'File sorgente non trovato.' });
+          return;
+        }
+        if (code === 'THUMBNAIL_TOO_LARGE') {
+          res.status(413).json({ error: 'Miniatura oltre il limite massimo consentito (1 MB).' });
+          return;
+        }
+        res.status(400).json({ error: 'Miniatura JPEG non valida.' });
+      }
+    }
+  );
+
+  app.get('/api/thumbs/stats', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const stats = thumbCache.getUserStats(userFolder);
+    res.json({
+      ...stats,
+      totalBytes: stats.diskBytes,
+      entriesCount: stats.totalEntries,
+      variantCount: stats.totalEntries,
+      negativeCount: stats.negativeEntries,
+      pendingJobs: stats.queuePending,
+      diskFormatted: formatFileSize(stats.diskBytes),
+      maxFormatted: formatFileSize(stats.maxBytes),
+    });
+  });
+
+  app.post('/api/thumbs/rebuild', (req: Request, res: Response) => {
+    const sess = getSession(req);
+    if (!sess) {
+      res.status(403).json({ error: 'Accesso negato' });
+      return;
+    }
+    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
+    const activeFiles = listMediaFiles(userFolder, sess.username).map((m) => m.filename);
+    const force = req.body?.force === true;
+    const rebuilt = thumbCache.rebuildUserThumbnails(userFolder, sess.apiKey, activeFiles, force);
+    res.json({
+      success: true,
+      ...rebuilt,
+      message:
+        rebuilt.queuedCount > 0
+          ? `Avviata generazione in background di ${rebuilt.queuedCount} varianti miniature.`
+          : 'Tutte le miniature supportate sono già aggiornate.',
+    });
+  });
+
   // --- TRASH OPERATIONS ---
   app.post('/trash/batch', (req: Request, res: Response) => {
     const sess = getSession(req);
@@ -2776,6 +3308,7 @@ async function startServer() {
           const dest = path.join(trashFolder, path.basename(safePath));
           if (fs.existsSync(dest)) throw new Error('Un file con questo nome è già nel cestino');
           fs.renameSync(safePath, dest);
+          thumbCache.invalidateFile(userFolder, fStr);
           validFilenames.push(fStr);
         } catch (err: unknown) {
           errors.push(`Errore su ${fStr}: ${err instanceof Error ? err.message : String(err)}`);
@@ -2783,6 +3316,10 @@ async function startServer() {
       } else {
         errors.push(`File '${fStr}' non trovato o non valido`);
       }
+    }
+
+    if (validFilenames.length > 0) {
+      void vaultHashIndex.removeManyFileHashes(userFolder, validFilenames);
     }
 
     if (errors.length > 0) {
@@ -2827,6 +3364,8 @@ async function startServer() {
         return;
       }
       fs.renameSync(safeFilepath, dest);
+      thumbCache.invalidateFile(userFolder, filename);
+      void vaultHashIndex.removeFileHash(userFolder, filename);
       res.json({ success: true, message: `File ${filename} spostato nel cestino` });
     } catch {
       res.status(500).json({
@@ -2863,6 +3402,9 @@ async function startServer() {
         return;
       }
       fs.renameSync(safeFilepath, dest);
+      thumbCache.invalidateFile(userFolder, filename);
+      thumbCache.enqueueBackgroundGeneration(userFolder, [filename], sess.apiKey, ['thumb', 'large']);
+      vaultHashIndex.startBackgroundBackfill(userFolder, sess.apiKey);
       res.json({ success: true });
     } catch {
       res.status(500).json({
@@ -2894,6 +3436,7 @@ async function startServer() {
 
     try {
       fs.unlinkSync(safeFilepath);
+      thumbCache.invalidateFile(userFolder, filename);
       const data = loadUserAlbums(sess.username);
       if (data.fileAlbums[filename]) {
         delete data.fileAlbums[filename];
@@ -2921,6 +3464,7 @@ async function startServer() {
         fs.rmSync(trashFolder, { recursive: true, force: true });
         fs.mkdirSync(trashFolder, { recursive: true });
       }
+      thumbCache.cleanupUserOrphans(userFolder);
       // Clean up orphaned album references for deleted trash files
       const data = loadUserAlbums(sess.username);
       let modified = false;
@@ -2943,7 +3487,7 @@ async function startServer() {
     }
   });
 
-  // --- DUPLICATES ---
+  // --- DUPLICATES (Reuses persistent .hashes.json active index + streaming SHA-256) ---
   app.post('/find_duplicates_server', async (req: Request, res: Response) => {
     const sess = getSession(req);
     if (!sess) {
@@ -2961,17 +3505,7 @@ async function startServer() {
       return;
     }
 
-    const hashedItems: Array<{ filename: string; hash: string | null }> = [];
-    for (const f of files) {
-      try {
-        const enc = await fs.promises.readFile(path.join(userFolder, f.filename));
-        const dec = await decryptFileAsync(enc, sess.apiKey);
-        hashedItems.push({ filename: f.filename, hash: calculateBufferHash(dec) });
-      } catch {
-        hashedItems.push({ filename: f.filename, hash: null });
-      }
-    }
-
+    const hashedItems = await vaultHashIndex.resolveAllActiveHashes(userFolder, sess.apiKey);
     const duplicates = findDuplicateGroups(hashedItems);
     res.json({ duplicates });
   });
@@ -3547,6 +4081,14 @@ async function startServer() {
   const port = Number(process.env.PORT) || 3000;
   app.listen(port, '0.0.0.0', () => {
     console.log(`PhotoCloud server listening on http://0.0.0.0:${port}`);
+  });
+
+  setImmediate(() => {
+    try {
+      thumbCache.cleanupAllUsersOrphans(UPLOAD_FOLDER);
+    } catch {
+      // ignore startup orphan cleanup error
+    }
   });
 
   // Inizializza il servizio Web Push (chiavi VAPID persistenti) in background.

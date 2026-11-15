@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 
 const LOWER = 'abcdefghijklmnopqrstuvwxyz';
 const UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -110,6 +111,7 @@ export function deriveKeyAsync(key: string, salt: Buffer): Promise<Buffer> {
 // New files use authenticated encryption. Legacy salt/IV/CFB files remain readable.
 const MAGIC = Buffer.from('PhotoCloud-GCM-v1\0', 'utf8');
 const GCM_OVERHEAD = MAGIC.length + 16 + 12 + 16;
+const STREAM_CHUNK_BYTES = 64 * 1024;
 
 export function encryptedPlaintextSize(data: Buffer): number {
   return Math.max(0, data.length - (data.subarray(0, MAGIC.length).equals(MAGIC) ? GCM_OVERHEAD : 32));
@@ -130,6 +132,96 @@ export async function encryptFileAsync(fileData: Buffer, key: string): Promise<B
   const cipher = crypto.createCipheriv('aes-256-gcm', derived, iv);
   const ciphertext = Buffer.concat([cipher.update(fileData), cipher.final()]);
   return Buffer.concat([MAGIC, salt, iv, cipher.getAuthTag(), ciphertext]);
+}
+
+/**
+ * Encrypts [inputPath] into [outputPath] using streaming 64 KB I/O without loading the file into RAM,
+ * producing a payload byte-layout identical to encryptFile/encryptFileAsync while computing plaintext SHA-256.
+ */
+export async function encryptFileStream(
+  inputPath: string,
+  outputPath: string,
+  key: string
+): Promise<{ sha256: string; plaintextSize: number }> {
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const derived = await deriveKeyAsync(key, salt);
+  const cipher = crypto.createCipheriv('aes-256-gcm', derived, iv);
+  const hash = crypto.createHash('sha256');
+  const tmpPath = `${outputPath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.enc.tmp`;
+
+  let inHandle: fs.promises.FileHandle | null = null;
+  let outHandle: fs.promises.FileHandle | null = null;
+  let plaintextSize = 0;
+
+  try {
+    inHandle = await fs.promises.open(inputPath, 'r');
+    outHandle = await fs.promises.open(tmpPath, 'w');
+
+    // Reserve header: [MAGIC][salt][iv][16-byte tag placeholder]
+    const header = Buffer.alloc(GCM_OVERHEAD);
+    MAGIC.copy(header, 0);
+    salt.copy(header, MAGIC.length);
+    iv.copy(header, MAGIC.length + 16);
+
+    let outPos = 0;
+    await outHandle.write(header, 0, header.length, outPos);
+    outPos += header.length;
+
+    const readBuf = Buffer.allocUnsafe(STREAM_CHUNK_BYTES);
+    let inPos = 0;
+    while (true) {
+      const { bytesRead } = await inHandle.read(readBuf, 0, readBuf.length, inPos);
+      if (bytesRead <= 0) break;
+      inPos += bytesRead;
+      plaintextSize += bytesRead;
+      const slice = readBuf.subarray(0, bytesRead);
+      hash.update(slice);
+      const encChunk = cipher.update(slice);
+      if (encChunk.length > 0) {
+        await outHandle.write(encChunk, 0, encChunk.length, outPos);
+        outPos += encChunk.length;
+      }
+    }
+
+    const finalChunk = cipher.final();
+    if (finalChunk.length > 0) {
+      await outHandle.write(finalChunk, 0, finalChunk.length, outPos);
+      outPos += finalChunk.length;
+    }
+
+    const tag = cipher.getAuthTag();
+    await outHandle.write(tag, 0, 16, MAGIC.length + 16 + 12);
+    await outHandle.close();
+    outHandle = null;
+    await inHandle.close();
+    inHandle = null;
+
+    await fs.promises.rename(tmpPath, outputPath);
+    return {
+      sha256: hash.digest('hex'),
+      plaintextSize,
+    };
+  } catch (err) {
+    try {
+      await inHandle?.close();
+    } catch {
+      // ignore
+    }
+    try {
+      await outHandle?.close();
+    } catch {
+      // ignore
+    }
+    try {
+      if (fs.existsSync(tmpPath)) {
+        await fs.promises.unlink(tmpPath);
+      }
+    } catch {
+      // ignore
+    }
+    throw err;
+  }
 }
 
 export function decryptFile(encryptedData: Buffer, key: string): Buffer {
@@ -168,6 +260,80 @@ export async function decryptFileAsync(encryptedData: Buffer, key: string): Prom
   const derived = await deriveKeyAsync(key, salt);
   const decipher = crypto.createDecipheriv('aes-256-cfb', derived, iv);
   return Buffer.concat([decipher.update(encryptedData.subarray(32)), decipher.final()]);
+}
+
+/**
+ * Streams decryption of [encryptedPath] in 64 KB chunks to compute SHA-256 of the plaintext
+ * without loading large media files into RAM. Supports both PhotoCloud-GCM-v1 and legacy AES-CFB files.
+ */
+export async function decryptFileSha256Stream(
+  encryptedPath: string,
+  key: string
+): Promise<{ sha256: string; plaintextSize: number }> {
+  let fh: fs.promises.FileHandle | null = null;
+  try {
+    fh = await fs.promises.open(encryptedPath, 'r');
+    const stat = await fh.stat();
+    const prefixBuf = Buffer.alloc(Math.min(stat.size, GCM_OVERHEAD));
+    if (prefixBuf.length > 0) {
+      await fh.read(prefixBuf, 0, prefixBuf.length, 0);
+    }
+
+    let decipher: crypto.DecipherGCM | crypto.Decipheriv;
+    let pos: number;
+
+    if (prefixBuf.length >= MAGIC.length && prefixBuf.subarray(0, MAGIC.length).equals(MAGIC)) {
+      if (stat.size < GCM_OVERHEAD) throw new Error('Encrypted payload too short');
+      const offset = MAGIC.length;
+      const salt = prefixBuf.subarray(offset, offset + 16);
+      const iv = prefixBuf.subarray(offset + 16, offset + 28);
+      const tag = prefixBuf.subarray(offset + 28, offset + 44);
+      const derived = await deriveKeyAsync(key, salt);
+      const gcm = crypto.createDecipheriv('aes-256-gcm', derived, iv);
+      gcm.setAuthTag(tag);
+      decipher = gcm;
+      pos = GCM_OVERHEAD;
+    } else {
+      if (stat.size < 32) throw new Error('Encrypted payload too short');
+      const salt = prefixBuf.subarray(0, 16);
+      const iv = prefixBuf.subarray(16, 32);
+      const derived = await deriveKeyAsync(key, salt);
+      decipher = crypto.createDecipheriv('aes-256-cfb', derived, iv);
+      pos = 32;
+    }
+
+    const hash = crypto.createHash('sha256');
+    const chunkBuf = Buffer.allocUnsafe(STREAM_CHUNK_BYTES);
+    let plaintextSize = 0;
+
+    while (pos < stat.size) {
+      const { bytesRead } = await fh.read(chunkBuf, 0, chunkBuf.length, pos);
+      if (bytesRead <= 0) break;
+      pos += bytesRead;
+      const dec = decipher.update(chunkBuf.subarray(0, bytesRead));
+      if (dec.length > 0) {
+        hash.update(dec);
+        plaintextSize += dec.length;
+      }
+    }
+
+    const finalChunk = decipher.final();
+    if (finalChunk.length > 0) {
+      hash.update(finalChunk);
+      plaintextSize += finalChunk.length;
+    }
+
+    return {
+      sha256: hash.digest('hex'),
+      plaintextSize,
+    };
+  } finally {
+    try {
+      await fh?.close();
+    } catch {
+      // ignore
+    }
+  }
 }
 
 /**

@@ -242,9 +242,10 @@
     var el = document.createElement('div');
     el.className = 'pc-marker';
     var img = document.createElement('img');
-    img.src = '/media/' + encodeURIComponent(m.filename);
+    img.src = '/media/' + encodeURIComponent(m.filename) + '?preview=thumb';
     img.alt = m.filename;
     img.loading = 'lazy';
+    img.decoding = 'async';
     el.appendChild(img);
     el.addEventListener('click', function (e) {
       e.stopPropagation();
@@ -267,7 +268,8 @@
   function openPopup(m) {
     var popup = document.getElementById('pc-map-popup');
     var img = document.getElementById('pc-popup-img');
-    img.src = '/media/' + encodeURIComponent(m.filename);
+    img.decoding = 'async';
+    img.src = '/media/' + encodeURIComponent(m.filename) + '?preview=large';
     document.getElementById('pc-popup-name').textContent = m.filename;
     var meta = formatDate(m.timestamp);
     if (m.album) meta += ' · 📁 ' + m.album;

@@ -1,8 +1,8 @@
-# PhotoCloud — Archivio Foto, Video, Categorizzazione AI On-Device, Visualizzatore Documenti & File Manager Cloud Crittografato (Web & Android Nativo v1.3.2)
+# PhotoCloud — Archivio Foto, Video, Backup Automatico, Cache Miniature, AI On-Device & File Manager Cloud Crittografato (Web & Android Nativo v1.5.0)
 
 **PhotoCloud** è una piattaforma self-hosted crittografata per l'archiviazione sicura e la consultazione immediata di **foto, video, documenti Office/PDF e qualsiasi tipo di file non-media** (PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, CSV, TXT, ZIP, APK, audio, codice, ecc.), composta da:
 1. **Server & Web App Full-Stack** (Node.js / Express + TypeScript, compatibile con il formato crittografico originale Python; i nuovi file usano `AES-256-GCM` autenticato).
-2. **App Android 100% Nativa (`com.valerio.photocloud`)** scritta in **Kotlin + Jetpack Compose (Material You 120Hz)** che comunica direttamente con il tuo server PhotoCloud e include **Categorizzazione Automatica delle Foto tramite AI Locale Facoltativa (On-Demand)** e **Sistema di Aggiornamento Automatico In-App**.
+2. **App Android 100% Nativa (`com.valerio.photocloud`)** scritta in **Kotlin + Jetpack Compose (Material You 120Hz)** che comunica direttamente con il tuo server PhotoCloud e include **Backup Automatico della Camera Roll**, **Categorizzazione Automatica delle Foto tramite AI Locale Facoltativa (On-Demand)** e **Sistema di Aggiornamento Automatico In-App**.
 
 > **Sicurezza e compatibilità:** la cifratura avviene sul server, non è end-to-end. Usare HTTPS anche per l’accesso Android: HTTP espone chiavi, sessioni e contenuti sulla rete. I nuovi file usano AES-GCM autenticato; i file precedenti AES-CFB restano leggibili ma non sono protetti da manomissioni e non vengono migrati automaticamente. Un backup prima dell’aggiornamento è consigliato.
 >
@@ -12,6 +12,30 @@
 > 3. **Locale (`android-app/signing.properties` o `~/.photocloud/signing.properties`)**: generabile/sincronizzabile in un comando con `npm run android:signing:setup`.
 >
 > Gli upload temporanei e gli archivi ZIP esportati transitano su disco in `temp_uploads/` e vengono rimossi automaticamente dopo il completamento/download. Gli endpoint HTTP per pubblicare release sono disabilitati: utilizzare la CLI o il workflow GitHub Actions.
+
+---
+
+## ⚡ Novità Principali della Release `v1.5.0` (`versionCode 32`) — Backup Automatico Android & Cache Persistente Cifrata Miniature
+
+### 1. Backup Automatico della Camera Roll su Android (`AutoBackupWorker`, `PhotoAiDatabase` v2, `/api/backup/check`, `/api/upload/chunked/*`)
+- **WorkManager Persistente & Trigger Reattivi**: pianificazione periodica (`15m`), trigger automatico su nuovi media (`ContentUriTrigger` per immagini e video) e servizio in foreground `dataSync` (compatibile con Android 12/13/14/15) con notifica e azioni **Pausa / Annulla**.
+- **Controllo Completo nelle Impostazioni (`Backup automatico`)**: selezione cartelle MediaStore (default `Camera`), filtro tipo contenuti (`Foto e video`, `Solo foto`, `Solo video`), modalità libreria (`Solo nuovi elementi da ora` default vs `Intera libreria`), vincoli `Solo su Wi-Fi` (default), `Solo in ricarica`, `Rispetta Risparmio Energetico` e limite opzionale dimensione singolo video.
+- **Avviso Esplicito su `http://`**: se il server non usa `https://`, l'attivazione del backup richiede conferma esplicita dell'utente prima di avviare i trasferimenti in background.
+- **Deduplica Attiva SHA-256 & Upload Streaming/Chunked**:
+  - Calcolo streaming SHA-256 a blocchi da `64 KB` (zero picchi di RAM), verifica contro `.hashes.json` via `POST /api/backup/check` **solo sui file attivi** (se una foto è stata spostata nel Cestino viene ricaricata).
+  - File `≤ 24 MB` caricati via `POST /upload?skipList=1` con header `X-Backup-Origin: auto` (che silenzia notifiche push automatiche); file/video grandi `> 24 MB` caricati in streaming a blocchi da `8 MB` su `/api/upload/chunked/init`, `PUT /api/upload/chunked/:uploadId/:chunkIndex` e `POST /api/upload/chunked/:uploadId/complete` con supporto fino a `MAX_UPLOAD_MB` (default `2048 MB`) e cifratura streaming `AES-256-GCM` (`encryptFileStream`).
+
+### 2. Cache Persistente delle Miniature Cifrata (`thumbCache.ts`, Web & Android)
+- **Varianti Cifrate JPEG q=80 su Disco**: il server genera e salva sotto `user_media/<utente>/.thumbs/` le varianti `thumb` (`320px`) e `large` (`1280px`) cifrate in `AES-256-GCM`, con `ETag` + `304 Not Modified`, cache negativa TTL, coda/eviction LRU configurabile (`THUMB_CACHE_MAX_MB`, default `512 MB`) e invalidazione automatica su modifica, cestino, ripristino ed eliminazione definitiva.
+- **Poster Video & API Dedicate**: `PUT /api/thumbs/:filename` consente al client Android di caricare il fotogramma poster estratto localmente per i video; `GET /api/thumbs/stats` e `POST /api/thumbs/rebuild` espongono stato ed eventuale ricostruzione dalla sezione **Impostazioni → Cache miniature** (Web & Android).
+- **Griglia & Lightbox Progressivo**: la griglia Web e Android usa `?preview=thumb` (`loading="lazy"`, `decoding="async"`); la lightbox mostra immediatamente l'anteprima `?preview=large` (1280px) e scarica l'originale completo al superamento di `1.15x` zoom; su Android è inoltre attiva una cache LRU su disco (`thumb_cache/`, default `150 MB`, configurabile).
+
+### Variabili d'Ambiente Principali v1.5.0
+| Variabile | Default | Descrizione |
+| :--- | :--- | :--- |
+| `THUMB_CACHE_MAX_MB` | `512` | Limite massimo su disco per utente della cache miniature cifrata (`.thumbs/`). |
+| `MAX_UPLOAD_MB` | `2048` | Limite massimo per singolo file caricato (anche via chunked upload da backup video). |
+| `TRUST_PROXY` | `false` | Hop fidati o subnet per deploy dietro reverse proxy (`TRUST_PROXY=1`, ecc.). |
 
 ---
 

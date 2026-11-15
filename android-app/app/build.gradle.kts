@@ -20,8 +20,8 @@ android {
         applicationId = "com.valerio.photocloud"
         minSdk = 26
         targetSdk = 35
-        versionCode = 31
-        versionName = "1.4.1"
+        versionCode = 32
+        versionName = "1.5.0"
 
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:3000\"")
     }
@@ -353,4 +353,5 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
+    testImplementation("junit:junit:4.13.2")
 }

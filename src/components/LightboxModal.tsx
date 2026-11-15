@@ -211,8 +211,14 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
           ) : (
             <img
               id="lightbox-img"
-              src={mediaUrl}
+              src={`${mediaUrl}${fromTrash ? '&' : '?'}preview=large`}
               alt={filename}
+              decoding="async"
+              onError={(e) => {
+                if (e.currentTarget.src !== window.location.origin + mediaUrl) {
+                  e.currentTarget.src = mediaUrl;
+                }
+              }}
               style={{
                 display: 'block',
                 transform: mediaTransform,

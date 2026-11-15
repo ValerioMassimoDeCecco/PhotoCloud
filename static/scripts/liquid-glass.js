@@ -584,6 +584,51 @@
         });
     }
 
+    function formatThumbBytes(bytes) {
+        if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        const idx = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+        return `${(bytes / Math.pow(1024, idx)).toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
+    }
+
+    async function refreshThumbCacheStats() {
+        const card = document.getElementById('settings-thumb-cache-card');
+        if (!card) return;
+        const bytesEl = document.getElementById('settings-thumb-cache-bytes');
+        const entriesEl = document.getElementById('settings-thumb-cache-entries');
+        const negEl = document.getElementById('settings-thumb-cache-negative');
+        const capEl = document.getElementById('settings-thumb-cache-cap');
+        const statusEl = document.getElementById('settings-thumb-cache-status');
+        const rebuildBtn = document.getElementById('settings-thumb-rebuild-btn');
+
+        try {
+            const res = await fetch('/api/thumbs/stats', { headers: { Accept: 'application/json' } });
+            if (res.status === 401 || res.status === 403) {
+                if (statusEl) statusEl.textContent = 'Accedi al tuo account per gestire la cache miniature.';
+                if (rebuildBtn) rebuildBtn.disabled = true;
+                return;
+            }
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                if (statusEl) statusEl.textContent = data.error || 'Impossibile leggere le statistiche miniature.';
+                return;
+            }
+            if (rebuildBtn) rebuildBtn.disabled = false;
+            if (bytesEl) bytesEl.textContent = formatThumbBytes(Number(data.totalBytes) || 0);
+            if (entriesEl) entriesEl.textContent = String(Number(data.entriesCount) || 0);
+            if (negEl) negEl.textContent = String(Number(data.negativeCount) || 0);
+            if (capEl) capEl.textContent = `Tetto server: ${formatThumbBytes(Number(data.maxBytes) || 0)}`;
+            if (statusEl) {
+                const queued = Number(data.pendingJobs) || 0;
+                statusEl.textContent = queued > 0
+                    ? `Generazione in corso (${queued} in coda)...`
+                    : 'Cache miniature sincronizzata e cifrata AES-256-GCM.';
+            }
+        } catch {
+            if (statusEl) statusEl.textContent = 'Errore di rete durante il controllo della cache.';
+        }
+    }
+
     function openSettingsModal() {
         const modal = document.getElementById('lg-settings-modal-backdrop');
         if (!modal) return;
@@ -591,6 +636,7 @@
             window.updateCloudStorageIndicators();
         }
         syncParallelModalControls();
+        refreshThumbCacheStats();
         modal.classList.add('open');
         syncSettingsDialogControls();
         renderSavedPresetsList();
@@ -653,6 +699,41 @@
             }
         }
         syncParallelModalControls();
+
+        const thumbRefreshBtn = document.getElementById('settings-thumb-refresh-btn');
+        const thumbRebuildBtn = document.getElementById('settings-thumb-rebuild-btn');
+        if (thumbRefreshBtn) {
+            thumbRefreshBtn.addEventListener('click', () => {
+                refreshThumbCacheStats();
+            });
+        }
+        if (thumbRebuildBtn) {
+            thumbRebuildBtn.addEventListener('click', async () => {
+                const statusEl = document.getElementById('settings-thumb-cache-status');
+                thumbRebuildBtn.disabled = true;
+                if (statusEl) statusEl.textContent = 'Ricostruzione indice miniature in corso...';
+                try {
+                    const res = await fetch('/api/thumbs/rebuild', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                        body: JSON.stringify({ force: false })
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                        if (statusEl) statusEl.textContent = data.error || 'Errore ricostruzione cache.';
+                    } else {
+                        if (statusEl) {
+                            statusEl.textContent = `Accodati ${data.queued || 0} elementi su ${data.totalMedia || 0} media.`;
+                        }
+                        setTimeout(refreshThumbCacheStats, 700);
+                    }
+                } catch {
+                    if (statusEl) statusEl.textContent = 'Errore di rete durante la ricostruzione.';
+                } finally {
+                    thumbRebuildBtn.disabled = false;
+                }
+            });
+        }
 
         modal.addEventListener('click', (e) => {
             if (e.target === modal) closeSettingsModal();

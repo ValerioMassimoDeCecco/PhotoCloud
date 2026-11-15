@@ -549,8 +549,8 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(fs.existsSync(path.resolve(process.cwd(), 'release/photocloud-release-v1.1.3-signed.apk')));
 
   const appBuildGradle = fs.readFileSync(path.resolve(process.cwd(), 'android-app/app/build.gradle.kts'), 'utf-8');
-  assert.ok(appBuildGradle.includes('versionName = "1.4.1"'));
-  assert.ok(appBuildGradle.includes('versionCode = 31'));
+  assert.ok(appBuildGradle.includes('versionName = "1.5.0"'));
+  assert.ok(appBuildGradle.includes('versionCode = 32'));
   assert.equal(appBuildGradle.includes('photocloud_release_2026'), false, 'No hardcoded keystore password in build.gradle.kts');
   assert.ok(appBuildGradle.includes('noCompress += "tflite"'));
   assert.ok(appBuildGradle.includes('com.google.mediapipe:tasks-vision:0.10.14'));
@@ -558,7 +558,7 @@ test('On-Device AI Photo Categorization (EfficientNet-Lite4), Drag-to-select, Li
   assert.ok(appBuildGradle.includes('androidx.room:room-runtime:2.6.1'));
 
   const pkgJson = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'));
-  assert.equal(pkgJson.version, '1.4.1');
+  assert.equal(pkgJson.version, '1.5.0');
 
   // 6. Multi-platform interactive CLI scripts (photocloud.bat & photocloud.sh)
   const batPath = path.resolve(process.cwd(), 'photocloud.bat');
@@ -601,8 +601,8 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   const baseConfig = {
     appName: 'PhotoCloud "Vault" <Test>',
     packageName: 'com.valerio.photocloud',
-    versionName: '1.4.1',
-    versionCode: 31,
+    versionName: '1.5.0',
+    versionCode: 32,
     serverUrl: 'http://10.0.2.2:3000',
     minSdk: 26,
     targetSdk: 35,
@@ -628,7 +628,7 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   assert.ok(!manifestXml.includes('android:label="PhotoCloud "Vault"'));
 
   const gradleKts = generateAppBuildGradleKts(baseConfig);
-  assert.ok(gradleKts.includes('versionName = "1.4.1"'));
+  assert.ok(gradleKts.includes('versionName = "1.5.0"'));
   assert.equal(gradleKts.includes('photocloud_release_2026'), false);
 
   const mainKt = generateMainActivityKt(baseConfig);

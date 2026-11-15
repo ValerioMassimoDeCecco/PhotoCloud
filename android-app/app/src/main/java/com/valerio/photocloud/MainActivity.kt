@@ -911,6 +911,14 @@ fun PhotoCloudNativeApp(
 
     val appUpdateState by AppAutoUpdater.state.collectAsState()
 
+    LaunchedEffect(isAuthenticated, serverUrl) {
+        if (isAuthenticated) {
+            AutoBackupWorker.syncScheduleFromPrefs(context)
+        } else {
+            AutoBackupWorker.cancelAllBackupWork(context)
+        }
+    }
+
     LaunchedEffect(serverUrl) {
         if (apiClient.hasActiveSessionCookie()) {
             refreshVaultSilently()
@@ -929,6 +937,7 @@ fun PhotoCloudNativeApp(
             },
             onSwitchAccount = {
                 scope.launch {
+                    AutoBackupWorker.cancelAllBackupWork(context)
                     apiClient.logout()
                     isAuthenticated = false
                     isBiometricLocked = false
@@ -993,6 +1002,7 @@ fun PhotoCloudNativeApp(
             },
             onLogout = {
                 scope.launch {
+                    AutoBackupWorker.cancelAllBackupWork(context)
                     apiClient.logout()
                     isAuthenticated = false
                     galleryItems = emptyList()
@@ -5335,6 +5345,14 @@ fun NativeSettingsScreen(
     onPickCustomSafFolder: () -> Unit = {}
 ) {
     var cacheStats by remember { mutableStateOf(apiClient.getDiskCacheStats()) }
+    var thumbCacheStats by remember { mutableStateOf(apiClient.getThumbDiskCacheStats()) }
+    var thumbCacheMaxMb by remember { mutableIntStateOf(apiClient.getThumbDiskCacheMaxMb()) }
+    var serverThumbStats by remember { mutableStateOf<ServerThumbStatsModel?>(null) }
+    var serverThumbBusy by remember { mutableStateOf(false) }
+    val settingsScope = rememberCoroutineScope()
+    LaunchedEffect(serverUrl) {
+        serverThumbStats = apiClient.fetchServerThumbStats()
+    }
     val prefs = remember { activity.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE) }
     var savedLgPresets by remember { mutableStateOf(LiquidGlassConfigStore.loadSavedPresets(prefs)) }
     val scrollState = rememberScrollState()
@@ -6345,6 +6363,499 @@ fun NativeSettingsScreen(
             }
         }
 
+        // 6B. CACHE MINIATURE PERSISTENTE (LOCALE LRU + SERVER CIFRATA)
+        SettingsSectionCard(
+            title = "Cache miniature",
+            icon = Icons.Default.PhotoLibrary
+        ) {
+            val localThumbMb = String.format(Locale.ITALIAN, "%.2f MB", thumbCacheStats.second / (1024.0 * 1024.0))
+            Text(
+                text = "Le miniature (320px / 1280px JPEG q=80) velocizzano la griglia e la lightbox riducendo i dati scaricati.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Cache locale dispositivo: $localThumbMb (${thumbCacheStats.first} file • limite $thumbCacheMaxMb MB)",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    val sStats = serverThumbStats
+                    if (sStats != null) {
+                        Text(
+                            text = "Cache server cifrata: ${PhotoCloudApiClient.formatBytesHuman(sStats.diskBytes)} / ${PhotoCloudApiClient.formatBytesHuman(sStats.maxBytes)} • ${sStats.variantCount} varianti",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            text = "Cache server cifrata: non disponibile o versione server precedente",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Limite cache miniature locale",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(64, 150, 300, 512).forEach { capMb ->
+                    FilterChip(
+                        selected = thumbCacheMaxMb == capMb,
+                        onClick = {
+                            apiClient.setThumbDiskCacheMaxMb(capMb)
+                            thumbCacheMaxMb = apiClient.getThumbDiskCacheMaxMb()
+                            thumbCacheStats = apiClient.getThumbDiskCacheStats()
+                            cacheStats = apiClient.getDiskCacheStats()
+                        },
+                        label = { Text("${capMb} MB", maxLines = 1) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        apiClient.clearThumbDiskCache()
+                        thumbCacheStats = apiClient.getThumbDiskCacheStats()
+                        cacheStats = apiClient.getDiskCacheStats()
+                        onShowInfo("Cache miniature locale svuotata")
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.CleaningServices, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Svuota Locale", maxLines = 1)
+                }
+                FilledTonalButton(
+                    enabled = !serverThumbBusy,
+                    onClick = {
+                        serverThumbBusy = true
+                        settingsScope.launch {
+                            val (ok, msg) = apiClient.rebuildServerThumbnails(force = false)
+                            serverThumbStats = apiClient.fetchServerThumbStats()
+                            serverThumbBusy = false
+                            onShowInfo(if (ok) msg else "Ricostruzione non riuscita: $msg")
+                        }
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (serverThumbBusy) "Avvio..." else "Ricostruisci Server", maxLines = 1)
+                }
+            }
+        }
+
+        // 6C. BACKUP AUTOMATICO CAMERA ROLL (WORKMANAGER + STREAMING SHA-256 + CHUNKED)
+        var backupConfig by remember(serverUrl) { mutableStateOf(apiClient.getAutoBackupConfig()) }
+        var availableBuckets by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
+        var showInsecureHttpDialog by remember { mutableStateOf(false) }
+        var pendingEnableAfterPerms by remember { mutableStateOf(false) }
+        var hasBackupPerm by remember {
+            mutableStateOf(AutoBackupWorker.hasAnyMediaReadPermission(activity, backupConfig.mediaScope))
+        }
+        var hasPartialPerm by remember {
+            mutableStateOf(AutoBackupWorker.isPartialPhotoAccess(activity))
+        }
+
+        val backupDb = remember(activity) { PhotoAiDatabase.getInstance(activity) }
+        val backupSummary by backupDb.backupStateDao().observeSummary().collectAsState(
+            initial = BackupStatusSummaryTuple(0, 0, 0, 0, 0)
+        )
+        val backupWorkInfos by remember(activity) {
+            WorkManager.getInstance(activity).getWorkInfosForUniqueWorkFlow(AutoBackupWorker.UNIQUE_IMMEDIATE_WORK)
+        }.collectAsState(initial = emptyList())
+        val isBackupRunningNow = backupWorkInfos.any { it.state == WorkInfo.State.RUNNING }
+
+        fun applyBackupConfig(updated: AutoBackupConfig) {
+            backupConfig = updated
+            apiClient.saveAutoBackupConfig(updated)
+            AutoBackupWorker.syncScheduleFromPrefs(activity)
+        }
+
+        fun activateAutoBackupNow(bypassHttpCheck: Boolean = false) {
+            if (!bypassHttpCheck && AutoBackupLogic.requiresInsecureHttpConfirmation(serverUrl, backupConfig.confirmedInsecureHttpUrl)) {
+                showInsecureHttpDialog = true
+                return
+            }
+            val nowMs = if (backupConfig.activatedAtMs > 0L) backupConfig.activatedAtMs else System.currentTimeMillis()
+            val updated = backupConfig.copy(
+                enabled = true,
+                paused = false,
+                activatedAtMs = nowMs,
+                confirmedInsecureHttpUrl = if (bypassHttpCheck) serverUrl.trim().removeSuffix("/") else backupConfig.confirmedInsecureHttpUrl
+            )
+            applyBackupConfig(updated)
+            AutoBackupWorker.enqueueImmediateBackup(activity, retryFailed = false)
+            onShowInfo("Backup automatico attivato")
+        }
+
+        val backupPermissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestMultiplePermissions()
+        ) {
+            hasBackupPerm = AutoBackupWorker.hasAnyMediaReadPermission(activity, backupConfig.mediaScope)
+            hasPartialPerm = AutoBackupWorker.isPartialPhotoAccess(activity)
+            if (hasBackupPerm) {
+                settingsScope.launch {
+                    availableBuckets = apiClient.listDeviceMediaBuckets()
+                }
+                if (pendingEnableAfterPerms) {
+                    pendingEnableAfterPerms = false
+                    activateAutoBackupNow()
+                }
+            } else {
+                pendingEnableAfterPerms = false
+                onShowInfo("Permesso accesso foto/video necessario per il backup automatico")
+            }
+        }
+
+        LaunchedEffect(hasBackupPerm, backupConfig.mediaScope) {
+            if (hasBackupPerm) {
+                availableBuckets = apiClient.listDeviceMediaBuckets()
+            }
+        }
+
+        if (showInsecureHttpDialog) {
+            AlertDialog(
+                onDismissRequest = { showInsecureHttpDialog = false },
+                title = { Text("Connessione HTTP non cifrata") },
+                text = {
+                    Text(
+                        "Il server è raggiunto tramite http:// ($serverUrl) anziché HTTPS. " +
+                            "Su reti pubbliche il traffico di rete e la sessione non sono protetti da TLS. " +
+                            "Vuoi attivare comunque il backup automatico su questo server?"
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showInsecureHttpDialog = false
+                            activateAutoBackupNow(bypassHttpCheck = true)
+                        }
+                    ) {
+                        Text("Attiva comunque")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showInsecureHttpDialog = false }) {
+                        Text("Annulla")
+                    }
+                }
+            )
+        }
+
+        SettingsSectionCard(
+            title = "Backup automatico",
+            icon = Icons.Default.CloudUpload
+        ) {
+            Text(
+                text = "Carica in background nuove foto e video della galleria sul vault cifrato (deduplica SHA-256 attiva e streaming per video grandi).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+
+            SettingsToggleRow(
+                label = if (backupConfig.enabled) {
+                    if (backupConfig.paused) "Backup automatico (In pausa)" else "Backup automatico attivo"
+                } else {
+                    "Attiva backup automatico"
+                },
+                description = if (AutoBackupLogic.isHttpsServerUrl(serverUrl)) {
+                    "Connessione sicura HTTPS attiva"
+                } else {
+                    "Server su HTTP: richiesta conferma esplicita"
+                },
+                checked = backupConfig.enabled,
+                onCheckedChange = { wantEnable ->
+                    if (!wantEnable) {
+                        applyBackupConfig(backupConfig.copy(enabled = false, paused = false))
+                        onShowInfo("Backup automatico disattivato")
+                    } else {
+                        hasBackupPerm = AutoBackupWorker.hasAnyMediaReadPermission(activity, backupConfig.mediaScope)
+                        hasPartialPerm = AutoBackupWorker.isPartialPhotoAccess(activity)
+                        if (!hasBackupPerm) {
+                            pendingEnableAfterPerms = true
+                            backupPermissionLauncher.launch(
+                                AutoBackupWorker.requiredPermissionsForScope(backupConfig.mediaScope)
+                            )
+                        } else {
+                            activateAutoBackupNow()
+                        }
+                    }
+                }
+            )
+
+            if (hasPartialPerm) {
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "Accesso parziale ai media su Android: saranno salvati solo i file selezionati manualmente.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                backupPermissionLauncher.launch(
+                                    AutoBackupWorker.requiredPermissionsForScope(backupConfig.mediaScope)
+                                )
+                            },
+                            shape = CircleShape
+                        ) {
+                            Text("Concedi accesso completo")
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = if (isBackupRunningNow) "Stato: backup in corso..." else "Stato coda dispositivo",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isBackupRunningNow) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Caricati: ${backupSummary.uploadedCount} • Già sul cloud: ${backupSummary.skippedCount} • In coda: ${backupSummary.pendingCount + backupSummary.uploadingCount} • Falliti: ${backupSummary.failedCount}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = "Tipo di contenuti",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                BackupMediaScope.entries.forEach { scopeOption ->
+                    FilterChip(
+                        selected = backupConfig.mediaScope == scopeOption,
+                        onClick = {
+                            applyBackupConfig(backupConfig.copy(mediaScope = scopeOption))
+                        },
+                        label = { Text(scopeOption.label, maxLines = 1) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Libreria da includere",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                BackupLibraryMode.entries.forEach { libMode ->
+                    FilterChip(
+                        selected = backupConfig.libraryMode == libMode,
+                        onClick = {
+                            val activatedAt = if (libMode == BackupLibraryMode.NEW_ONLY && backupConfig.activatedAtMs <= 0L) {
+                                System.currentTimeMillis()
+                            } else {
+                                backupConfig.activatedAtMs
+                            }
+                            applyBackupConfig(backupConfig.copy(libraryMode = libMode, activatedAtMs = activatedAt))
+                        },
+                        label = { Text(libMode.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "Cartelle dispositivo incluse",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            val displayedBuckets = remember(availableBuckets, backupConfig.selectedBuckets) {
+                val merged = LinkedHashMap<String, Int>()
+                merged["Camera"] = 0
+                for ((b, cnt) in availableBuckets.take(12)) {
+                    merged[b] = cnt
+                }
+                for (sel in backupConfig.selectedBuckets) {
+                    if (!merged.containsKey(sel)) merged[sel] = 0
+                }
+                merged.entries.map { it.key to it.value }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                displayedBuckets.forEach { (bucketName, count) ->
+                    val isSel = backupConfig.selectedBuckets.any { it.equals(bucketName, ignoreCase = true) }
+                    FilterChip(
+                        selected = isSel,
+                        onClick = {
+                            val nextSet = backupConfig.selectedBuckets.toMutableSet()
+                            val existingMatch = nextSet.firstOrNull { it.equals(bucketName, ignoreCase = true) }
+                            if (existingMatch != null) {
+                                if (nextSet.size > 1) nextSet.remove(existingMatch)
+                            } else {
+                                nextSet.add(bucketName)
+                            }
+                            applyBackupConfig(backupConfig.copy(selectedBuckets = nextSet))
+                        },
+                        label = {
+                            Text(if (count > 0) "$bucketName ($count)" else bucketName, maxLines = 1)
+                        }
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            SettingsToggleRow(
+                label = "Solo su Wi-Fi",
+                description = "Evita consumo dati cellulare durante i caricamenti",
+                checked = backupConfig.wifiOnly,
+                onCheckedChange = { applyBackupConfig(backupConfig.copy(wifiOnly = it)) }
+            )
+            SettingsToggleRow(
+                label = "Solo durante la ricarica",
+                description = "Esegue il backup automatico solo con cavo collegato",
+                checked = backupConfig.chargingOnly,
+                onCheckedChange = { applyBackupConfig(backupConfig.copy(chargingOnly = it)) }
+            )
+            SettingsToggleRow(
+                label = "Rispetta Risparmio Energetico",
+                description = "Sospende i caricamenti quando il risparmio batteria è attivo",
+                checked = backupConfig.respectBatterySaver,
+                onCheckedChange = { applyBackupConfig(backupConfig.copy(respectBatterySaver = it)) }
+            )
+
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Limite massimo singolo video",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(0 to "Server max", 100 to "100 MB", 500 to "500 MB", 1024 to "1 GB").forEach { (mb, label) ->
+                    FilterChip(
+                        selected = backupConfig.maxVideoSizeMb == mb,
+                        onClick = { applyBackupConfig(backupConfig.copy(maxVideoSizeMb = mb)) },
+                        label = { Text(label, maxLines = 1) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilledTonalButton(
+                    onClick = {
+                        if (!AutoBackupWorker.hasAnyMediaReadPermission(activity, backupConfig.mediaScope)) {
+                            pendingEnableAfterPerms = true
+                            backupPermissionLauncher.launch(
+                                AutoBackupWorker.requiredPermissionsForScope(backupConfig.mediaScope)
+                            )
+                        } else if (!backupConfig.enabled) {
+                            activateAutoBackupNow()
+                        } else {
+                            if (backupConfig.paused) {
+                                applyBackupConfig(backupConfig.copy(paused = false))
+                            }
+                            AutoBackupWorker.enqueueImmediateBackup(activity, retryFailed = false)
+                            onShowInfo("Sincronizzazione backup avviata")
+                        }
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(if (isBackupRunningNow) "In corso..." else "Avvia Ora", maxLines = 1)
+                }
+
+                if (backupConfig.enabled) {
+                    OutlinedButton(
+                        onClick = {
+                            val nextPaused = !backupConfig.paused
+                            applyBackupConfig(backupConfig.copy(paused = nextPaused))
+                            if (!nextPaused) {
+                                AutoBackupWorker.enqueueImmediateBackup(activity, retryFailed = false)
+                            }
+                        },
+                        shape = CircleShape,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (backupConfig.paused) "Riprendi" else "Pausa", maxLines = 1)
+                    }
+                }
+            }
+
+            if (backupSummary.failedCount > 0) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = {
+                        AutoBackupWorker.enqueueImmediateBackup(activity, retryFailed = true)
+                        onShowInfo("Nuovo tentativo sui file falliti avviato")
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Riprova Falliti (${backupSummary.failedCount})")
+                }
+            }
+        }
+
         // 7. MODELLO AI LOCALE ON-DEVICE (DOWNLOAD FACOLTATIVO)
         val aiModelState by AiModelDownloadManager.state.collectAsState()
         LaunchedEffect(Unit) {
@@ -7208,9 +7719,13 @@ fun NativeLightboxModal(
         val neighbors = listOf(pagerState.currentPage - 1, pagerState.currentPage + 1)
         for (idx in neighbors) {
             val neighbor = items.getOrNull(idx)
-            if (neighbor != null && !neighbor.isVideo && apiClient.getCachedBitmap(neighbor.filename, fromTrash) == null) {
+            if (neighbor != null && !neighbor.isVideo &&
+                apiClient.getCachedBitmap(neighbor.filename, fromTrash) == null &&
+                apiClient.getRamLargePreviewBitmap(neighbor.filename, fromTrash) == null
+            ) {
                 launch {
-                    apiClient.loadMediaBitmap(neighbor.filename, fromTrash)
+                    apiClient.loadLargePreviewBitmap(neighbor.filename, fromTrash)
+                        ?: apiClient.loadMediaBitmap(neighbor.filename, fromTrash)
                 }
             }
         }
@@ -7235,6 +7750,7 @@ fun NativeLightboxModal(
             var bmp by remember(media.filename, fromTrash) {
                 mutableStateOf(
                     apiClient.getCachedBitmap(media.filename, fromTrash)
+                        ?: apiClient.getRamLargePreviewBitmap(media.filename, fromTrash)
                         ?: apiClient.getRamThumbnailBitmap(media.filename, fromTrash)
                 )
             }
@@ -7243,6 +7759,13 @@ fun NativeLightboxModal(
             LaunchedEffect(media.filename, fromTrash) {
                 if (!media.isVideo && apiClient.getCachedBitmap(media.filename, fromTrash) == null) {
                     if (bmp == null) isLoading = true
+                    if (!fromTrash && apiClient.getRamLargePreviewBitmap(media.filename, fromTrash) == null) {
+                        val previewBmp = apiClient.loadLargePreviewBitmap(media.filename, fromTrash)
+                        if (previewBmp != null && apiClient.getCachedBitmap(media.filename, fromTrash) == null) {
+                            bmp = previewBmp
+                            isLoading = false
+                        }
+                    }
                     val fullBmp = apiClient.loadMediaBitmap(media.filename, fromTrash)
                     if (fullBmp != null) {
                         bmp = fullBmp

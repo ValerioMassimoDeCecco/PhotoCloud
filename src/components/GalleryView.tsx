@@ -644,22 +644,37 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                         }}
                       >
                         {isVid ? (
-                          <>
-                            <video preload="metadata">
-                              <source
-                                src={`/media/${encodeURIComponent(media.filename)}#t=0.5`}
-                                type="video/mp4"
+                          media.hasThumb ? (
+                            <>
+                              <img
+                                src={`/media/${encodeURIComponent(media.filename)}?preview=thumb`}
+                                alt={media.filename}
+                                loading="lazy"
+                                decoding="async"
                               />
-                            </video>
-                            <div className="video-overlay">
-                              <span className="material-icons">play_circle</span>
-                            </div>
-                          </>
+                              <div className="video-overlay">
+                                <span className="material-icons">play_circle</span>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <video preload="metadata">
+                                <source
+                                  src={`/media/${encodeURIComponent(media.filename)}#t=0.5`}
+                                  type="video/mp4"
+                                />
+                              </video>
+                              <div className="video-overlay">
+                                <span className="material-icons">play_circle</span>
+                              </div>
+                            </>
+                          )
                         ) : (
                           <img
-                            src={`/media/${encodeURIComponent(media.filename)}`}
+                            src={`/media/${encodeURIComponent(media.filename)}?preview=thumb`}
                             alt={media.filename}
                             loading="lazy"
+                            decoding="async"
                           />
                         )}
                         <div className="media-actions">

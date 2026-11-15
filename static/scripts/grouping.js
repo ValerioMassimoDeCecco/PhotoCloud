@@ -116,26 +116,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (info.isImg) {
             const img = document.createElement('img');
-            img.src = `/media/${encodeURIComponent(filename)}`;
+            img.src = `/media/${encodeURIComponent(filename)}?preview=thumb`;
             img.alt = filename;
             img.loading = 'lazy';
+            img.decoding = 'async';
             card.appendChild(img);
         } else if (info.isVid) {
-            const video = document.createElement('video');
-            video.preload = 'metadata';
-            video.muted = true;
-            video.playsInline = true;
-            const source = document.createElement('source');
-            source.src = `/media/${encodeURIComponent(filename)}#t=0.5`;
-            source.type = info.ext === 'webm'
-                ? 'video/webm'
-                : info.ext === 'mov'
-                ? 'video/quicktime'
-                : info.ext === 'mkv'
-                ? 'video/x-matroska'
-                : 'video/mp4';
-            video.appendChild(source);
-            card.appendChild(video);
+            if (item.hasThumb) {
+                const img = document.createElement('img');
+                img.src = `/media/${encodeURIComponent(filename)}?preview=thumb`;
+                img.alt = filename;
+                img.loading = 'lazy';
+                img.decoding = 'async';
+                card.appendChild(img);
+            } else {
+                const video = document.createElement('video');
+                video.preload = 'metadata';
+                video.muted = true;
+                video.playsInline = true;
+                const source = document.createElement('source');
+                source.src = `/media/${encodeURIComponent(filename)}#t=0.5`;
+                source.type = info.ext === 'webm'
+                    ? 'video/webm'
+                    : info.ext === 'mov'
+                    ? 'video/quicktime'
+                    : info.ext === 'mkv'
+                    ? 'video/x-matroska'
+                    : 'video/mp4';
+                video.appendChild(source);
+                card.appendChild(video);
+            }
 
             const overlay = document.createElement('div');
             overlay.className = 'video-overlay';
@@ -765,9 +775,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (info.isImg) {
                 const img = document.createElement('img');
-                img.src = `/media/${encodeURIComponent(filename)}?from_trash=true`;
+                img.src = `/media/${encodeURIComponent(filename)}?from_trash=true&preview=thumb`;
                 img.alt = filename;
                 img.loading = 'lazy';
+                img.decoding = 'async';
                 card.appendChild(img);
             } else if (info.isVid) {
                 const video = document.createElement('video');

@@ -75,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 const isKeeper = fi === 0;
                                 return `<div class="media-card-wrapper is-media-item similar-card ${isKeeper ? 'similar-keeper' : ''}" data-filename="${safe}">
                                     <div class="media-card">
-                                        <img loading="lazy" src="/media/${encodeURIComponent(fn)}" alt="${safe}">
+                                        <img loading="lazy" decoding="async" src="/media/${encodeURIComponent(fn)}?preview=thumb" alt="${safe}">
                                         ${isKeeper ? '<span class="similar-keep-badge">✔ Mantieni</span>' : `<span class="similar-dist-badge">Δ ${dist}</span>`}
                                     </div>
                                     ${!isKeeper ? `<button type="button" class="btn danger similar-trash-btn" data-filename="${encodeURIComponent(fn)}">Cestina</button>` : ''}

@@ -268,11 +268,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'heic', 'avif'].includes(ext);
         const isVid = ['mp4', 'mov', 'webm', 'mkv'].includes(ext);
         const url = `${baseUrl}${encodeURIComponent(fn)}`;
+        const isVaultMedia = baseUrl === '/media/';
+        const thumbUrl = isVaultMedia ? `${url}?preview=thumb` : url;
         const safeName = String(fn).replace(/</g, '&lt;');
         const inner = isImg
-            ? `<img loading="lazy" src="${url}" alt="${safeName}">`
+            ? `<img loading="lazy" decoding="async" src="${thumbUrl}" alt="${safeName}">`
             : isVid
-              ? `<video preload="metadata" muted src="${url}#t=0.5"></video><div class="video-overlay"><span class="material-icons">play_circle</span></div>`
+              ? (isVaultMedia && item.hasThumb
+                    ? `<img loading="lazy" decoding="async" src="${thumbUrl}" alt="${safeName}"><div class="video-overlay"><span class="material-icons">play_circle</span></div>`
+                    : `<video preload="metadata" muted src="${url}#t=0.5"></video><div class="video-overlay"><span class="material-icons">play_circle</span></div>`)
               : `<div class="cloud-file-preview"><div class="cloud-file-icon-wrap"><span class="material-icons">insert_drive_file</span><span class="cloud-file-ext">${ext.toUpperCase()}</span></div></div>`;
         return `<div class="media-card-wrapper is-media-item" data-filename="${safeName}" data-url="${url}" data-is-media="true">
             <div class="media-card clickable-media vm-memory-card">${inner}</div>

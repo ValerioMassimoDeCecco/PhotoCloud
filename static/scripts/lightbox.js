@@ -4,6 +4,9 @@
     let currentIndex = 0;
     let mediaList = [];
     let isVideoActive = false;
+    let activeImageLoadToken = 0;
+    let currentOriginalUrl = '';
+    let currentOriginalUpgradeStarted = false;
 
     // Zoom & Pan state (for photos)
     let scale = 1;
@@ -153,6 +156,37 @@
         }
     }
 
+    function buildMediaVariantUrl(mediaUrl, variant) {
+        if (!mediaUrl || !variant) return mediaUrl;
+        try {
+            const parsed = new URL(mediaUrl, window.location.origin);
+            if (!parsed.pathname.startsWith('/media/')) {
+                return mediaUrl;
+            }
+            parsed.searchParams.set('preview', variant);
+            return `${parsed.pathname}${parsed.search}`;
+        } catch {
+            return mediaUrl;
+        }
+    }
+
+    function upgradeActiveImageToOriginalIfNeeded() {
+        if (isVideoActive || currentOriginalUpgradeStarted || !currentOriginalUrl) return;
+        const { lightboxImg } = getElements();
+        if (!lightboxImg) return;
+        currentOriginalUpgradeStarted = true;
+        const token = activeImageLoadToken;
+        const hiRes = new Image();
+        hiRes.decoding = 'async';
+        hiRes.onload = () => {
+            if (token !== activeImageLoadToken) return;
+            if (lightboxImg.getAttribute('src') !== currentOriginalUrl) {
+                lightboxImg.setAttribute('src', currentOriginalUrl);
+            }
+        };
+        hiRes.src = currentOriginalUrl;
+    }
+
     function collectDomMediaUrls() {
         const cards = Array.from(document.querySelectorAll('.clickable-media'));
         return cards
@@ -264,6 +298,9 @@
             } else {
                 el.style.transform = `translate3d(${panX.toFixed(2)}px, ${panY.toFixed(2)}px, 0) scale(${scale.toFixed(5)})`;
                 el.style.cursor = 'grab';
+                if (scale > 1.15 && !isVideoActive) {
+                    upgradeActiveImageToOriginalIfNeeded();
+                }
             }
         }
 
@@ -416,9 +453,15 @@
                 btn.appendChild(badge);
             } else {
                 const imgEl = document.createElement('img');
-                imgEl.src = url;
+                imgEl.src = buildMediaVariantUrl(url, 'thumb');
                 imgEl.alt = '';
                 imgEl.loading = 'lazy';
+                imgEl.decoding = 'async';
+                imgEl.onerror = () => {
+                    if (imgEl.dataset.fallbackDone) return;
+                    imgEl.dataset.fallbackDone = '1';
+                    imgEl.src = url;
+                };
                 btn.appendChild(imgEl);
             }
 
@@ -445,7 +488,8 @@
             const url = resolveMediaUrl(mediaList[idx]);
             if (url && !isVideoUrl(url)) {
                 const preloadImg = new Image();
-                preloadImg.src = url;
+                preloadImg.decoding = 'async';
+                preloadImg.src = buildMediaVariantUrl(url, 'large');
             }
         });
     }
@@ -537,7 +581,20 @@
             if (lightboxCenterPlay) lightboxCenterPlay.style.display = 'none';
             lightboxImg.style.display = 'block';
             lightboxImg.style.opacity = '1';
-            lightboxImg.setAttribute('src', mediaUrl);
+            lightboxImg.decoding = 'async';
+            activeImageLoadToken += 1;
+            const token = activeImageLoadToken;
+            currentOriginalUrl = mediaUrl;
+            const largeUrl = buildMediaVariantUrl(mediaUrl, 'large');
+            currentOriginalUpgradeStarted = largeUrl === mediaUrl;
+            lightboxImg.onerror = () => {
+                if (token !== activeImageLoadToken) return;
+                if (lightboxImg.getAttribute('src') !== mediaUrl) {
+                    currentOriginalUpgradeStarted = true;
+                    lightboxImg.setAttribute('src', mediaUrl);
+                }
+            };
+            lightboxImg.setAttribute('src', largeUrl);
             applyZoomTransform(false);
             preloadAdjacentMedia(index);
         }
@@ -647,6 +704,10 @@
             lightboxVideo.style.transform = '';
         }
         if (lightboxImg) {
+            activeImageLoadToken += 1;
+            currentOriginalUrl = '';
+            currentOriginalUpgradeStarted = false;
+            lightboxImg.onerror = null;
             lightboxImg.removeAttribute('src');
             lightboxImg.style.display = 'none';
             lightboxImg.style.transform = '';

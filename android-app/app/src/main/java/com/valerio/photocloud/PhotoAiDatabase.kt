@@ -10,6 +10,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -104,14 +106,89 @@ interface PhotoAiDao {
     suspend fun resetAllForReindex()
 }
 
+// ---------------------------------------------------------------------------
+// v1.5.0 — Persistent Auto-Backup State Machine (Room Migration 1 -> 2)
+// ---------------------------------------------------------------------------
+
+object BackupItemStatus {
+    const val PENDING = "PENDING"
+    const val UPLOADING = "UPLOADING"
+    const val UPLOADED = "UPLOADED"
+    const val SKIPPED = "SKIPPED"
+    const val FAILED = "FAILED"
+}
+
+@Entity(tableName = "backup_state")
+data class BackupStateEntity(
+    @PrimaryKey
+    val mediaStoreId: Long,
+    val uriString: String,
+    val displayName: String,
+    val bucketName: String,
+    val mimeType: String,
+    val isVideo: Boolean,
+    val sizeBytes: Long,
+    val dateTakenMs: Long,
+    val sha256: String,
+    val status: String,
+    val attemptCount: Int = 0,
+    val lastError: String = "",
+    val serverFilename: String = "",
+    val updatedAtMs: Long = System.currentTimeMillis()
+)
+
+data class BackupStatusSummaryTuple(
+    val pendingCount: Int,
+    val uploadingCount: Int,
+    val uploadedCount: Int,
+    val skippedCount: Int,
+    val failedCount: Int
+)
+
+@Dao
+interface BackupStateDao {
+
+    @Query(
+        """
+        SELECT
+            COALESCE(SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END), 0) AS pendingCount,
+            COALESCE(SUM(CASE WHEN status = 'UPLOADING' THEN 1 ELSE 0 END), 0) AS uploadingCount,
+            COALESCE(SUM(CASE WHEN status = 'UPLOADED' THEN 1 ELSE 0 END), 0) AS uploadedCount,
+            COALESCE(SUM(CASE WHEN status = 'SKIPPED' THEN 1 ELSE 0 END), 0) AS skippedCount,
+            COALESCE(SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END), 0) AS failedCount
+        FROM backup_state
+        """
+    )
+    fun observeSummary(): Flow<BackupStatusSummaryTuple>
+
+    @Query("SELECT * FROM backup_state")
+    suspend fun getAll(): List<BackupStateEntity>
+
+    @Query("SELECT * FROM backup_state WHERE mediaStoreId = :id LIMIT 1")
+    suspend fun getById(id: Long): BackupStateEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: BackupStateEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(entities: List<BackupStateEntity>)
+
+    @Query("UPDATE backup_state SET status = 'PENDING', lastError = '' WHERE status IN ('FAILED', 'UPLOADING')")
+    suspend fun resetRetryableStates()
+
+    @Query("DELETE FROM backup_state WHERE status IN ('FAILED', 'PENDING', 'UPLOADING')")
+    suspend fun clearIncompleteStates()
+}
+
 @Database(
-    entities = [PhotoAiEntity::class],
-    version = 1,
+    entities = [PhotoAiEntity::class, BackupStateEntity::class],
+    version = 2,
     exportSchema = false
 )
 abstract class PhotoAiDatabase : RoomDatabase() {
 
     abstract fun photoAiDao(): PhotoAiDao
+    abstract fun backupStateDao(): BackupStateDao
 
     /**
      * Reactive Flow of all distinct categories found by On-Device AI, sorted descending by photo count.
@@ -131,6 +208,32 @@ abstract class PhotoAiDatabase : RoomDatabase() {
     }
 
     companion object {
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `backup_state` (
+                        `mediaStoreId` INTEGER NOT NULL,
+                        `uriString` TEXT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        `bucketName` TEXT NOT NULL,
+                        `mimeType` TEXT NOT NULL,
+                        `isVideo` INTEGER NOT NULL,
+                        `sizeBytes` INTEGER NOT NULL,
+                        `dateTakenMs` INTEGER NOT NULL,
+                        `sha256` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `attemptCount` INTEGER NOT NULL,
+                        `lastError` TEXT NOT NULL,
+                        `serverFilename` TEXT NOT NULL,
+                        `updatedAtMs` INTEGER NOT NULL,
+                        PRIMARY KEY(`mediaStoreId`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         @Volatile
         private var INSTANCE: PhotoAiDatabase? = null
 
@@ -141,10 +244,11 @@ abstract class PhotoAiDatabase : RoomDatabase() {
                     PhotoAiDatabase::class.java,
                     "photocloud_ai_categories.db"
                 )
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(MIGRATION_1_2)
                     .build()
                     .also { INSTANCE = it }
             }
         }
     }
 }
+

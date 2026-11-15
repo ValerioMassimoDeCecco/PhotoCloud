@@ -7,6 +7,7 @@ export interface MediaItem {
   isMedia?: boolean;
   category?: FileCategory;
   album?: string;
+  hasThumb?: boolean;
 }
 
 export interface GroupedMedia {

@@ -1,5 +1,6 @@
 package com.valerio.photocloud
 
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -281,7 +282,8 @@ data class MediaItemModel(
     val size: Long = 0L,
     val isMedia: Boolean = detectIsMediaFilename(filename),
     val category: String = detectFileCategory(filename),
-    val album: String = ""
+    val album: String = "",
+    val hasThumb: Boolean = false
 ) {
     val isVideo: Boolean
         get() = detectIsVideoFilename(filename)
@@ -457,6 +459,10 @@ class PhotoCloudApiClient(
     private val diskCacheDir = File(context.cacheDir, "media_cache").apply {
         if (!exists()) mkdirs()
     }
+    private val thumbCacheDir = File(context.cacheDir, "thumb_cache").apply {
+        if (!exists()) mkdirs()
+    }
+    private val uploadedVideoThumbAttempted = Collections.synchronizedSet(HashSet<String>())
 
     private val cookieJar = object : CookieJar {
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
@@ -602,6 +608,7 @@ class PhotoCloudApiClient(
             obj.put("isMedia", item.isMedia)
             obj.put("category", item.category)
             obj.put("album", item.album)
+            obj.put("hasThumb", item.hasThumb)
             arr.put(obj)
         }
         return arr.toString()
@@ -619,6 +626,7 @@ class PhotoCloudApiClient(
                 val isMed = if (obj.has("isMedia")) obj.optBoolean("isMedia", true) else MediaItemModel.detectIsMediaFilename(fn)
                 val cat = obj.optString("category", "").ifBlank { MediaItemModel.detectFileCategory(fn) }
                 val alb = albumOverrides[fn] ?: obj.optString("album", "")
+                val hasTh = obj.optBoolean("hasThumb", false)
                 if (fn.isNotBlank()) {
                     list.add(
                         MediaItemModel(
@@ -627,7 +635,8 @@ class PhotoCloudApiClient(
                             size = sz,
                             isMedia = isMed,
                             category = cat,
-                            album = alb
+                            album = alb,
+                            hasThumb = hasTh
                         )
                     )
                 }
@@ -671,20 +680,60 @@ class PhotoCloudApiClient(
     fun clearMediaCache() {
         bitmapCache.evictAll()
         thumbnailCache.evictAll()
+        largePreviewCache.evictAll()
         try {
             diskCacheDir.listFiles()?.forEach { it.delete() }
+        } catch (_: Exception) {
+        }
+        clearThumbDiskCache()
+    }
+
+    fun clearThumbDiskCache() {
+        thumbnailCache.evictAll()
+        largePreviewCache.evictAll()
+        uploadedVideoThumbAttempted.clear()
+        try {
+            thumbCacheDir.listFiles()?.forEach { it.delete() }
         } catch (_: Exception) {
         }
     }
 
     fun getDiskCacheStats(): Pair<Int, Long> {
         return try {
-            val files = diskCacheDir.listFiles() ?: return Pair(0, 0L)
+            val mediaFiles = diskCacheDir.listFiles() ?: emptyArray()
+            val thumbFiles = thumbCacheDir.listFiles() ?: emptyArray()
             var totalBytes = 0L
-            for (f in files) {
-                if (f.isFile) totalBytes += f.length()
+            var count = 0
+            for (f in mediaFiles) {
+                if (f.isFile) {
+                    totalBytes += f.length()
+                    count++
+                }
             }
-            Pair(files.size, totalBytes)
+            for (f in thumbFiles) {
+                if (f.isFile) {
+                    totalBytes += f.length()
+                    count++
+                }
+            }
+            Pair(count, totalBytes)
+        } catch (_: Exception) {
+            Pair(0, 0L)
+        }
+    }
+
+    fun getThumbDiskCacheStats(): Pair<Int, Long> {
+        return try {
+            val files = thumbCacheDir.listFiles() ?: return Pair(0, 0L)
+            var totalBytes = 0L
+            var count = 0
+            for (f in files) {
+                if (f.isFile) {
+                    totalBytes += f.length()
+                    count++
+                }
+            }
+            Pair(count, totalBytes)
         } catch (_: Exception) {
             Pair(0, 0L)
         }
@@ -734,6 +783,16 @@ class PhotoCloudApiClient(
     fun setMaxParallelTransfers(value: Int) {
         val clamped = value.coerceIn(1, 16)
         appPrefs.edit().putInt("max_parallel_transfers", clamped).apply()
+    }
+
+    fun getThumbDiskCacheMaxMb(): Int {
+        return appPrefs.getInt("thumb_disk_cache_max_mb", 150).coerceIn(32, 2048)
+    }
+
+    fun setThumbDiskCacheMaxMb(valueMb: Int) {
+        val clamped = valueMb.coerceIn(32, 2048)
+        appPrefs.edit().putInt("thumb_disk_cache_max_mb", clamped).apply()
+        evictThumbDiskCacheIfNeeded()
     }
 
     fun getDefaultUploadPackagingMode(): TransferPackagingMode {
@@ -828,7 +887,7 @@ class PhotoCloudApiClient(
         }
     }
 
-    // Dedicated RAM cache for compact 380px grid thumbnails (~300KB each -> holds 120+ thumbnails in RAM without eviction)
+    // Dedicated RAM cache for compact 320px grid thumbnails
     private val maxThumbCacheKb = (Runtime.getRuntime().maxMemory() / 1024 / 6).toInt().coerceAtLeast(20 * 1024)
     private val thumbnailCache = object : LruCache<String, Bitmap>(maxThumbCacheKb) {
         override fun sizeOf(key: String, value: Bitmap): Int {
@@ -836,15 +895,83 @@ class PhotoCloudApiClient(
         }
     }
 
-    private fun diskCacheFile(filename: String, fromTrash: Boolean): File {
-        val safeName = filename
+    // Dedicated RAM cache for 1280px Lightbox progressive previews
+    private val maxLargePreviewCacheKb = (Runtime.getRuntime().maxMemory() / 1024 / 8).toInt().coerceAtLeast(16 * 1024)
+    private val largePreviewCache = object : LruCache<String, Bitmap>(maxLargePreviewCacheKb) {
+        override fun sizeOf(key: String, value: Bitmap): Int {
+            return value.byteCount / 1024
+        }
+    }
+
+    private fun sanitizeCacheFilename(filename: String): String {
+        return filename
             .replace("..", "_")
             .replace(Regex("[^a-zA-Z0-9._-]"), "_")
             .trimStart('.')
             .take(180)
             .ifBlank { "file" }
+    }
+
+    private fun diskCacheFile(filename: String, fromTrash: Boolean): File {
+        val safeName = sanitizeCacheFilename(filename)
         val prefix = if (fromTrash) "trash" else "gal"
         return File(diskCacheDir, "${prefix}_${safeName}")
+    }
+
+    private fun thumbCacheFile(filename: String, variant: ThumbVariant, fromTrash: Boolean): File {
+        val safeName = sanitizeCacheFilename(filename)
+        val prefix = if (fromTrash) "trash" else "gal"
+        return File(thumbCacheDir, "${prefix}_${variant.queryValue}_${safeName}.jpg")
+    }
+
+    private fun evictThumbDiskCacheIfNeeded() {
+        try {
+            val maxBytes = getThumbDiskCacheMaxMb().toLong() * 1024L * 1024L
+            val files = thumbCacheDir.listFiles()?.filter { it.isFile } ?: return
+            var totalBytes = files.sumOf { it.length() }
+            if (totalBytes <= maxBytes) return
+            val sortedOldestFirst = files.sortedBy { it.lastModified() }
+            for (f in sortedOldestFirst) {
+                if (totalBytes <= maxBytes) break
+                val len = f.length()
+                if (f.delete()) {
+                    totalBytes -= len
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun invalidateLocalThumbFiles(filename: String, fromTrash: Boolean = false) {
+        val cacheKey = "$fromTrash:$filename"
+        thumbnailCache.remove(cacheKey)
+        largePreviewCache.remove(cacheKey)
+        uploadedVideoThumbAttempted.remove(filename)
+        try {
+            thumbCacheFile(filename, ThumbVariant.THUMB, fromTrash).delete()
+            thumbCacheFile(filename, ThumbVariant.LARGE, fromTrash).delete()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun saveBitmapAsJpegToThumbCache(bitmap: Bitmap, file: File, quality: Int = 80): ByteArray? {
+        return try {
+            val baos = java.io.ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(50, 95), baos)
+            val bytes = baos.toByteArray()
+            if (bytes.isNotEmpty()) {
+                FileOutputStream(file).use { out ->
+                    out.write(bytes)
+                    out.flush()
+                }
+                evictThumbDiskCacheIfNeeded()
+                bytes
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun computeInSampleSize(outWidth: Int, outHeight: Int, reqMaxEdge: Int): Int {
@@ -953,6 +1080,16 @@ class PhotoCloudApiClient(
     }
 
     /**
+     * Pure O(1) RAM-only large preview lookup (0.001ms) for instant Lightbox placeholder.
+     */
+    fun getRamLargePreviewBitmap(filename: String, fromTrash: Boolean = false): Bitmap? {
+        val cacheKey = "$fromTrash:$filename"
+        bitmapCache.get(cacheKey)?.let { return it }
+        largePreviewCache.get(cacheKey)?.let { return it }
+        return null
+    }
+
+    /**
      * Pure O(1) RAM-only full-res bitmap lookup (0.001ms) for Lightbox / Photo Editor.
      * Never blocks the Main UI Thread with synchronous disk decoding.
      */
@@ -973,6 +1110,14 @@ class PhotoCloudApiClient(
         return "${cleanBaseUrl()}/media/$encoded$query"
     }
 
+    fun getMediaPreviewUrl(filename: String, variant: ThumbVariant, fromTrash: Boolean = false): String {
+        val encoded = URLEncoder.encode(filename, "UTF-8").replace("+", "%20")
+        val params = mutableListOf<String>()
+        params.add("preview=${variant.queryValue}")
+        if (fromTrash) params.add("from_trash=true")
+        return "${cleanBaseUrl()}/media/$encoded?${params.joinToString("&")}"
+    }
+
     fun getCookieHeaderForCurrentServer(): String {
         return try {
             val httpUrl = HttpUrl.Builder()
@@ -985,9 +1130,23 @@ class PhotoCloudApiClient(
         }
     }
 
+    private fun uploadVideoThumbnailBlocking(filename: String, jpegBytes: ByteArray): Boolean {
+        if (jpegBytes.isEmpty() || jpegBytes.size > 1024 * 1024) return false
+        return try {
+            val encoded = URLEncoder.encode(filename, "UTF-8").replace("+", "%20")
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/thumbs/$encoded?variant=thumb")
+                .put(jpegBytes.toRequestBody("image/jpeg".toMediaTypeOrNull()))
+                .build()
+            httpClient.newCall(req).execute().use { it.isSuccessful }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     /**
-     * Loads a compact 380px grid thumbnail on Dispatchers.IO and keeps it in thumbnailCache
-     * so switching tabs to the Gallery is 0ms instantaneous.
+     * Loads a compact 320px grid thumbnail using server ?preview=thumb cache and local LRU thumb_cache/.
+     * Transparently falls back to original /media or video frame extraction (+ PUT /api/thumbs) when needed.
      */
     suspend fun loadThumbnailBitmap(filename: String, fromTrash: Boolean = false): Bitmap? = withContext(Dispatchers.IO) {
         if (!MediaItemModel.detectIsMediaFilename(filename)) return@withContext null
@@ -995,23 +1154,76 @@ class PhotoCloudApiClient(
         thumbnailCache.get(cacheKey)?.let { return@withContext it }
         val isVideo = MediaItemModel.detectIsVideoFilename(filename)
 
-        val diskFile = diskCacheFile(filename, fromTrash)
-        if (diskFile.exists() && diskFile.length() > 0L) {
-            val thumbBmp = decodeMediaThumbnailFromFile(diskFile, isVideo, 380)
+        val thumbFile = thumbCacheFile(filename, ThumbVariant.THUMB, fromTrash)
+        if (thumbFile.exists() && thumbFile.length() > 0L) {
+            val cachedThumb = decodeThumbnailFromFile(thumbFile, ThumbVariant.THUMB.maxEdgePx)
+            if (cachedThumb != null) {
+                try { thumbFile.setLastModified(System.currentTimeMillis()) } catch (_: Exception) {}
+                thumbnailCache.put(cacheKey, cachedThumb)
+                return@withContext cachedThumb
+            }
+        }
+
+        val fullDiskFile = diskCacheFile(filename, fromTrash)
+        if (fullDiskFile.exists() && fullDiskFile.length() > 0L) {
+            val thumbBmp = decodeMediaThumbnailFromFile(fullDiskFile, isVideo, ThumbVariant.THUMB.maxEdgePx)
             if (thumbBmp != null) {
                 thumbnailCache.put(cacheKey, thumbBmp)
+                val jpegBytes = saveBitmapAsJpegToThumbCache(thumbBmp, thumbFile, 80)
+                if (isVideo && !fromTrash && jpegBytes != null && uploadedVideoThumbAttempted.add(filename)) {
+                    uploadVideoThumbnailBlocking(filename, jpegBytes)
+                }
                 return@withContext thumbBmp
             }
         }
 
+        // Fast path for PhotoCloud v1.5+: ask the server for persistent encrypted JPEG thumbnail (?preview=thumb)
+        if (!fromTrash) {
+            try {
+                val previewReq = Request.Builder()
+                    .url(getMediaPreviewUrl(filename, ThumbVariant.THUMB, false))
+                    .get()
+                    .build()
+                httpClient.newCall(previewReq).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val contentType = response.header("Content-Type").orEmpty().lowercase(Locale.ROOT)
+                        if (contentType.startsWith("image/")) {
+                            val bytes = response.body?.bytes()
+                            if (bytes != null && bytes.isNotEmpty()) {
+                                val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                if (decoded != null) {
+                                    try {
+                                        FileOutputStream(thumbFile).use { out ->
+                                            out.write(bytes)
+                                            out.flush()
+                                        }
+                                        evictThumbDiskCacheIfNeeded()
+                                    } catch (_: Exception) {
+                                    }
+                                    thumbnailCache.put(cacheKey, decoded)
+                                    return@withContext decoded
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+
         if (isVideo) {
-            // Fast path: stream only container metadata + an early frame via HTTP Range
-            decodeVideoThumbnailFromUrl(getMediaUrl(filename, fromTrash), 380)?.let { thumb ->
+            // Video missing server thumbnail (or in trash): stream container metadata + early frame via HTTP Range
+            decodeVideoThumbnailFromUrl(getMediaUrl(filename, fromTrash), ThumbVariant.THUMB.maxEdgePx)?.let { thumb ->
                 thumbnailCache.put(cacheKey, thumb)
+                val jpegBytes = saveBitmapAsJpegToThumbCache(thumb, thumbFile, 80)
+                if (!fromTrash && jpegBytes != null && uploadedVideoThumbAttempted.add(filename)) {
+                    uploadVideoThumbnailBlocking(filename, jpegBytes)
+                }
                 return@withContext thumb
             }
         }
 
+        // Fallback to original file download (also handles pre-1.5.0 servers or trash)
         try {
             val request = Request.Builder()
                 .url(getMediaUrl(filename, fromTrash))
@@ -1024,22 +1236,129 @@ class PhotoCloudApiClient(
                 if (bytes.isEmpty()) return@withContext null
 
                 try {
-                    FileOutputStream(diskFile).use { out ->
+                    FileOutputStream(fullDiskFile).use { out ->
                         out.write(bytes)
                         out.flush()
                     }
                 } catch (_: Exception) {
                 }
 
-                val thumbBmp = decodeMediaThumbnailFromFile(diskFile, isVideo, 380)
+                val thumbBmp = decodeMediaThumbnailFromFile(fullDiskFile, isVideo, ThumbVariant.THUMB.maxEdgePx)
                     ?: if (!isVideo) BitmapFactory.decodeByteArray(bytes, 0, bytes.size) else null
                 if (thumbBmp != null) {
                     thumbnailCache.put(cacheKey, thumbBmp)
+                    val jpegBytes = saveBitmapAsJpegToThumbCache(thumbBmp, thumbFile, 80)
+                    if (isVideo && !fromTrash && jpegBytes != null && uploadedVideoThumbAttempted.add(filename)) {
+                        uploadVideoThumbnailBlocking(filename, jpegBytes)
+                    }
                 }
                 thumbBmp
             }
         } catch (_: Exception) {
             null
+        }
+    }
+
+    /**
+     * Loads a fast 1280px Lightbox preview (?preview=large) so swipe/open feels instant before full-res loads.
+     */
+    suspend fun loadLargePreviewBitmap(filename: String, fromTrash: Boolean = false): Bitmap? = withContext(Dispatchers.IO) {
+        if (!MediaItemModel.detectIsMediaFilename(filename) || MediaItemModel.detectIsVideoFilename(filename)) {
+            return@withContext null
+        }
+        val cacheKey = "$fromTrash:$filename"
+        bitmapCache.get(cacheKey)?.let { return@withContext it }
+        largePreviewCache.get(cacheKey)?.let { return@withContext it }
+
+        val largeFile = thumbCacheFile(filename, ThumbVariant.LARGE, fromTrash)
+        if (largeFile.exists() && largeFile.length() > 0L) {
+            val cached = decodeThumbnailFromFile(largeFile, ThumbVariant.LARGE.maxEdgePx)
+            if (cached != null) {
+                try { largeFile.setLastModified(System.currentTimeMillis()) } catch (_: Exception) {}
+                largePreviewCache.put(cacheKey, cached)
+                return@withContext cached
+            }
+        }
+
+        if (fromTrash) return@withContext null
+
+        try {
+            val req = Request.Builder()
+                .url(getMediaPreviewUrl(filename, ThumbVariant.LARGE, false))
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val contentType = response.header("Content-Type").orEmpty().lowercase(Locale.ROOT)
+                if (!contentType.startsWith("image/")) return@withContext null
+                val bytes = response.body?.bytes() ?: return@withContext null
+                if (bytes.isEmpty()) return@withContext null
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@withContext null
+                try {
+                    FileOutputStream(largeFile).use { out ->
+                        out.write(bytes)
+                        out.flush()
+                    }
+                    evictThumbDiskCacheIfNeeded()
+                } catch (_: Exception) {
+                }
+                largePreviewCache.put(cacheKey, bmp)
+                return@withContext bmp
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun fetchServerThumbStats(): ServerThumbStatsModel? = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/thumbs/stats")
+                .header("Accept", "application/json")
+                .get()
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                val body = resp.body?.string() ?: ""
+                if (!body.trim().startsWith("{")) return@withContext null
+                val obj = JSONObject(body)
+                return@withContext ServerThumbStatsModel(
+                    diskBytes = if (obj.has("diskBytes")) obj.optLong("diskBytes", 0L) else obj.optLong("totalBytes", 0L),
+                    maxBytes = obj.optLong("maxBytes", 0L),
+                    variantCount = when {
+                        obj.has("variantCount") -> obj.optInt("variantCount", 0)
+                        obj.has("entriesCount") -> obj.optInt("entriesCount", 0)
+                        else -> obj.optInt("totalEntries", 0)
+                    },
+                    negativeCount = if (obj.has("negativeCount")) obj.optInt("negativeCount", 0) else obj.optInt("negativeEntries", 0)
+                )
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun rebuildServerThumbnails(force: Boolean = false): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        try {
+            val payload = JSONObject().put("force", force).toString()
+            val req = Request.Builder()
+                .url("${cleanBaseUrl()}/api/thumbs/rebuild")
+                .post(payload.toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
+            httpClient.newCall(req).execute().use { resp ->
+                val body = resp.body?.string() ?: ""
+                val msg = try {
+                    JSONObject(body).optString("message", "")
+                } catch (_: Exception) {
+                    ""
+                }
+                if (resp.isSuccessful) {
+                    return@withContext Pair(true, msg.ifBlank { "Rigenerazione miniature avviata sul server" })
+                }
+                return@withContext Pair(false, msg.ifBlank { "Errore rigenerazione (${resp.code})" })
+            }
+        } catch (e: Exception) {
+            Pair(false, "Errore di rete: ${e.localizedMessage}")
         }
     }
 
@@ -1247,6 +1566,7 @@ class PhotoCloudApiClient(
                                         if (alb.isNotBlank() && localMap[fn] != alb) {
                                             localMap[fn] = alb
                                         }
+                                        val hasThumb = m.optBoolean("hasThumb", false)
                                         items.add(
                                             MediaItemModel(
                                                 filename = fn,
@@ -1254,7 +1574,8 @@ class PhotoCloudApiClient(
                                                 size = sz,
                                                 isMedia = isMed,
                                                 category = cat,
-                                                album = alb
+                                                album = alb,
+                                                hasThumb = hasThumb
                                             )
                                         )
                                     }
@@ -2076,6 +2397,7 @@ class PhotoCloudApiClient(
             if (overwrite) {
                 val cacheKey = "false:$originalFilename"
                 bitmapCache.remove(cacheKey)
+                invalidateLocalThumbFiles(originalFilename, false)
                 val diskFile = diskCacheFile(originalFilename, false)
                 try {
                     FileOutputStream(diskFile).use { out ->
@@ -2220,6 +2542,7 @@ class PhotoCloudApiClient(
 
             if (overwrite) {
                 bitmapCache.remove("false:$originalFilename")
+                invalidateLocalThumbFiles(originalFilename, false)
                 try {
                     diskCacheFile(originalFilename, false).delete()
                 } catch (_: Exception) {
@@ -3970,6 +4293,437 @@ class PhotoCloudApiClient(
         )
     }
 
+    // ---------------------------------------------------------------------------
+    // v1.5.0 — Backup automatico camera roll (Config, MediaStore, Check, Upload)
+    // ---------------------------------------------------------------------------
+
+    fun getAutoBackupConfig(): AutoBackupConfig {
+        val rawBuckets = appPrefs.getString("auto_backup_buckets", null)
+        val buckets = LinkedHashSet<String>()
+        if (rawBuckets != null) {
+            try {
+                val arr = JSONArray(rawBuckets)
+                for (i in 0 until arr.length()) {
+                    val b = arr.optString(i, "").trim()
+                    if (b.isNotBlank()) buckets.add(b)
+                }
+            } catch (_: Exception) {
+            }
+        } else {
+            buckets.add("Camera")
+        }
+        return AutoBackupConfig(
+            enabled = appPrefs.getBoolean("auto_backup_enabled", false),
+            paused = appPrefs.getBoolean("auto_backup_paused", false),
+            selectedBuckets = buckets,
+            mediaScope = BackupMediaScope.fromKey(appPrefs.getString("auto_backup_scope", BackupMediaScope.BOTH.storageKey)),
+            wifiOnly = appPrefs.getBoolean("auto_backup_wifi_only", true),
+            chargingOnly = appPrefs.getBoolean("auto_backup_charging_only", false),
+            respectBatterySaver = appPrefs.getBoolean("auto_backup_battery_saver", true),
+            libraryMode = BackupLibraryMode.fromKey(appPrefs.getString("auto_backup_library_mode", BackupLibraryMode.NEW_ONLY.storageKey)),
+            activatedAtMs = appPrefs.getLong("auto_backup_activated_at_ms", 0L),
+            maxVideoSizeMb = appPrefs.getInt("auto_backup_max_video_mb", 0).coerceAtLeast(0),
+            confirmedInsecureHttpUrl = appPrefs.getString("auto_backup_confirmed_http_url", "") ?: ""
+        )
+    }
+
+    fun saveAutoBackupConfig(config: AutoBackupConfig) {
+        val bucketsArr = JSONArray()
+        config.selectedBuckets.map { it.trim() }.filter { it.isNotBlank() }.distinct().sorted().forEach {
+            bucketsArr.put(it)
+        }
+        appPrefs.edit()
+            .putBoolean("auto_backup_enabled", config.enabled)
+            .putBoolean("auto_backup_paused", config.paused)
+            .putString("auto_backup_buckets", bucketsArr.toString())
+            .putString("auto_backup_scope", config.mediaScope.storageKey)
+            .putBoolean("auto_backup_wifi_only", config.wifiOnly)
+            .putBoolean("auto_backup_charging_only", config.chargingOnly)
+            .putBoolean("auto_backup_battery_saver", config.respectBatterySaver)
+            .putString("auto_backup_library_mode", config.libraryMode.storageKey)
+            .putLong("auto_backup_activated_at_ms", config.activatedAtMs)
+            .putInt("auto_backup_max_video_mb", config.maxVideoSizeMb.coerceAtLeast(0))
+            .putString("auto_backup_confirmed_http_url", config.confirmedInsecureHttpUrl.trim().removeSuffix("/"))
+            .apply()
+    }
+
+    suspend fun listDeviceMediaBuckets(): List<Pair<String, Int>> = withContext(Dispatchers.IO) {
+        val counts = LinkedHashMap<String, Int>()
+        val resolver = context.contentResolver
+
+        fun scanCollection(uri: Uri) {
+            val projection = arrayOf(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+            try {
+                resolver.query(uri, projection, null, null, null)?.use { cursor ->
+                    val bucketCol = cursor.getColumnIndex(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                    if (bucketCol < 0) return
+                    while (cursor.moveToNext()) {
+                        val b = cursor.getString(bucketCol)?.trim().orEmpty()
+                        if (b.isNotBlank()) {
+                            counts[b] = (counts[b] ?: 0) + 1
+                        }
+                    }
+                }
+            } catch (_: SecurityException) {
+            } catch (_: Exception) {
+            }
+        }
+
+        scanCollection(MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+        scanCollection(MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+
+        counts.entries
+            .map { it.key to it.value }
+            .sortedWith(
+                compareByDescending<Pair<String, Int>> { it.first.equals("Camera", ignoreCase = true) }
+                    .thenByDescending { it.second }
+                    .thenBy { it.first.lowercase(Locale.ROOT) }
+            )
+    }
+
+    suspend fun scanMediaStoreBackupCandidates(
+        config: AutoBackupConfig,
+        limit: Int = 5000
+    ): List<MediaBackupCandidate> = withContext(Dispatchers.IO) {
+        val candidates = ArrayList<MediaBackupCandidate>()
+        val resolver = context.contentResolver
+
+        fun queryCollection(collectionUri: Uri, isVideo: Boolean) {
+            val projection = arrayOf(
+                MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
+                MediaStore.MediaColumns.MIME_TYPE,
+                MediaStore.MediaColumns.SIZE,
+                MediaStore.MediaColumns.DATE_TAKEN,
+                MediaStore.MediaColumns.DATE_ADDED
+            )
+            val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} ASC"
+            try {
+                resolver.query(collectionUri, projection, null, null, sortOrder)?.use { cursor ->
+                    val idCol = cursor.getColumnIndex(MediaStore.MediaColumns._ID)
+                    val nameCol = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)
+                    val bucketCol = cursor.getColumnIndex(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                    val mimeCol = cursor.getColumnIndex(MediaStore.MediaColumns.MIME_TYPE)
+                    val sizeCol = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
+                    val takenCol = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_TAKEN)
+                    val addedCol = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_ADDED)
+
+                    while (cursor.moveToNext() && candidates.size < limit) {
+                        val id = if (idCol >= 0) cursor.getLong(idCol) else continue
+                        val displayName = (if (nameCol >= 0) cursor.getString(nameCol) else null)
+                            ?.trim()
+                            ?.ifBlank { null }
+                            ?: (if (isVideo) "VID_$id.mp4" else "IMG_$id.jpg")
+                        val bucketName = (if (bucketCol >= 0) cursor.getString(bucketCol) else null)?.trim().orEmpty()
+                        val mimeType = (if (mimeCol >= 0) cursor.getString(mimeCol) else null)
+                            ?.trim()
+                            ?.ifBlank { if (isVideo) "video/mp4" else "image/jpeg" }
+                            ?: (if (isVideo) "video/mp4" else "image/jpeg")
+                        val sizeBytes = if (sizeCol >= 0) cursor.getLong(sizeCol).coerceAtLeast(0L) else 0L
+                        if (sizeBytes <= 0L) continue
+                        val dateTakenMs = if (takenCol >= 0) cursor.getLong(takenCol).coerceAtLeast(0L) else 0L
+                        val dateAddedSec = if (addedCol >= 0) cursor.getLong(addedCol).coerceAtLeast(0L) else 0L
+                        val dateAddedMs = if (dateAddedSec > 10_000_000_000L) dateAddedSec else dateAddedSec * 1000L
+                        val itemUri = ContentUris.withAppendedId(collectionUri, id)
+
+                        val candidate = MediaBackupCandidate(
+                            mediaStoreId = id,
+                            uriString = itemUri.toString(),
+                            displayName = displayName,
+                            bucketName = bucketName,
+                            mimeType = mimeType,
+                            isVideo = isVideo,
+                            sizeBytes = sizeBytes,
+                            dateTakenMs = if (dateTakenMs > 0L) dateTakenMs else dateAddedMs,
+                            dateAddedMs = dateAddedMs
+                        )
+                        if (AutoBackupLogic.shouldIncludeCandidate(candidate, config)) {
+                            candidates.add(candidate)
+                        }
+                    }
+                }
+            } catch (_: SecurityException) {
+            } catch (_: Exception) {
+            }
+        }
+
+        if (config.mediaScope != BackupMediaScope.VIDEO) {
+            queryCollection(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, isVideo = false)
+        }
+        if (config.mediaScope != BackupMediaScope.PHOTO) {
+            queryCollection(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, isVideo = true)
+        }
+
+        candidates.sortedBy { it.dateAddedMs }
+    }
+
+    suspend fun computeUriSha256(uri: Uri): String? = withContext(Dispatchers.IO) {
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                AutoBackupLogic.computeSha256HexStream(input)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Queries POST /api/backup/check in batches of up to 400 hashes to determine which files
+     * are already backed up as ACTIVE files in the user's encrypted vault (excluding Trash).
+     * Returns Pair(existingSha256Set, serverMaxUploadMb?) or null if network/auth failed.
+     */
+    suspend fun checkBackupHashes(
+        items: List<Pair<String, Long>>
+    ): Pair<Set<String>, Int?>? = withContext(Dispatchers.IO) {
+        if (items.isEmpty()) return@withContext Pair(emptySet(), null)
+        val existingSet = HashSet<String>()
+        var serverMaxMb: Int? = null
+        val batchSize = 400
+
+        try {
+            var offset = 0
+            while (offset < items.size) {
+                val batch = items.subList(offset, (offset + batchSize).coerceAtMost(items.size))
+                val arr = JSONArray()
+                for ((sha, size) in batch) {
+                    val obj = JSONObject()
+                    obj.put("sha256", sha)
+                    if (size >= 0L) obj.put("sizeBytes", size)
+                    arr.put(obj)
+                }
+                val payload = JSONObject().put("items", arr).toString()
+                val req = Request.Builder()
+                    .url("${cleanBaseUrl()}/api/backup/check")
+                    .header("Accept", "application/json")
+                    .post(payload.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()))
+                    .build()
+
+                httpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        return@withContext null
+                    }
+                    val bodyStr = resp.body?.string() ?: ""
+                    val json = JSONObject(bodyStr)
+                    val hashesArr = json.optJSONArray("existingSha256")
+                    if (hashesArr != null) {
+                        for (i in 0 until hashesArr.length()) {
+                            val h = hashesArr.optString(i, "").trim().lowercase(Locale.ROOT)
+                            if (h.length == 64) existingSet.add(h)
+                        }
+                    }
+                    if (json.has("maxUploadMb")) {
+                        val m = json.optInt("maxUploadMb", 0)
+                        if (m > 0) serverMaxMb = m
+                    }
+                }
+                offset += batchSize
+            }
+            Pair(existingSet, serverMaxMb)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Uploads a single auto-backup media item via streaming:
+     * - Files <= 24 MB go through POST /upload?skipList=1 with X-Backup-Origin: auto and original timestamp.
+     * - Large files (> 24 MB) stream 8 MB slices through /api/upload/chunked/* (supporting up to MAX_UPLOAD_MB).
+     */
+    suspend fun uploadAutoBackupCandidate(
+        candidate: MediaBackupCandidate,
+        sha256: String,
+        serverMaxUploadMb: Int? = null
+    ): BackupUploadOutcome = withContext(Dispatchers.IO) {
+        val maxServerBytes = (serverMaxUploadMb ?: 2048).toLong() * 1024L * 1024L
+        if (candidate.sizeBytes > maxServerBytes) {
+            return@withContext BackupUploadOutcome(
+                uploaded = false,
+                retryable = false,
+                errorMessage = "File oltre il limite server (${serverMaxUploadMb ?: 2048} MB)"
+            )
+        }
+
+        val uri = Uri.parse(candidate.uriString)
+        val effectiveTimestampMs = if (candidate.dateTakenMs > 0L) candidate.dateTakenMs else candidate.dateAddedMs
+
+        if (!AutoBackupLogic.shouldUseChunkedUpload(candidate.sizeBytes)) {
+            return@withContext try {
+                val mediaType = candidate.mimeType.toMediaTypeOrNull() ?: "application/octet-stream".toMediaTypeOrNull()
+                val fileBody = UriStreamingRequestBody(
+                    context = context,
+                    uri = uri,
+                    mediaType = mediaType,
+                    knownByteSize = candidate.sizeBytes
+                )
+                val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
+                    .addFormDataPart("skipList", "1")
+                    .addFormDataPart("timestamp[]", effectiveTimestampMs.toString())
+                    .addFormDataPart("file[]", candidate.displayName, fileBody)
+                    .build()
+
+                val req = Request.Builder()
+                    .url("${cleanBaseUrl()}/upload?skipList=1")
+                    .header("X-Backup-Origin", "auto")
+                    .header("Accept", "application/json")
+                    .post(multipart)
+                    .build()
+
+                httpClient.newCall(req).execute().use { resp ->
+                    val bodyStr = resp.body?.string().orEmpty()
+                    if (resp.isSuccessful) {
+                        val json = try { JSONObject(bodyStr) } catch (_: Exception) { null }
+                        val serverName = json?.optJSONArray("uploadedFilenames")?.optString(0, "")
+                            ?.ifBlank { candidate.displayName } ?: candidate.displayName
+                        BackupUploadOutcome(uploaded = true, retryable = false, serverFilename = serverName)
+                    } else {
+                        val errMsg = try {
+                            JSONObject(bodyStr).optString("error", "HTTP ${resp.code}")
+                        } catch (_: Exception) {
+                            "HTTP ${resp.code}"
+                        }
+                        BackupUploadOutcome(
+                            uploaded = false,
+                            retryable = AutoBackupLogic.isRetryableHttpCode(resp.code),
+                            errorMessage = errMsg
+                        )
+                    }
+                }
+            } catch (e: IOException) {
+                BackupUploadOutcome(uploaded = false, retryable = true, errorMessage = e.localizedMessage ?: "Errore rete")
+            } catch (e: Exception) {
+                BackupUploadOutcome(uploaded = false, retryable = false, errorMessage = e.localizedMessage ?: "Errore upload")
+            }
+        }
+
+        // Chunked streaming path for large videos/files (> 24 MB)
+        try {
+            val initPayload = JSONObject().apply {
+                put("filename", candidate.displayName)
+                put("totalSize", candidate.sizeBytes)
+                put("chunkSizeBytes", 8 * 1024 * 1024)
+                if (effectiveTimestampMs > 0L) put("timestampMs", effectiveTimestampMs)
+                if (sha256.length == 64) put("sha256", sha256)
+                put("backupOrigin", "auto")
+            }.toString()
+
+            val initReq = Request.Builder()
+                .url("${cleanBaseUrl()}/api/upload/chunked/init")
+                .header("X-Backup-Origin", "auto")
+                .header("Accept", "application/json")
+                .post(initPayload.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()))
+                .build()
+
+            var uploadId = ""
+            var chunkSizeBytes = 8 * 1024 * 1024
+            var totalChunks = 0
+
+            httpClient.newCall(initReq).execute().use { resp ->
+                val bodyStr = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    val errMsg = try { JSONObject(bodyStr).optString("error", "HTTP ${resp.code}") } catch (_: Exception) { "HTTP ${resp.code}" }
+                    return@withContext BackupUploadOutcome(
+                        uploaded = false,
+                        retryable = AutoBackupLogic.isRetryableHttpCode(resp.code),
+                        errorMessage = errMsg
+                    )
+                }
+                val json = JSONObject(bodyStr)
+                uploadId = json.getString("uploadId")
+                chunkSizeBytes = json.optInt("chunkSizeBytes", 8 * 1024 * 1024).coerceIn(64 * 1024, 16 * 1024 * 1024)
+                totalChunks = json.getInt("totalChunks")
+            }
+
+            val stream = context.contentResolver.openInputStream(uri)
+                ?: return@withContext BackupUploadOutcome(uploaded = false, retryable = false, errorMessage = "Impossibile aprire file locale")
+
+            val chunkBuffer = ByteArray(chunkSizeBytes)
+            stream.use { input ->
+                for (chunkIdx in 0 until totalChunks) {
+                    val offset = chunkIdx.toLong() * chunkSizeBytes.toLong()
+                    val expectedLen = minOf(chunkSizeBytes.toLong(), (candidate.sizeBytes - offset).coerceAtLeast(0L)).toInt()
+                    var filled = 0
+                    while (filled < expectedLen) {
+                        val n = input.read(chunkBuffer, filled, expectedLen - filled)
+                        if (n <= 0) break
+                        filled += n
+                    }
+                    if (filled != expectedLen) {
+                        return@withContext BackupUploadOutcome(
+                            uploaded = false,
+                            retryable = true,
+                            errorMessage = "Lettura incompleta del chunk $chunkIdx"
+                        )
+                    }
+
+                    val body = chunkBuffer.toRequestBody("application/octet-stream".toMediaTypeOrNull(), 0, filled)
+                    var chunkSuccess = false
+                    var lastErr = "Errore invio chunk"
+                    var lastRetryable = true
+
+                    for (attempt in 0 until 3) {
+                        try {
+                            val putReq = Request.Builder()
+                                .url("${cleanBaseUrl()}/api/upload/chunked/$uploadId/$chunkIdx")
+                                .header("X-Backup-Origin", "auto")
+                                .header("Accept", "application/json")
+                                .put(body)
+                                .build()
+                            httpClient.newCall(putReq).execute().use { resp ->
+                                if (resp.isSuccessful) {
+                                    chunkSuccess = true
+                                } else {
+                                    lastErr = "HTTP ${resp.code} chunk $chunkIdx"
+                                    lastRetryable = AutoBackupLogic.isRetryableHttpCode(resp.code)
+                                }
+                            }
+                        } catch (e: IOException) {
+                            lastErr = e.localizedMessage ?: "Errore rete chunk $chunkIdx"
+                            lastRetryable = true
+                        }
+                        if (chunkSuccess || !lastRetryable) break
+                        delay((1000L * (1 shl attempt)).coerceAtMost(4000L))
+                    }
+
+                    if (!chunkSuccess) {
+                        return@withContext BackupUploadOutcome(
+                            uploaded = false,
+                            retryable = lastRetryable,
+                            errorMessage = lastErr
+                        )
+                    }
+                }
+            }
+
+            val completeReq = Request.Builder()
+                .url("${cleanBaseUrl()}/api/upload/chunked/$uploadId/complete?skipList=1")
+                .header("X-Backup-Origin", "auto")
+                .header("Accept", "application/json")
+                .post("{\"skipList\":true}".toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull()))
+                .build()
+
+            httpClient.newCall(completeReq).execute().use { resp ->
+                val bodyStr = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val json = try { JSONObject(bodyStr) } catch (_: Exception) { null }
+                    val serverName = json?.optString("filename", "").orEmpty().ifBlank { candidate.displayName }
+                    BackupUploadOutcome(uploaded = true, retryable = false, serverFilename = serverName)
+                } else {
+                    val errMsg = try { JSONObject(bodyStr).optString("error", "HTTP ${resp.code}") } catch (_: Exception) { "HTTP ${resp.code}" }
+                    BackupUploadOutcome(
+                        uploaded = false,
+                        retryable = AutoBackupLogic.isRetryableHttpCode(resp.code),
+                        errorMessage = errMsg
+                    )
+                }
+            }
+        } catch (e: IOException) {
+            BackupUploadOutcome(uploaded = false, retryable = true, errorMessage = e.localizedMessage ?: "Errore rete chunked")
+        } catch (e: Exception) {
+            BackupUploadOutcome(uploaded = false, retryable = false, errorMessage = e.localizedMessage ?: "Errore upload chunked")
+        }
+    }
+
     companion object {
         fun resolveViewerSpec(filename: String): FileViewerSpecModel {
             val ext = filename.substringAfterLast('.', "").lowercase(Locale.ROOT)
@@ -4382,3 +5136,17 @@ data class MapPhotoModel(
     val album: String
 )
 
+// ---------------------------------------------------------------------------
+// v1.5.0 — Varianti miniature persistenti
+// ---------------------------------------------------------------------------
+enum class ThumbVariant(val queryValue: String, val maxEdgePx: Int) {
+    THUMB("thumb", 320),
+    LARGE("large", 1280)
+}
+
+data class ServerThumbStatsModel(
+    val diskBytes: Long,
+    val maxBytes: Long,
+    val variantCount: Int,
+    val negativeCount: Int
+)

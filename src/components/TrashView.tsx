@@ -110,9 +110,10 @@ export const TrashView: React.FC<TrashViewProps> = ({
                         </video>
                       ) : (
                         <img
-                          src={`/media/${encodeURIComponent(media.filename)}?from_trash=true`}
+                          src={`/media/${encodeURIComponent(media.filename)}?from_trash=true&preview=thumb`}
                           alt={media.filename}
                           loading="lazy"
+                          decoding="async"
                         />
                       )}
                       <div className="media-actions" style={{ opacity: 1 }}>

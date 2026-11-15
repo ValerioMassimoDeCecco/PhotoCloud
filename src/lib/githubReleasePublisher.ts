@@ -85,6 +85,7 @@ const EXCLUDED_SYNC_DIRS = new Set(['.git', 'node_modules', 'build', '.gradle', 
 
 const EXPLICIT_SYNC_FILES = [
   'README.md',
+  'CHANGELOG.md',
   '.gitignore',
   '.github/workflows/android-ci.yml',
   '.github/workflows/android-release.yml',
@@ -111,6 +112,7 @@ const EXPLICIT_SYNC_FILES = [
   'src/lib/exif.ts',
   'src/lib/githubReleasePublisher.ts',
   'src/lib/grouping.ts',
+  'src/lib/hashIndex.ts',
   'src/lib/liquidGlassEngine.ts',
   'src/lib/mapPage.ts',
   'src/lib/nlSearch.ts',
@@ -121,6 +123,7 @@ const EXPLICIT_SYNC_FILES = [
   'src/lib/sharePage.ts',
   'src/lib/sharing.ts',
   'src/lib/templateRenderer.ts',
+  'src/lib/thumbCache.ts',
   'src/lib/trustProxy.ts',
   'src/lib/vaultStorage.ts',
 ];

@@ -572,6 +572,38 @@
                     </div>
                 </div>
 
+                <!-- 0C. Persistent Encrypted Thumbnail Cache Card -->
+                <div class="lg-section-block" id="settings-thumb-cache-card">
+                    <div class="cloud-storage-settings-header" style="gap:12px;">
+                        <h3><span class="material-icons">photo_size_select_large</span> Cache miniature</h3>
+                        <span id="settings-thumb-cache-cap" style="font-size:12px;font-weight:600;opacity:0.78;font-variant-numeric:tabular-nums;">Tetto server: —</span>
+                    </div>
+                    <p style="margin:0 0 12px;font-size:12px;opacity:0.82;">
+                        Il server genera e cifra miniature JPEG q=80 (320px per griglia e 1280px per lightbox) con la chiave del tuo account per ridurre banda e attese.
+                    </p>
+                    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:10px 0;border-top:1px solid rgba(148,163,184,0.2);border-bottom:1px solid rgba(148,163,184,0.2);margin-bottom:12px;">
+                        <div>
+                            <div style="font-size:11px;opacity:0.72;">Spazio miniature cifrate</div>
+                            <div id="settings-thumb-cache-bytes" style="font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;">—</div>
+                        </div>
+                        <div>
+                            <div style="font-size:11px;opacity:0.72;">Varianti in cache</div>
+                            <div id="settings-thumb-cache-entries" style="font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;">—</div>
+                        </div>
+                        <div>
+                            <div style="font-size:11px;opacity:0.72;">Media non convertibili</div>
+                            <div id="settings-thumb-cache-negative" style="font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;">—</div>
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+                        <span id="settings-thumb-cache-status" style="font-size:12px;opacity:0.82;">Stato cache disponibile dopo l'accesso.</span>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <button type="button" class="btn outlined" id="settings-thumb-refresh-btn" style="width:auto;height:36px;padding:0 14px;margin:0;font-size:12px;white-space:nowrap;">Aggiorna</button>
+                            <button type="button" class="btn primary" id="settings-thumb-rebuild-btn" style="width:auto;height:36px;padding:0 14px;margin:0;font-size:12px;white-space:nowrap;">Ricostruisci cache</button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- 1. Theme Selector -->
                 <div class="lg-section-block">
                     <h3><span class="material-icons">palette</span> Selezione Tema Applicazione</h3>

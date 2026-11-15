@@ -52,6 +52,8 @@ export interface CloudStorageStats {
   activeTotalFormatted: string;
   trashFormatted: string;
   grandTotalFormatted: string;
+  thumbCacheBytes?: number;
+  thumbCacheFormatted?: string;
 }
 
 export function formatFileSize(bytes?: number): string {
@@ -63,7 +65,8 @@ export function formatFileSize(bytes?: number): string {
 
 export function computeCloudStorageStats(
   activeFiles: MediaItem[] = [],
-  trashedFiles: MediaItem[] = []
+  trashedFiles: MediaItem[] = [],
+  thumbCacheBytes = 0
 ): CloudStorageStats {
   let mediaBytes = 0;
   let mediaCount = 0;
@@ -124,6 +127,8 @@ export function computeCloudStorageStats(
     activeTotalFormatted: formatFileSize(activeBytes),
     trashFormatted: formatFileSize(trashBytes),
     grandTotalFormatted: formatFileSize(grandTotalBytes),
+    thumbCacheBytes: Math.max(0, Number(thumbCacheBytes) || 0),
+    thumbCacheFormatted: formatFileSize(thumbCacheBytes),
   };
 }
 
@@ -208,7 +213,10 @@ export function renderGalleryTemplate(
 
       let mediaTag = '';
       if (isImg) {
-        mediaTag = `<img src="/media/${encodeURIComponent(item.filename)}" alt="${file}" loading="lazy">`;
+        mediaTag = `<img src="/media/${encodeURIComponent(item.filename)}?preview=thumb" alt="${file}" loading="lazy" decoding="async">`;
+      } else if (isVid && item.hasThumb) {
+        mediaTag = `<img src="/media/${encodeURIComponent(item.filename)}?preview=thumb" alt="${file}" loading="lazy" decoding="async">
+                    <div class="video-overlay"><span class="material-icons">play_circle</span></div>`;
       } else if (isVid) {
         const videoMime =
           ext === 'webm'
@@ -891,7 +899,7 @@ export function renderTrashTemplate(trashedFiles: MediaItem[], activeFiles: Medi
 
             let mediaTag = '';
             if (isImg) {
-              mediaTag = `<img src="/media/${encodeURIComponent(item.filename)}?from_trash=true" alt="${file}" loading="lazy">`;
+              mediaTag = `<img src="/media/${encodeURIComponent(item.filename)}?from_trash=true&preview=thumb" alt="${file}" loading="lazy" decoding="async">`;
             } else if (isVid) {
               mediaTag = `<video preload="metadata">
                                 <source src="/media/${encodeURIComponent(item.filename)}?from_trash=true#t=0.5" type="video/mp4">
