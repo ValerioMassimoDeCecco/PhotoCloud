@@ -6578,13 +6578,13 @@ fun NativeSettingsScreen(
             )
             Spacer(Modifier.height(10.dp))
 
-            SettingsToggleRow(
-                label = if (backupConfig.enabled) {
+            SettingsSwitchRow(
+                title = if (backupConfig.enabled) {
                     if (backupConfig.paused) "Backup automatico (In pausa)" else "Backup automatico attivo"
                 } else {
                     "Attiva backup automatico"
                 },
-                description = if (AutoBackupLogic.isHttpsServerUrl(serverUrl)) {
+                subtitle = if (AutoBackupLogic.isHttpsServerUrl(serverUrl)) {
                     "Connessione sicura HTTPS attiva"
                 } else {
                     "Server su HTTP: richiesta conferma esplicita"
@@ -6754,21 +6754,21 @@ fun NativeSettingsScreen(
             }
 
             Spacer(Modifier.height(10.dp))
-            SettingsToggleRow(
-                label = "Solo su Wi-Fi",
-                description = "Evita consumo dati cellulare durante i caricamenti",
+            SettingsSwitchRow(
+                title = "Solo su Wi-Fi",
+                subtitle = "Evita consumo dati cellulare durante i caricamenti",
                 checked = backupConfig.wifiOnly,
                 onCheckedChange = { applyBackupConfig(backupConfig.copy(wifiOnly = it)) }
             )
-            SettingsToggleRow(
-                label = "Solo durante la ricarica",
-                description = "Esegue il backup automatico solo con cavo collegato",
+            SettingsSwitchRow(
+                title = "Solo durante la ricarica",
+                subtitle = "Esegue il backup automatico solo con cavo collegato",
                 checked = backupConfig.chargingOnly,
                 onCheckedChange = { applyBackupConfig(backupConfig.copy(chargingOnly = it)) }
             )
-            SettingsToggleRow(
-                label = "Rispetta Risparmio Energetico",
-                description = "Sospende i caricamenti quando il risparmio batteria è attivo",
+            SettingsSwitchRow(
+                title = "Rispetta Risparmio Energetico",
+                subtitle = "Sospende i caricamenti quando il risparmio batteria è attivo",
                 checked = backupConfig.respectBatterySaver,
                 onCheckedChange = { applyBackupConfig(backupConfig.copy(respectBatterySaver = it)) }
             )

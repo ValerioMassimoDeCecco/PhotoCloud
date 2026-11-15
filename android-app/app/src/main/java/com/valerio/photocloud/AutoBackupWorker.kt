@@ -277,7 +277,7 @@ class AutoBackupWorker(
 
             if (uploadedCount > 0) {
                 try {
-                    val sync = apiClient.syncGallery()
+                    val sync = apiClient.syncGallerySession()
                     if (sync is GallerySyncResult.Authenticated) {
                         PhotoAiIndexingWorker.enqueueIndexing(applicationContext, forceReindex = false)
                     }
