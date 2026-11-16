@@ -89,9 +89,11 @@ import {
   generateAppBuildGradleKts,
   generateMainActivityKt,
 } from './src/lib/androidBuilder';
+import { createZkV2Router } from './src/lib/zkServerV2';
 
 const APP_ROOT = process.cwd();
 const UPLOAD_FOLDER = path.resolve(APP_ROOT, 'user_media');
+const VAULT_V2_FOLDER = path.resolve(APP_ROOT, process.env.VAULT_V2_DIR || 'vault_v2');
 const TEMP_UPLOAD_DIR = path.resolve(APP_ROOT, 'temp_uploads');
 const RELEASE_DIR = path.resolve(process.cwd(), 'release');
 
@@ -850,6 +852,15 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+  const zkV2 = createZkV2Router({
+    vaultV2Dir: VAULT_V2_FOLDER,
+    tempUploadDir: TEMP_UPLOAD_DIR,
+    serverSecret: getOrCreateServerSecret(UPLOAD_FOLDER),
+    maxUploadBytes: MAX_UPLOAD_BYTES,
+  });
+  app.use('/api/v2', zkV2.router);
+
   app.use('/static', express.static(STATIC_DIR));
   app.use(express.static(path.resolve(process.cwd(), 'public'), { index: false }));
   app.use('/release', express.static(RELEASE_DIR));

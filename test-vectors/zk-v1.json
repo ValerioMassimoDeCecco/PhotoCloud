@@ -1,0 +1,275 @@
+{
+  "version": "photocloud-zk-v1",
+  "specVersion": 2,
+  "description": "Shared deterministic test vectors for PhotoCloud Zero-Knowledge v2 (TypeScript Web/Node & Android Kotlin), generated independently by scripts/gen-zk-vectors.py",
+  "rfc5869HkdfSha256": [
+    {
+      "name": "RFC 5869 Test Case 1",
+      "ikmHex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "saltHex": "000102030405060708090a0b0c",
+      "infoHex": "f0f1f2f3f4f5f6f7f8f9",
+      "length": 42,
+      "expectedOkmHex": "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
+    },
+    {
+      "name": "RFC 5869 Test Case 2",
+      "ikmHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+      "saltHex": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "infoHex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "length": 82,
+      "expectedOkmHex": "b11e398dc80327a1c8e7f78c596a49344f012eda2d4efad8a050cc4c19afa97c59045a99cac7827271cb41c65e590e09da3275600c2f09b8367793a9aca3db71cc30c58179ec3e87c14c01d5c1f3434f1d87"
+    },
+    {
+      "name": "RFC 5869 Test Case 3 (zero-length salt and info)",
+      "ikmHex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "saltHex": "",
+      "infoHex": "",
+      "length": 42,
+      "expectedOkmHex": "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"
+    }
+  ],
+  "rfc9106SelfCheck": {
+    "description": "RFC 9106 Section 5.3 Official Argon2id Test Vector",
+    "passwordHex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "saltHex": "02020202020202020202020202020202",
+    "secretHex": "0303030303030303",
+    "associatedDataHex": "040404040404040404040404",
+    "mKiB": 32,
+    "t": 3,
+    "p": 4,
+    "tagLen": 32,
+    "expectedTagHex": "0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659"
+  },
+  "inputs": {
+    "userId": "550e8400-e29b-41d4-a716-446655440000",
+    "username": "alice",
+    "accountKeyHex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "accountKeyB64u": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+    "userSaltHex": "a1a2a3a4a5a6a7a8a9aaabacadaeafb0",
+    "userSaltB64u": "oaKjpKWmp6ipqqusra6vsA",
+    "passphraseUtf8": "correct-horse-battery-staple-zk2",
+    "argon2SpecParams": {
+      "memoryKiB": 65536,
+      "iterations": 3,
+      "parallelism": 1,
+      "hashLength": 32
+    },
+    "argon2FastParams": {
+      "memoryKiB": 1024,
+      "iterations": 2,
+      "parallelism": 1,
+      "hashLength": 32
+    }
+  },
+  "keyHierarchy": {
+    "withPassphraseSpec": {
+      "passphrasePartHex": "b970fe0f575b33a4da8de415b9a900246daf28a3e8f34bc69ed7fe0771d9e1c8",
+      "passphrasePartB64u": "uXD-D1dbM6TajeQVuakAJG2vKKPo80vGntf-B3HZ4cg",
+      "ikmHex": "b970fe0f575b33a4da8de415b9a900246daf28a3e8f34bc69ed7fe0771d9e1c80102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "rootHex": "a834f62139e05e3e689154e57017fe9e9d7c866ebe4150c44820d55383b91fee",
+      "rootB64u": "qDT2ITngXj5okVTlcBf-np18hm6-QVDESCDVU4O5H-4",
+      "kekHex": "5078a646216866f7992aaee79c98cc6434a3ba4fe0338dfbd74b077aad4c12d0",
+      "kekB64u": "UHimRiFoZveZKq7nnJjMZDSjuk_gM43710sHeq1MEtA",
+      "authSecretHex": "4a93079edce00d41eb459a4bf096dbfe3e1b93a2f3da410666cfe31ad08f3033",
+      "authSecretB64u": "SpMHntzgDUHrRZpL8Jbb_j4bk6Lz2kEGZs_jGtCPMDM"
+    },
+    "withPassphraseFast": {
+      "passphrasePartHex": "d74d8bce4a1141105eee88b2be18a7fb32060bf71bdf290b47683587e74727b0",
+      "passphrasePartB64u": "102LzkoRQRBe7oiyvhin-zIGC_cb3ykLR2g1h-dHJ7A",
+      "ikmHex": "d74d8bce4a1141105eee88b2be18a7fb32060bf71bdf290b47683587e74727b00102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "rootHex": "9b3ba017866da58ce1a3630b9a995324da8574a579ffebad632844f34cd3ab90",
+      "rootB64u": "mzugF4ZtpYzho2MLmplTJNqFdKV5_-utYyhE80zTq5A",
+      "kekHex": "5d1ca2f63bccfa3a2a5ea0fb95cf46b66d806500ef169be01e15f20c3f0f2d45",
+      "kekB64u": "XRyi9jvM-joqXqD7lc9Gtm2AZQDvFpvgHhXyDD8PLUU",
+      "authSecretHex": "06b05954962ab39c2fc72bcd8b8a8cdfff7483d930fb5312b25914d91e848ff0",
+      "authSecretB64u": "BrBZVJYqs5wvxyvNi4qM3_90g9kw-1MSslkU2R6Ej_A"
+    },
+    "withoutPassphrase": {
+      "passphrasePartHex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "passphrasePartB64u": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ikmHex": "00000000000000000000000000000000000000000000000000000000000000000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "rootHex": "d4d145f60d8700c85c5496b44b387bd5aae7ffde1ff9da7025cc378e11ae65c0",
+      "rootB64u": "1NFF9g2HAMhcVJa0Szh71arn_94f-dpwJcw3jhGuZcA",
+      "kekHex": "994c689e70f3e5844a4147c2c715fd6657f08cbc8a6440d6af2e57c0bfe94786",
+      "kekB64u": "mUxonnDz5YRKQUfCxxX9ZlfwjLyKZEDWry5XwL_pR4Y",
+      "authSecretHex": "7febb57e791de326f7de39a6b41a565d02f2a6729c44d95ae73ce0f42c84fe34",
+      "authSecretB64u": "f-u1fnkd4yb33jmmtBpWXQLypnKcRNla5zzg9CyE_jQ"
+    }
+  },
+  "vaultKeyAndSubkeys": {
+    "vaultKeyHex": "102030405060708090a0b0c0d0e0f000112233445566778899aabbccddeeff00",
+    "vaultKeyB64u": "ECAwQFBgcICQoLDA0ODwABEiM0RVZneImaq7zN3u_wA",
+    "vkWrapNonceHex": "b1b2b3b4b5b6b7b8b9babbbc",
+    "vkWrapAadUtf8": "vk|550e8400-e29b-41d4-a716-446655440000",
+    "vkWrapAadHex": "766b7c35353065383430302d653239622d343164342d613731362d343436363535343430303030",
+    "wrappedVkSpecHex": "b1b2b3b4b5b6b7b8b9babbbc35e59821c0cf4f22e7b09eb7a14411cd3b2d12180ee1ab92332786bc8870151ecfd233c1da2ae43bc9ea29ee98a12e35",
+    "wrappedVkSpecB64u": "sbKztLW2t7i5uru8NeWYIcDPTyLnsJ63oUQRzTstEhgO4auSMyeGvIhwFR7P0jPB2irkO8nqKe6YoS41",
+    "wrappedVkFastHex": "b1b2b3b4b5b6b7b8b9babbbcf3e68f495df5ca45d215ef21d4baf3552c99d444e24dea97a83cd05f5f4b445d392dcfb76b330095c3dcf8f426be675f",
+    "wrappedVkFastB64u": "sbKztLW2t7i5uru88-aPSV31ykXSFe8h1LrzVSyZ1ETiTeqXqDzQX19LRF05Lc-3azMAlcPc-PQmvmdf",
+    "wrappedVkNoPassHex": "b1b2b3b4b5b6b7b8b9babbbc4aa22944a7b91ccb6826ac67a8e792d6304bedd4a16cf4c3bee9bacd7cd36ebe82936023bffdfad6a86fe967240c9117",
+    "wrappedVkNoPassB64u": "sbKztLW2t7i5uru8SqIpRKe5HMtoJqxnqOeS1jBL7dShbPTDvum6zXzTbr6Ck2Ajv_361qhv6WckDJEX",
+    "subkeys": {
+      "metaKeyHex": "08850cff0c4200f9abc635ada333a4cd873332c1103c1f1a811f5261c4facf44",
+      "metaKeyB64u": "CIUM_wxCAPmrxjWtozOkzYczMsEQPB8agR9SYcT6z0Q",
+      "thumbKeyHex": "f2bec152346149fbd7eb8e16b23e44adc1c6c886c9727862d169467a39ba51fe",
+      "thumbKeyB64u": "8r7BUjRhSfvX644Wsj5ErcHGyIbJcnhi0WlGejm6Uf4",
+      "dedupKeyHex": "2bebbfbb67db73c4d8d1e7a4d641872eb1db25ecf06a703e8b7eaefc0c637d60",
+      "dedupKeyB64u": "K-u_u2fbc8TY0eek1kGHLrHbJezwanA-i36u_AxjfWA",
+      "fkWrapKeyHex": "231ec02768b6adb089b2edbf78152bb3fec243cd52d5fe032f57fb67800a8291",
+      "fkWrapKeyB64u": "Ix7AJ2i2rbCJsu2_eBUrs_7CQ81S1f4DL1f7Z4AKgpE"
+    }
+  },
+  "fileKeyWrap": {
+    "blobId": "d3b07384-d113-4e59-9c2a-7b8e1f02a3c4",
+    "blobIdBytesHex": "d3b07384d1134e599c2a7b8e1f02a3c4",
+    "fileKeyHex": "f0e1d2c3b4a5968778695a4b3c2d1e0f0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "fileKeyB64u": "8OHSw7Sllod4aVpLPC0eDw8eLTxLWml4h5altMPS4fA",
+    "fkWrapNonceHex": "c1c2c3c4c5c6c7c8c9cacbcc",
+    "fkWrapAadHex": "d3b07384d1134e599c2a7b8e1f02a3c4",
+    "wrappedFkHex": "c1c2c3c4c5c6c7c8c9cacbcc5d69d3edb6604d76f5bcc42fa94f85f15e80e4ac0818751151d1caaf2ecbc7812a9374ba67d398b736978aec2f9f3a27",
+    "wrappedFkB64u": "wcLDxMXGx8jJysvMXWnT7bZgTXb1vMQvqU-F8V6A5KwIGHURUdHKry7Lx4Eqk3S6Z9OYtzaXiuwvnzon"
+  },
+  "pczkBlobs": {
+    "noncePrefixHex": "deadbeef",
+    "emptyFile": {
+      "fixtureFile": "test-vectors/interop-empty.pczk",
+      "chunkSizeLog2": 20,
+      "plaintextLength": 0,
+      "totalCiphertextLength": 102,
+      "headerHex": "50435a4b0114d3b07384d1134e599c2a7b8e1f02a3c4deadbeefc1c2c3c4c5c6c7c8c9cacbcc5d69d3edb6604d76f5bcc42fa94f85f15e80e4ac0818751151d1caaf2ecbc7812a9374ba67d398b736978aec2f9f3a27",
+      "headerB64u": "UENaSwEU07BzhNETTlmcKnuOHwKjxN6tvu_BwsPExcbHyMnKy8xdadPttmBNdvW8xC-pT4XxXoDkrAgYdRFR0cqvLsvHgSqTdLpn05i3NpeK7C-fOic",
+      "headerSha256Hex": "0b7971858782849060c8b700ea061afabab42bc7be30f4a78a3901bda1afd123",
+      "ciphertextSha256Hex": "0bc0b3d5c1a9b6df5510b5b7ee2c55f28adcf213764ee285365bd73777e9e0ce",
+      "chunks": [
+        {
+          "chunkIndex": 0,
+          "isLast": true,
+          "plaintextLength": 0,
+          "ciphertextWithTagLength": 16,
+          "nonceHex": "deadbeef0000000000000000",
+          "aadHex": "0b7971858782849060c8b700ea061afabab42bc7be30f4a78a3901bda1afd12301",
+          "tagHex": "c63434176eb4b63049be3a040eee82f1"
+        }
+      ],
+      "fullBlobHex": "50435a4b0114d3b07384d1134e599c2a7b8e1f02a3c4deadbeefc1c2c3c4c5c6c7c8c9cacbcc5d69d3edb6604d76f5bcc42fa94f85f15e80e4ac0818751151d1caaf2ecbc7812a9374ba67d398b736978aec2f9f3a27c63434176eb4b63049be3a040eee82f1",
+      "fullBlobB64u": "UENaSwEU07BzhNETTlmcKnuOHwKjxN6tvu_BwsPExcbHyMnKy8xdadPttmBNdvW8xC-pT4XxXoDkrAgYdRFR0cqvLsvHgSqTdLpn05i3NpeK7C-fOifGNDQXbrS2MEm-OgQO7oLx"
+    },
+    "singleChunk": {
+      "fixtureFile": "test-vectors/interop-single.pczk",
+      "plaintextUtf8": "PhotoCloud Zero-Knowledge Test Vector",
+      "plaintextHex": "50686f746f436c6f7564205a65726f2d4b6e6f776c65646765205465737420566563746f72",
+      "chunkSizeLog2": 20,
+      "plaintextLength": 37,
+      "totalCiphertextLength": 139,
+      "headerHex": "50435a4b0114d3b07384d1134e599c2a7b8e1f02a3c4deadbeefc1c2c3c4c5c6c7c8c9cacbcc5d69d3edb6604d76f5bcc42fa94f85f15e80e4ac0818751151d1caaf2ecbc7812a9374ba67d398b736978aec2f9f3a27",
+      "headerB64u": "UENaSwEU07BzhNETTlmcKnuOHwKjxN6tvu_BwsPExcbHyMnKy8xdadPttmBNdvW8xC-pT4XxXoDkrAgYdRFR0cqvLsvHgSqTdLpn05i3NpeK7C-fOic",
+      "headerSha256Hex": "0b7971858782849060c8b700ea061afabab42bc7be30f4a78a3901bda1afd123",
+      "ciphertextSha256Hex": "17cf950946ffa550b92fc588fdae4565e4df40180f35bfe556229090acb1ea50",
+      "chunks": [
+        {
+          "chunkIndex": 0,
+          "isLast": true,
+          "plaintextLength": 37,
+          "ciphertextWithTagLength": 53,
+          "nonceHex": "deadbeef0000000000000000",
+          "aadHex": "0b7971858782849060c8b700ea061afabab42bc7be30f4a78a3901bda1afd12301",
+          "tagHex": "74ea0f7406e7f6dbac2403bc0cef9c59"
+        }
+      ],
+      "fullBlobHex": "50435a4b0114d3b07384d1134e599c2a7b8e1f02a3c4deadbeefc1c2c3c4c5c6c7c8c9cacbcc5d69d3edb6604d76f5bcc42fa94f85f15e80e4ac0818751151d1caaf2ecbc7812a9374ba67d398b736978aec2f9f3a2796aca535cf586fc0dfcab77eb5abb62afecf4ddce1bfee3834996e3e4f052eab15f37a91f374ea0f7406e7f6dbac2403bc0cef9c59",
+      "fullBlobB64u": "UENaSwEU07BzhNETTlmcKnuOHwKjxN6tvu_BwsPExcbHyMnKy8xdadPttmBNdvW8xC-pT4XxXoDkrAgYdRFR0cqvLsvHgSqTdLpn05i3NpeK7C-fOieWrKU1z1hvwN_Kt361q7Yq_s9N3OG_7jg0mW4-TwUuqxXzepHzdOoPdAbn9tusJAO8DO-cWQ"
+    },
+    "multiChunk": {
+      "fixtureFile": "test-vectors/interop-multi.pczk",
+      "plaintextGeneratorFormula": "byte[i] = (i * 31 + 17) & 0xff for i in 0..149999",
+      "plaintextSha256Hex": "6737c280b0a58bca2b6fa672bbbf05029041783e75785e4494982265905a2f2a",
+      "chunkSizeLog2": 16,
+      "plaintextLength": 150000,
+      "totalCiphertextLength": 150134,
+      "headerHex": "50435a4b0110d3b07384d1134e599c2a7b8e1f02a3c4deadbeefc1c2c3c4c5c6c7c8c9cacbcc5d69d3edb6604d76f5bcc42fa94f85f15e80e4ac0818751151d1caaf2ecbc7812a9374ba67d398b736978aec2f9f3a27",
+      "headerB64u": "UENaSwEQ07BzhNETTlmcKnuOHwKjxN6tvu_BwsPExcbHyMnKy8xdadPttmBNdvW8xC-pT4XxXoDkrAgYdRFR0cqvLsvHgSqTdLpn05i3NpeK7C-fOic",
+      "headerSha256Hex": "07fbf08f498b95eeb138b1989974361d8515cb9d5a7e67b76aba6661e7c568fd",
+      "ciphertextSha256Hex": "bd3244baaaef40f88a61f4fad07b9050d17501df59d2d0ad914c2563bc001fce",
+      "chunks": [
+        {
+          "chunkIndex": 0,
+          "isLast": false,
+          "plaintextLength": 65536,
+          "ciphertextWithTagLength": 65552,
+          "nonceHex": "deadbeef0000000000000000",
+          "aadHex": "07fbf08f498b95eeb138b1989974361d8515cb9d5a7e67b76aba6661e7c568fd00",
+          "tagHex": "1dd1fe8a6be93ada73d75f68fc2723e7"
+        },
+        {
+          "chunkIndex": 1,
+          "isLast": false,
+          "plaintextLength": 65536,
+          "ciphertextWithTagLength": 65552,
+          "nonceHex": "deadbeef0000000000000001",
+          "aadHex": "07fbf08f498b95eeb138b1989974361d8515cb9d5a7e67b76aba6661e7c568fd00",
+          "tagHex": "1f9f7885362f6d8ed746cdf9b7362011"
+        },
+        {
+          "chunkIndex": 2,
+          "isLast": true,
+          "plaintextLength": 18928,
+          "ciphertextWithTagLength": 18944,
+          "nonceHex": "deadbeef0000000000000002",
+          "aadHex": "07fbf08f498b95eeb138b1989974361d8515cb9d5a7e67b76aba6661e7c568fd01",
+          "tagHex": "1f61caa858e9e7edbba9b1fbe33a2177"
+        }
+      ]
+    }
+  },
+  "dedupTags": {
+    "streamingBlockSizeBytes": 65536,
+    "singleChunkPlaintextDedupTagHex": "3cd97c3949bc3258f7d0e1f4bcbfbd8d7a0be040720b26b3f602277f49ce9387",
+    "singleChunkPlaintextDedupTagB64u": "PNl8OUm8Mlj30OH0vL-9jXoL4EByCyaz9gInf0nOk4c",
+    "multiChunkPlaintextDedupTagHex": "21aa6e0f49a4574bc12867e0b31bb7309d75b5344d96a2f98de5ab6647e78bb6",
+    "multiChunkPlaintextDedupTagB64u": "IapuD0mkV0vBKGfgsxu3MJ11tTRNlqL5jeWrZkfni7Y"
+  },
+  "encryptedMetadata": {
+    "blobId": "d3b07384-d113-4e59-9c2a-7b8e1f02a3c4",
+    "blobMetaKeyHex": "d18c6158f40f59de3c5b38d85e06aded8e513366ac94633ae8e93d2325b71eb2",
+    "nonceHex": "d1d2d3d4d5d6d7d8d9dadbdc",
+    "aadUtf8": "meta|d3b07384-d113-4e59-9c2a-7b8e1f02a3c4",
+    "aadHex": "6d6574617c64336230373338342d643131332d346535392d396332612d376238653166303261336334",
+    "plaintextJson": "{\"v\":1,\"name\":\"IMG_20261115_183000.jpg\",\"mime\":\"image/jpeg\",\"size\":37,\"takenAt\":1763231400000,\"createdAt\":1763231405000,\"width\":4032,\"height\":3024,\"duration\":null,\"isFavorite\":true,\"exifSubset\":{\"make\":\"Google\",\"model\":\"Pixel 9 Pro\",\"iso\":64,\"lat\":41.89021,\"lon\":12.49223},\"dedupTag\":\"PNl8OUm8Mlj30OH0vL-9jXoL4EByCyaz9gInf0nOk4c\",\"thumbs\":{\"sm\":{\"present\":true,\"width\":320,\"height\":240,\"sizeBytes\":16},\"md\":{\"present\":false,\"width\":0,\"height\":0,\"sizeBytes\":0}}}",
+    "encryptedMetaHex": "d1d2d3d4d5d6d7d8d9dadbdcb891792c5bbe0676be4621e08617d8a0bdc29a3e3d2348d2728ee0d21ea3a322a2f7c9ec3e1c74f8877865f711da39e58bc14eb94b8a4d1a17a334dd4e42e0f3fdd10ee2a9a7903540088c96b59e6a8294f254b45bee71c0c53be306f977eff1c7200b96eddd5a412df97068783b4a2eef30188817492c7c24731bf881f06187c7969a24504a22d71e1043972ba6e483bfc281376d398f96a95acb4da01962a5645ed983017350206dd58343edf5e0c3000692259320ba8886897a324b7b48e86aa2ec75740c172b99d9488adc8269bbf0e7a51c73946102e545720e670ab4592a65deb6523e189ada9bc49853ea31219255fb3275402c066d97cb8a97ce29294137f48843ecf3576deb1091a5189b9a56a9b7e593570e42716b3b2e38c389db97007ef4d04dc147062b1276ebbaad0eeea00bcc69afd3779a05f52fd2c8a7d6c5d099f9009f89914a7f04c20a3db89bf22f1c84b5816eae7f91092ed99478382f10289f91295e56f006dbe4163bf56d6ec40146d59286cddf707045d0a29fbfdba0618c34a68772c275418942ee9cdec89d06575d77ab4006c864329f9a1d8b183a33173a6cfe87b068eddbf815020c00d917e4019146a955a39181b1bd1d634462f6921190a14cc7cca8874c991f4a20838f9026f79720a89b773578",
+    "encryptedMetaB64u": "0dLT1NXW19jZ2tvcuJF5LFu-Bna-RiHghhfYoL3Cmj49I0jSco7g0h6joyKi98nsPhx0-Id4ZfcR2jnli8FOuUuKTRoXozTdTkLg8_3RDuKpp5A1QAiMlrWeaoKU8lS0W-5xwMU74wb5d-_xxyALlu3dWkEt-XBoeDtKLu8wGIgXSSx8JHMb-IHwYYfHlpokUEoi1x4QQ5crpuSDv8KBN205j5apWstNoBlipWRe2YMBc1AgbdWDQ-314MMABpIlkyC6iIaJejJLe0joaqLsdXQMFyuZ2UiK3IJpu_DnpRxzlGEC5UVyDmcKtFkqZd62Uj4YmtqbxJhT6jEhklX7MnVALAZtl8uKl84pKUE39IhD7PNXbesQkaUYm5pWqbflk1cOQnFrOy44w4nblwB-9NBNwUcGKxJ267qtDu6gC8xpr9N3mgX1L9LIp9bF0Jn5AJ-JkUp_BMIKPbib8i8chLWBbq5_kQku2ZR4OC8QKJ-RKV5W8Abb5BY79W1uxAFG1ZKGzd9wcEXQop-_26BhjDSmh3LCdUGJQu6c3sidBlddd6tABshkMp-aHYsYOjMXOmz-h7Bo7dv4FQIMANkX5AGRRqlVo5GBsb0dY0Ri9pIRkKFMx8yoh0yZH0ogg4-QJveXIKibdzV4"
+  },
+  "encryptedThumbnail": {
+    "blobId": "d3b07384-d113-4e59-9c2a-7b8e1f02a3c4",
+    "variant": "320",
+    "blobThumbKeyHex": "f9c1962dbac037d2b15e074830786c2ed818a986139d0cf798ef70d96c649388",
+    "nonceHex": "e1e2e3e4e5e6e7e8e9eaebec",
+    "aadUtf8": "thumb|d3b07384-d113-4e59-9c2a-7b8e1f02a3c4|320",
+    "aadHex": "7468756d627c64336230373338342d643131332d346535392d396332612d3762386531663032613363347c333230",
+    "plaintextHex": "ffd8ffe000104a464946000101000001ffd9",
+    "encryptedThumbHex": "e1e2e3e4e5e6e7e8e9eaebec9c4f9cc8372466e592791eb4f19902dad4d9966e037c76bbd69468fe7cc5acb7ed0c",
+    "encryptedThumbB64u": "4eLj5OXm5-jp6uvsnE-cyDckZuWSeR608ZkC2tTZlm4DfHa71pRo_nzFrLftDA"
+  },
+  "encryptedAlbums": {
+    "userId": "550e8400-e29b-41d4-a716-446655440000",
+    "revision": 1,
+    "albumCatalogKeyHex": "83b3a8674a05a8d4183b7bfc547803fe8488c2060e91178c8cc58ace6c8868d8",
+    "nonceHex": "f1f2f3f4f5f6f7f8f9fafbfc",
+    "aadUtf8": "albums|550e8400-e29b-41d4-a716-446655440000|1",
+    "aadHex": "616c62756d737c35353065383430302d653239622d343164342d613731362d3434363635353434303030307c31",
+    "plaintextJson": "{\"v\":1,\"revision\":1,\"updatedAt\":1763232000000,\"albums\":[{\"id\":\"alb_90c1a2b3-4d5e-4f6a-8b9c-0d1e2f3a4b5c\",\"name\":\"Vacanze Estate 2026\",\"createdAt\":1763231000000,\"coverBlobId\":\"d3b07384-d113-4e59-9c2a-7b8e1f02a3c4\",\"blobIds\":[\"d3b07384-d113-4e59-9c2a-7b8e1f02a3c4\"]}]}",
+    "payloadHex": "00000001f1f2f3f4f5f6f7f8f9fafbfc4cc6a821be767011b20cd83500804e14607178b0a99f4649ccbf3f22d983c0e025234a2dbb48e039c275104372c83d60683bc0cc7887ca40d71081eb0e28a05e2101bd551f2a5e9d328d9d0dc6ccdba5464f8ca4e9c5cd7b69e5ffe83f19e3348076c42097a62542ed89e442ce6efc4973809b311bdc8cbc88efdf1b2d70100be045899bddb36a7621a9f4fb415d0821483a41d6052b86a143eff22d0c0139bc651675b0d23768e4dad0845ba676b8f4766433654b54cdd6c2868dbafa283db39ac5ac60e90a72c872b019842548a4a1a830f69ebf5f349337f98a66b477a86c21f6cf4640ea4a85eb5c19f9993052ab968cf727ce9d97848443fcee26ebac0f76ab02fe7cf73ad5fbf01e700deb4c96e8f6d3ab1f30cea0d5b9",
+    "payloadB64u": "AAAAAfHy8_T19vf4-fr7_EzGqCG-dnARsgzYNQCAThRgcXiwqZ9GScy_PyLZg8DgJSNKLbtI4DnCdRBDcsg9YGg7wMx4h8pA1xCB6w4ooF4hAb1VHypenTKNnQ3GzNulRk-MpOnFzXtp5f_oPxnjNIB2xCCXpiVC7YnkQs5u_ElzgJsxG9yMvIjv3xstcBAL4EWJm92zanYhqfT7QV0IIUg6QdYFK4ahQ-_yLQwBObxlFnWw0jdo5NrQhFumdrj0dmQzZUtUzdbCho26-ig9s5rFrGDpCnLIcrAZhCVIpKGoMPaev180kzf5ima0d6hsIfbPRkDqSoXrXBn5mTBSq5aM9yfOnZeEhEP87ibrrA92qwL-fPc61fvwHnAN60yW6PbTqx8wzqDVuQ"
+  },
+  "sharing": {
+    "shareId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+    "shareKeyHex": "2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40",
+    "shareKeyB64u": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0A",
+    "shareUrlFragment": "/share/7c9e6679-7425-40de-944b-e07fc1f90ae7#ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0A",
+    "shareWrapKeyHex": "83bf1443adcc00bc7972f97598c3aa7671b572826b85947e68157ec446cbcd27",
+    "shareMetaKeyHex": "d0e87d207329832da3c22f061ae350d621472b38ad606edf1f7209ee07008bab",
+    "shareFkNonceHex": "a0a1a2a3a4a5a6a7a8a9aaab",
+    "shareFkAadUtf8": "share-fk|7c9e6679-7425-40de-944b-e07fc1f90ae7|d3b07384-d113-4e59-9c2a-7b8e1f02a3c4",
+    "shareWrappedFkHex": "a0a1a2a3a4a5a6a7a8a9aaab2a0a2ec08fde9cee7fd7134adcb8787d835245a97d3710b66bc62a2c42d58abe8517304eb26e95504f53b96142e3eb05",
+    "shareWrappedFkB64u": "oKGio6SlpqeoqaqrKgouwI_enO5_1xNK3Lh4fYNSRal9NxC2a8YqLELVir6FFzBOsm6VUE9TuWFC4-sF"
+  }
+}

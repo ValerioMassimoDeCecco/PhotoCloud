@@ -126,6 +126,7 @@ const EXPLICIT_SYNC_FILES = [
   'src/lib/thumbCache.ts',
   'src/lib/trustProxy.ts',
   'src/lib/vaultStorage.ts',
+  'src/lib/zkServerV2.ts',
 ];
 
 function isDeniedSyncFile(entryName: string): boolean {
