@@ -428,7 +428,17 @@ jobs:
       - name: Seed Integration User & Encrypted Blob (Credentials Masked, Written Outside Repo)
         run: |
           set -euo pipefail
-          ./node_modules/.bin/tsx scripts/android-integration-seed.ts 2>&1 | tee android-int-seed.log
+          RAW_SEED_LOG="$(mktemp "${RUNNER_TEMP:-/tmp}/pc-android-seed-XXXXXX.log")"
+          if ! ./node_modules/.bin/tsx scripts/android-integration-seed.ts >"$RAW_SEED_LOG" 2>&1; then
+            grep '^::add-mask::' "$RAW_SEED_LOG" || true
+            grep -v '^::add-mask::' "$RAW_SEED_LOG" | tee android-int-seed.log || true
+            rm -f "$RAW_SEED_LOG"
+            exit 1
+          fi
+          # Forward mask directives to the runner, but never persist them (or their values) in the tee'd log.
+          grep '^::add-mask::' "$RAW_SEED_LOG" || true
+          grep -v '^::add-mask::' "$RAW_SEED_LOG" | tee android-int-seed.log
+          rm -f "$RAW_SEED_LOG"
 
       - name: Run Live Kotlin Integration Test (AndroidLiveIntegrationTest)
         run: |
@@ -670,14 +680,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           script: |
-            set -o pipefail
-            cd android-app
-            set +e
-            gradle connectedDebugAndroidTest --info --no-daemon --stacktrace 2>&1 | tee ../android-emulator-test.log
-            RC=$?
-            set -e
-            adb logcat -d -s Argon2idBenchmark:I *:E > ../android-emulator-logcat.txt || true
-            exit "$RC"
+            bash -lc 'set -o pipefail; cd android-app; gradle connectedDebugAndroidTest --info --no-daemon --stacktrace 2>&1 | tee ../android-emulator-test.log; RC=$?; adb logcat -d -s Argon2idBenchmark:I "*:E" > ../android-emulator-logcat.txt || true; exit $RC'
 
       - name: Upload Instrumented Test Reports, Benchmark Logs & Logcat
         if: always()
