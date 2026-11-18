@@ -774,10 +774,25 @@ object ZkCoreCrypto {
             return offset
         }
 
+        var pendingPlaintext: ByteArray? = null
         try {
             val headerSha256 = cryptoProvider.sha256(header.rawHeader)
             var chunkIndex = 0
             var totalPlaintextBytes = 0L
+
+            // One-chunk write delay: a newly authenticated chunk is held until the next chunk
+            // has also authenticated. This guarantees that a corruption detected while reading
+            // chunk N (duplication/reordering/truncation boundary) never leaks chunk N-1 to
+            // `output`, while keeping memory constant (at most two plaintext chunks alive).
+            fun flushPendingPlaintext() {
+                val pending = pendingPlaintext ?: return
+                if (pending.isNotEmpty()) {
+                    output.write(pending)
+                }
+                totalPlaintextBytes += pending.size
+                pending.zeroize()
+                pendingPlaintext = null
+            }
 
             while (true) {
                 val ctLen = readNextChunk(currentCtBuf)
@@ -807,18 +822,17 @@ object ZkCoreCrypto {
                     zeroizeAll(nonce, aad)
                 }
 
-                if (ptChunk.isNotEmpty()) {
-                    output.write(ptChunk)
-                }
-                totalPlaintextBytes += ptChunk.size
-                ptChunk.zeroize()
+                flushPendingPlaintext()
+                pendingPlaintext = ptChunk
                 chunkIndex++
 
                 if (isLast) break
             }
 
+            flushPendingPlaintext()
             return DecryptBlobStreamResult(header, totalPlaintextBytes, chunkIndex)
         } finally {
+            pendingPlaintext?.zeroize()
             zeroizeAll(fk, currentCtBuf)
         }
     }

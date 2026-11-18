@@ -99,6 +99,58 @@ jobs:
             android-app/app/build/reports/tests/testDebugUnitTest/**
             android-app/app/build/test-results/testDebugUnitTest/**
 
+      - name: Publish Kotlin Unit Test Summary
+        if: always()
+        working-directory: ./android-app
+        run: |
+          python3 - <<'PY'
+          import glob
+          import os
+          import xml.etree.ElementTree as ET
+
+          result_files = sorted(glob.glob("app/build/test-results/testDebugUnitTest/TEST-*.xml"))
+          total = passed = failed = errored = skipped = 0
+          failed_tests = []
+
+          for path in result_files:
+              root = ET.parse(path).getroot()
+              suite_total = int(root.get("tests", "0"))
+              suite_failures = int(root.get("failures", "0"))
+              suite_errors = int(root.get("errors", "0"))
+              suite_skipped = int(root.get("skipped", "0"))
+              total += suite_total
+              failed += suite_failures
+              errored += suite_errors
+              skipped += suite_skipped
+              passed += suite_total - suite_failures - suite_errors - suite_skipped
+              for case in root.iter("testcase"):
+                  for kind in ("failure", "error"):
+                      node = case.find(kind)
+                      if node is not None:
+                          message = (node.get("message") or "").strip().splitlines()
+                          detail = message[0] if message else ""
+                          failed_tests.append(
+                              f"{case.get('classname')}.{case.get('name')} [{kind}]: {detail}"
+                          )
+
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+          with open(summary_path, "a", encoding="utf-8") as summary:
+              summary.write("## Kotlin Unit Tests (testDebugUnitTest, -Xmx128m)\n\n")
+              if not result_files:
+                  summary.write("No `TEST-*.xml` result files were produced.\n")
+              else:
+                  summary.write("| Executed | Passed | Failed | Errors | Skipped |\n")
+                  summary.write("|---|---|---|---|---|\n")
+                  summary.write(f"| {total} | {passed} | {failed} | {errored} | {skipped} |\n\n")
+                  summary.write(f"Result suites parsed: {len(result_files)}\n")
+                  if failed_tests:
+                      summary.write("\n### Failed tests\n\n")
+                      for item in failed_tests:
+                          summary.write(f"- `{item}`\n")
+                  else:
+                      summary.write("\nAll Kotlin unit tests passed.\n")
+          PY
+
       - name: Verify Release Kotlin Compilation & Release APK Build
         working-directory: ./android-app
         run: |

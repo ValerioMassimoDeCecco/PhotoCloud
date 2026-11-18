@@ -188,13 +188,20 @@ internal object ZkReferenceArgon2idCrossCheck {
                             }
                             mem[addrBase + (idx % 128)]
                         } else mem[prev * 128]
-                        val j1 = pr.toULong() and 0xffffffffUL; val j2 = ((pr.toULong() shr 32) and 0xffffffffUL).toInt()
-                        val rl = if (pass == 0 && slice == 0) l else (j2 % p)
+                        // j1/j2 are the low/high 32 bits of pseudo_rand. Keep j2 unsigned (ULong):
+                        // converting a value >= 2^31 to Int would make it negative and produce a
+                        // negative lane index (e.g. -2048 indices), unlike the RFC 9106 reference.
+                        val j1 = pr.toULong() and 0xffffffffUL
+                        val j2 = (pr.toULong() shr 32) and 0xffffffffUL
+                        val rl = if (pass == 0 && slice == 0) l else (j2 % p.toULong()).toInt()
                         val ra = if (pass == 0) (if (slice == 0) idx - 1 else if (rl == l) slice * seg + idx - 1 else slice * seg - if (idx == 0) 1 else 0)
                         else (if (rl == l) q - seg + idx - 1 else q - seg - if (idx == 0) 1 else 0)
                         val mp = ra - 1 - ((ra.toULong() * ((j1 * j1) shr 32)) shr 32).toInt()
                         val sp = if (pass == 0) 0 else (((slice + 1) % 4) * seg)
-                        compressBlockFlat(mem, prev, rl * q + ((sp + mp) % q), curr, r, z, pass > 0)
+                        // Floor-modulo (reference_area_size can be 0 for 4*p = m): Kotlin's %
+                        // preserves the sign, so normalize into [0, q).
+                        val laneOffset = (((sp + mp) % q) + q) % q
+                        compressBlockFlat(mem, prev, rl * q + laneOffset, curr, r, z, pass > 0)
                     }
                 }
             }
