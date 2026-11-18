@@ -173,14 +173,24 @@ class PhotoCloudZkV2NetworkTest {
                 .addSubjectAlternativeName("127.0.0.1")
                 .build()
             val certs2 = HandshakeCertificates.Builder().heldCertificate(heldCert2).build()
-            // Free the port before rebinding a different certificate on the same host:port.
-            val originalHost = server.url("/").host
-            server.shutdown()
             val rotatedServer = MockWebServer()
             rotatedServer.useHttps(certs2.sslSocketFactory(), false)
-            rotatedServer.start(server.port)
+            rotatedServer.start()
             try {
-                val baseUrl2 = "https://$originalHost:${rotatedServer.port}"
+                // Simulate a previously pinned certificate for this endpoint: save cert1's SPKI
+                // under rotatedServer's host:port, then connect to the server presenting cert2.
+                val rotatedHostPort = "${rotatedServer.url("/").host}:${rotatedServer.port}"
+                pinStore.savePin(
+                    TofuPinRecord(
+                        hostPort = rotatedHostPort,
+                        spkiPin = challenge.spkiPin,
+                        certSha256Hex = challenge.certSha256Hex,
+                        subject = challenge.subject,
+                        issuer = challenge.issuer,
+                        trustedAtMs = System.currentTimeMillis()
+                    )
+                )
+                val baseUrl2 = rotatedServer.url("/").toString().removeSuffix("/")
                 client.baseUrl = baseUrl2
                 try {
                     client.fetchLoginParams("alice")
