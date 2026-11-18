@@ -111,12 +111,17 @@ jobs:
               "$APKANALYZER" manifest print "$APK_PATH"
             fi
             echo "--- aapt2 network_security_config.xml ---"
-            if [ -n "$AAPT2" ]; then
-              "$AAPT2" dump xmltree "$APK_PATH" --file res/xml/network_security_config.xml
-            else
-              AAPT="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name 'aapt' 2>/dev/null | sort -V | tail -n 1)"
-              "$AAPT" dump xmltree "$APK_PATH" res/xml/network_security_config.xml
+            if [ -z "$AAPT2" ]; then
+              echo "::error::aapt2 not found in Android SDK build-tools"
+              exit 1
             fi
+            NSC_PATH="$("$AAPT2" dump resources "$APK_PATH" | grep -A1 'xml/network_security_config$' | sed -n 's/.*(file) \(res\/[^ ]*\).*/\1/p' | head -n 1)"
+            if [ -z "$NSC_PATH" ]; then
+              echo "::error::network_security_config resource not found in release APK"
+              exit 1
+            fi
+            echo "Resolved resource path: $NSC_PATH"
+            "$AAPT2" dump xmltree "$APK_PATH" --file "$NSC_PATH"
           } | tee release-apk-cleartext-check.txt
 
           if grep -E 'usesCleartextTraffic.*=.*(0xffffffff|true)' release-apk-cleartext-check.txt; then
@@ -132,7 +137,7 @@ jobs:
             echo "::error::Release APK network_security_config.xml must NOT include debug loopback domains!"
             exit 1
           fi
-          if ! echo "$NSC_SECTION" | grep -E 'cleartextTrafficPermitted.*0x0' >/dev/null; then
+          if ! echo "$NSC_SECTION" | grep -E 'cleartextTrafficPermitted.*(0x0|false)' >/dev/null; then
             echo "::error::Release APK network_security_config.xml missing cleartextTrafficPermitted=false (0x0)!"
             exit 1
           fi

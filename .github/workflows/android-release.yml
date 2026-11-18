@@ -408,12 +408,17 @@ jobs:
               "$APKANALYZER" manifest print "$APK_FILE"
             fi
             echo "--- network_security_config.xml ---"
-            if [ -n "$AAPT2" ]; then
-              "$AAPT2" dump xmltree "$APK_FILE" --file res/xml/network_security_config.xml
-            else
-              AAPT=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name "aapt" 2>/dev/null | sort -V | tail -n 1)
-              "$AAPT" dump xmltree "$APK_FILE" res/xml/network_security_config.xml
+            if [ -z "$AAPT2" ]; then
+              echo "::error::aapt2 non trovato in Android SDK build-tools"
+              exit 1
             fi
+            NSC_PATH="$("$AAPT2" dump resources "$APK_FILE" | grep -A1 'xml/network_security_config$' | sed -n 's/.*(file) \(res\/[^ ]*\).*/\1/p' | head -n 1)"
+            if [ -z "$NSC_PATH" ]; then
+              echo "::error::network_security_config non trovato nell'APK release"
+              exit 1
+            fi
+            echo "Resolved resource path: $NSC_PATH"
+            "$AAPT2" dump xmltree "$APK_FILE" --file "$NSC_PATH"
           } | tee ../release-apk-cleartext-check.txt
           if grep -E 'usesCleartextTraffic.*=.*(0xffffffff|true)' ../release-apk-cleartext-check.txt; then
             echo "::error::L'APK release abilita usesCleartextTraffic=true!"
@@ -425,7 +430,7 @@ jobs:
             echo "::error::L'APK release include eccezioni cleartext in network_security_config.xml!"
             exit 1
           fi
-          if ! echo "$NSC_DUMP" | grep -E 'cleartextTrafficPermitted.*0x0' >/dev/null; then
+          if ! echo "$NSC_DUMP" | grep -E 'cleartextTrafficPermitted.*(0x0|false)' >/dev/null; then
             echo "::error::cleartextTrafficPermitted=false (0x0) mancante in network_security_config.xml!"
             exit 1
           fi
