@@ -198,6 +198,14 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.hypot
+import com.valerio.photocloud.zk.AndroidHardwareVaultKeyStore
+import com.valerio.photocloud.zk.PhotoCloudZkApiClientV2
+import com.valerio.photocloud.zk.PrefsKdfPinningStore
+import com.valerio.photocloud.zk.PrefsTofuSpkiPinStore
+import com.valerio.photocloud.zk.PrefsZkAccountMetadataStore
+import com.valerio.photocloud.zk.ZkSessionManager
+import com.valerio.photocloud.zk.ZkV2AuthCoordinator
+import com.valerio.photocloud.zk.ZkV2CookieJar
 
 enum class GroupingMode(val label: String) {
     NONE("Tutti"),
@@ -796,6 +804,34 @@ fun PhotoCloudLogoBadge(
     }
 }
 
+internal class ZkV2FeatureGate<T : Any>(
+    private val isEnabledProvider: () -> Boolean,
+    private val factory: () -> T
+) {
+    private var instance: T? = null
+
+    val isEnabled: Boolean
+        get() = isEnabledProvider()
+
+    fun getOrNull(): T? {
+        if (!isEnabledProvider()) return null
+        return instance ?: factory().also { instance = it }
+    }
+
+    fun onBackgrounded(action: (T) -> Unit) {
+        if (!isEnabledProvider()) return
+        instance?.let(action)
+    }
+
+    fun clearOnDisable(onClear: ((T) -> Unit)? = null) {
+        val prev = instance
+        instance = null
+        if (prev != null) {
+            onClear?.invoke(prev)
+        }
+    }
+}
+
 @Composable
 fun PhotoCloudNativeApp(
     activity: MainActivity,
@@ -814,6 +850,48 @@ fun PhotoCloudNativeApp(
     var showServerDialog by remember { mutableStateOf(false) }
     var tempServerInput by remember { mutableStateOf(serverUrl) }
 
+    var zkV2ModeEnabled by remember {
+        mutableStateOf(prefs.getBoolean("zk_v2_enabled", false))
+    }
+
+    val zkV2Gate = remember {
+        ZkV2FeatureGate(
+            isEnabledProvider = { prefs.getBoolean("zk_v2_enabled", false) },
+            factory = {
+                val allowLoopbackHttp = BuildConfig.DEBUG
+                val v2Client = PhotoCloudZkApiClientV2(
+                    initialBaseUrl = serverUrl,
+                    pinStore = PrefsTofuSpkiPinStore(context),
+                    allowLocalhostHttpForTests = allowLoopbackHttp,
+                    cookieJar = ZkV2CookieJar(allowLocalhostHttpForTests = allowLoopbackHttp)
+                )
+                ZkSessionManager(
+                    apiClient = v2Client,
+                    vaultKeyStore = AndroidHardwareVaultKeyStore(context),
+                    kdfPinningStore = PrefsKdfPinningStore(context),
+                    metadataStore = PrefsZkAccountMetadataStore(context),
+                    autoLockScope = scope
+                )
+            }
+        )
+    }
+
+    val activeZkSessionManager = if (zkV2ModeEnabled) zkV2Gate.getOrNull() else null
+
+    LaunchedEffect(zkV2ModeEnabled, serverUrl) {
+        if (zkV2ModeEnabled) {
+            zkV2Gate.getOrNull()?.apiClient?.baseUrl = serverUrl
+        }
+    }
+
+    fun setZkV2Mode(enabled: Boolean) {
+        prefs.edit().putBoolean("zk_v2_enabled", enabled).apply()
+        zkV2ModeEnabled = enabled
+        if (!enabled) {
+            zkV2Gate.clearOnDisable { it.lock("Modalità v2 disattivata.") }
+        }
+    }
+
     // 0ms Instant Startup Hydration: synchronously read cookie presence and cached metadata
     var isAuthenticated by remember(serverUrl) {
         mutableStateOf(apiClient.hasActiveSessionCookie())
@@ -826,9 +904,11 @@ fun PhotoCloudNativeApp(
         )
     }
 
-    DisposableEffect(isAuthenticated, custom.lockOnBackground, custom.biometricEnabled) {
+    DisposableEffect(zkV2ModeEnabled, isAuthenticated, custom.lockOnBackground, custom.biometricEnabled) {
         activity.setOnBackgroundLockListener {
-            if (isAuthenticated && custom.lockOnBackground && custom.biometricEnabled && activity.canUseBiometrics()) {
+            if (zkV2ModeEnabled) {
+                zkV2Gate.onBackgrounded { it.onAppBackgrounded() }
+            } else if (isAuthenticated && custom.lockOnBackground && custom.biometricEnabled && activity.canUseBiometrics()) {
                 isBiometricLocked = true
             }
         }
@@ -926,7 +1006,20 @@ fun PhotoCloudNativeApp(
         AppAutoUpdater.checkForUpdatesOnLaunch(context, serverUrl)
     }
 
-    if (isAuthenticated && isBiometricLocked) {
+    if (zkV2ModeEnabled && activeZkSessionManager != null) {
+        ZkV2AuthCoordinator(
+            activity = activity,
+            sessionManager = activeZkSessionManager,
+            serverUrl = serverUrl,
+            onOpenServerConfig = {
+                tempServerInput = serverUrl
+                showServerDialog = true
+            },
+            onExitV2Mode = {
+                setZkV2Mode(false)
+            }
+        )
+    } else if (isAuthenticated && isBiometricLocked) {
         NativeBiometricLockScreen(
             monochromeIcon = custom.monochromeAppIcon,
             onUnlockClick = {
@@ -964,6 +1057,9 @@ fun PhotoCloudNativeApp(
             },
             onShowInfo = { msg ->
                 infoDialogMessage = msg
+            },
+            onSwitchToV2Mode = {
+                setZkV2Mode(true)
             }
         )
     } else {
@@ -1154,7 +1250,8 @@ fun NativeAuthScreen(
     onSaveKeyForBiometrics: (ByteArray) -> Unit,
     onOpenServerConfig: () -> Unit,
     onLoginSuccess: () -> Unit,
-    onShowInfo: (String) -> Unit
+    onShowInfo: (String) -> Unit,
+    onSwitchToV2Mode: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1547,6 +1644,19 @@ fun NativeAuthScreen(
                                 Spacer(Modifier.width(8.dp))
                                 Text("Registrati e Scarica Chiave", fontWeight = FontWeight.SemiBold)
                             }
+                        }
+                    }
+
+                    if (onSwitchToV2Mode != null) {
+                        Spacer(Modifier.height(14.dp))
+                        TextButton(onClick = onSwitchToV2Mode) {
+                            Icon(
+                                imageVector = Icons.Default.Security,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("Modalità Zero-Knowledge v2 (Beta)")
                         }
                     }
                 }

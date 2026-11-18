@@ -74,11 +74,17 @@ Architettura a **doppia chiave Hardware-Backed AES-256-GCM** in `AndroidKeyStore
    - Generata con `KeyGenParameterSpec.Builder("photocloud_vk_bg_v2", PURPOSE_ENCRYPT or PURPOSE_DECRYPT)`:
      - `setBlockModes(KeyProperties.BLOCK_MODE_GCM)`
      - `setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)`
-     - `setUnlockedDeviceRequired(true)` (disponibile su API 28+: il Keystore consente la decifratura solo quando il dispositivo è stato sbloccato dopo il boot e lo schermo non è nello stato locked BFU/AFU ristretto, senza richiedere un prompt biometrico interattivo al `WorkManager`).
-   - Se il dispositivo è bloccato al momento dell'esecuzione di `AutoBackupWorker`, `KeyStore` solleva `UserNotAuthenticatedException` / `KeyPermanentlyInvalidatedException`: il worker restituisce `Result.retry()` con backoff esponenziale senza mai salvare la `VK` in chiaro in `SharedPreferences` o su disco.
+     - `setUnlockedDeviceRequired(true)` (disponibile su API 28+).
+   - **Cosa protegge davvero `setUnlockedDeviceRequired(true)`**:
+     - Protegge la `VK` a riposo prima del primo sblocco dopo il riavvio (**BFU — Before First Unlock**) e ogni volta che lo schermo torna bloccato (**Keyguard / lockscreen attiva**): il Keystore hardware (TEE/StrongBox) rifiuta l'operazione (`UserNotAuthenticatedException`) finché il dispositivo non viene sbloccato dall'utente.
+     - Impedisce l'estrazione offline del key-wrapping material dalla flash (la chiave AES resta confinata in TEE/StrongBox) e separa l'AutoBackup dall'invalidazione biometrica della chiave interattiva.
+   - **Cosa NON protegge `setUnlockedDeviceRequired(true)`**:
+     - Quando il dispositivo è **sbloccato dall'utente (AFU + device unlocked)**, *non* richiede una nuova autenticazione biometrica per ogni esecuzione di `AutoBackupWorker`: codice eseguito nella sandbox dell'app (`uid`) o un attaccante con privilegio su device sbloccato/compromesso (root/Frida) può chiedere al Keystore di decifrare la `VK` wrappata per il background.
+     - Su dispositivi senza lockscreen di sistema configurata o senza supporto hardware/TEE per `UnlockedDeviceRequired`, il vincolo è più debole; non protegge contro accesso fisico a telefono già sbloccato né sostituisce `FLAG_SECURE` / `allowBackup="false"`.
+   - Se il dispositivo è bloccato al momento dell'esecuzione di `AutoBackupWorker`, `KeyStore` solleva `DeviceLockedException` (`UserNotAuthenticatedException`) e il worker restituisce `Result.retry()` senza mai salvare la `VK` in chiaro in `SharedPreferences` o su disco.
 3. **Lock e Logout**:
-   - Al lock manuale o per timeout inattività: zeroization immediata (`fill(0)`) dei `ByteArray` di `VK`, `K_meta`, `K_thumb`, `K_dedup`, `K_fk_wrap` in RAM.
-   - Al logout: `keyStore.deleteEntry("photocloud_vk_bio_v2")`, `keyStore.deleteEntry("photocloud_vk_bg_v2")`, cancellazione del cookie di sessione `/api/v2/auth/logout` e wipe della cache miniature cifrate.
+   - Al lock manuale, in `onStop()` (`onAppBackgrounded()`), su invalidazione biometrica o per timeout inattività: zeroization immediata (`fill(0)`) dei `ByteArray` di `VK`, `K_meta`, `K_thumb`, `K_dedup`, `K_fk_wrap` in RAM.
+   - Al logout: `keyStore.deleteEntry("photocloud_vk_bio_v2")`, `keyStore.deleteEntry("photocloud_vk_bg_v2")`, cancellazione del cookie di sessione `/api/v2/logout` e wipe della cache miniature cifrate.
 
 ### 2.4 Cache Miniature su Disco (Solo Ciphertext) e Decifratura in RAM
 - **Regola aurea**: Nessuna miniatura o immagine decifrata viene mai scritta sul filesystem (`cacheDir` o `filesDir`).
@@ -113,12 +119,24 @@ Architettura a **doppia chiave Hardware-Backed AES-256-GCM** in `AndroidKeyStore
 
 ## 3. Scomposizione Operativa nelle Fasi 4B, 4C e 4D
 
-### FASE 4B — Login, Android Keystore, KDF Floor & Client di Rete v2
-1. Implementazione di `VaultKeyStore` (`AndroidHardwareVaultKeyStore` + `InMemoryFakeVaultKeyStore` per test JVM).
-2. Utilizzo di BouncyCastle `bcprov-jdk18on:1.82` (`ZkArgon2id`) già adottato in produzione/test in 4A-bis; aggiunta opzionale di `argon2kt:1.6.0` dietro `ZkArgon2id.Argon2idProvider` solo se test strumentati su device reale mostrano latenza o memoria inaccettabili.
-3. Implementazione di `PhotoCloudZkApiClientV2` (OkHttp, cookie jar isolato `/api/v2`, enforcement KDF floor `64 MiB / t=3 / p=1 / salt>=16B`, pinning dei parametri KDF per `userId`).
-4. Flussi di Onboarding / Sblocco Vault (import Key File JSON o Recovery Code + Passphrase, cambio passphrase = re-wrap di `VK` + rotazione `authVerifier` senza ricifrare i blob, sblocco biometrico con `BiometricPrompt.CryptoObject`).
-5. Unit test JVM su `InMemoryFakeVaultKeyStore`, `PhotoCloudZkApiClientV2` (con `MockWebServer`), KDF floor anti-downgrade e spy di rete Kotlin (verifica che `accountKey`, `passphrase`, `kek`, `VK`, `FK`, `shareKey` non compaiano mai in URL, header o body).
+### FASE 4B — Login, Android Keystore, KDF Floor & Client di Rete v2 *(Implementata in sorgente; verifica CI/Device richiesta)*
+1. Implementazione di `VaultKeyStore` (`AndroidHardwareVaultKeyStore` con chiavi separate `photocloud_vk_bio_v2` / `photocloud_vk_bg_v2`, fallback StrongBox -> TEE e sola persistenza della `VK` wrappata + `InMemoryFakeVaultKeyStore` per test JVM).
+2. Utilizzo di BouncyCastle `bcprov-jdk18on:1.82` (`ZkArgon2id`) in produzione e test; aggiunto benchmark strumentato `Argon2idBenchmarkInstrumentedTest` (`64 MiB / t=3 / p=1`).
+   - **Avvertenza critica su emulatore vs device reale**: i numeri ottenuti sull'**emulatore x86_64 in CI NON sono sufficienti** per decidere l'eventuale adozione di `argon2kt` (l'emulatore usa CPU x86_64 server e profilo memoria diverso da ART su SoC ARM di fascia bassa).
+   - **Comandi obbligatori per misurare su dispositivo fisico Android di fascia bassa** (es. ARM 2–4 GB RAM, `heapgrowthlimit=128m`/`192m`):
+     ```bash
+     adb devices -l
+     adb shell getprop ro.product.cpu.abi
+     adb shell getprop dalvik.vm.heapgrowthlimit
+     cd android-app && gradle connectedDebugAndroidTest \
+       -Pandroid.testInstrumentationRunnerArguments.class=com.valerio.photocloud.zk.Argon2idBenchmarkInstrumentedTest \
+       --info --no-daemon --stacktrace
+     adb logcat -d -s Argon2idBenchmark:I
+     ```
+   - Criterio adozione eventuale `argon2kt:1.6.0` (off-heap JNI): introduzione giustificata **solo** se su **dispositivo fisico di fascia bassa** `avgMs > 4500 ms` o `peakHeapMiB` supera l'80% di `maxHeapMiB` / provoca `OutOfMemoryError` (`heapgrowthlimit=128m`).
+3. Implementazione di `PhotoCloudZkApiClientV2` (OkHttp, `ZkV2CookieJar` isolato `/api/v2/*` in memoria, HTTPS obbligatorio; cleartext loopback `localhost/127.0.0.1/10.0.2.2` confinato esclusivamente in `src/debug/res/xml/network_security_config.xml`, mentre `src/main/res/xml/network_security_config.xml` vieta ogni cleartext in release; pinning TOFU SPKI `TofuSpkiPinning` con conferma esplicita e abort su cambio chiave, mai TrustAll né `HostnameVerifier` disabilitato).
+4. Flussi di Onboarding / Sblocco Vault (`ZkSessionManager` + `ZkV2AuthScreen.kt`) dietro `ZkV2FeatureGate` (`zk_v2_enabled`, default `false` — nessuna classe del package `zk` istanziata o invocata quando `false`): import Key File JSON (SAF) o Recovery Code + Passphrase, enforcement KDF floor (`>= 64 MiB`, `t >= 3`, `p >= 1`, `salt >= 16 B`) + pinning per username, errori di login uniformi, cambio passphrase `/api/v2/account/rewrap`, fallback esplicito a File Chiave + passphrase su invalidazione chiave biometrica, wipe/auto-lock su `lock`/`onStop`/`logout`, esclusione backup (`allowBackup="false"`, `backup_rules.xml`, `data_extraction_rules.xml`), `FLAG_SECURE` invariato.
+5. Unit test JVM (32 `@Test` totali in `src/test`: 6 v1 `AutoBackupLogicTest` + 9 `ZkCoreCryptoTest` + 5 `VaultKeyStoreTest` + 7 `PhotoCloudZkV2NetworkTest` + 4 `ZkV2IsolationAndKeystorePolicyTest` + 1 `AndroidLiveIntegrationTest`), `ZkNetworkSpyInterceptor`, prove negative `-Dzk.mutation=accept_weak_kdf` / `leak_vk_header` interamente isolate in `src/test/` (zero interruttori di mutazione in `src/main/`), test strumentati `androidTest` (3 `@Test`) e pipeline CI con masking segreti e `GITHUB_STEP_SUMMARY` / upload artifact `if: always()`.
 
 ### FASE 4C — Upload Streaming, AutoBackupWorker & Deduplicazione Client-Side
 1. Pipeline di upload streaming in `PhotoCloudZkApiClientV2`: calcolo `dedupTag` a 64 KiB, check `/api/v2/blobs/dedup`, generazione `encThumb`, upload chunked `PCZK v1` da 1 MiB con resume automatico e commit finale (`wrappedFk`, `encMeta`, `dedupTag`).

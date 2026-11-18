@@ -69,6 +69,8 @@ jobs:
               -keypass "$KEY_PASS" \
               -dname "CN=PhotoCloud, OU=Mobile, O=Valerio, L=Rome, ST=RM, C=IT"
           fi
+          echo "::add-mask::$STORE_PASS"
+          echo "::add-mask::$KEY_PASS"
           {
             echo "PHOTOCLOUD_KEYSTORE_PATH=release-signing.jks"
             echo "PHOTOCLOUD_KEYSTORE_PASSWORD=$STORE_PASS"
@@ -82,24 +84,78 @@ jobs:
           set -o pipefail
           gradle testDebugUnitTest --info --no-daemon --stacktrace 2>&1 | tee unit-test-execution.log
 
+      - name: Verify Release Kotlin Compilation & Release APK Build
+        working-directory: ./android-app
+        run: |
+          set -o pipefail
+          gradle :app:compileReleaseKotlin :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee release-build.log
+
+      - name: Verify Release APK Forbids Cleartext Everywhere (aapt2 & apkanalyzer)
+        working-directory: ./android-app
+        run: |
+          set -euo pipefail
+          APK_PATH="$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' | head -n 1)"
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            echo "::error::Release APK not found in app/build/outputs/apk/release"
+            exit 1
+          fi
+          AAPT2="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name 'aapt2' 2>/dev/null | sort -V | tail -n 1 || true)"
+          APKANALYZER="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -name 'apkanalyzer' 2>/dev/null | sort -V | tail -n 1 || true)"
+          {
+            echo "=== Release APK: $APK_PATH ==="
+            if [ -n "$APKANALYZER" ]; then
+              echo "--- apkanalyzer manifest print ---"
+              "$APKANALYZER" manifest print "$APK_PATH"
+            fi
+            echo "--- aapt2 network_security_config.xml ---"
+            if [ -n "$AAPT2" ]; then
+              "$AAPT2" dump xmltree "$APK_PATH" --file res/xml/network_security_config.xml
+            else
+              AAPT="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name 'aapt' 2>/dev/null | sort -V | tail -n 1)"
+              "$AAPT" dump xmltree "$APK_PATH" res/xml/network_security_config.xml
+            fi
+          } | tee release-apk-cleartext-check.txt
+
+          if grep -E 'usesCleartextTraffic.*=.*(0xffffffff|true)' release-apk-cleartext-check.txt; then
+            echo "::error::Release APK AndroidManifest enables usesCleartextTraffic!"
+            exit 1
+          fi
+          NSC_SECTION="$(sed -n '/--- aapt2 network_security_config.xml ---/,$p' release-apk-cleartext-check.txt)"
+          if echo "$NSC_SECTION" | grep -E 'cleartextTrafficPermitted.*(0xffffffff|true)' >/dev/null; then
+            echo "::error::Release APK network_security_config.xml still permits cleartext!"
+            exit 1
+          fi
+          if echo "$NSC_SECTION" | grep -E 'localhost|127\.0\.0\.1|10\.0\.2\.2' >/dev/null; then
+            echo "::error::Release APK network_security_config.xml must NOT include debug loopback domains!"
+            exit 1
+          fi
+          if ! echo "$NSC_SECTION" | grep -E 'cleartextTrafficPermitted.*0x0' >/dev/null; then
+            echo "::error::Release APK network_security_config.xml missing cleartextTrafficPermitted=false (0x0)!"
+            exit 1
+          fi
+
       - name: Upload Kotlin-to-Web Interop Fixtures Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: interop-kotlin-fixtures
           path: android-app/app/build/interop-kotlin/**
           if-no-files-found: error
 
-      - name: Upload Android Unit Test Logs and Reports
+      - name: Upload Android Unit Test & Build Logs and Reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-unit-test-logs
           path: |
             android-app/unit-test-execution.log
+            android-app/release-build.log
+            android-app/release-apk-cleartext-check.txt
             android-app/app/build/reports/tests/testDebugUnitTest/**
             android-app/app/build/test-results/testDebugUnitTest/**
+          if-no-files-found: warn
 
-      - name: Publish Kotlin Unit Test Summary
+      - name: Publish Kotlin Unit Test & Cleartext Summary
         if: always()
         working-directory: ./android-app
         run: |
@@ -148,13 +204,12 @@ jobs:
                       for item in failed_tests:
                           summary.write(f"- `{item}`\n")
                   else:
-                      summary.write("\nAll Kotlin unit tests passed.\n")
+                      summary.write("\nAll executed Kotlin unit tests passed.\n")
+              if os.path.exists("release-apk-cleartext-check.txt"):
+                  nsc = open("release-apk-cleartext-check.txt", encoding="utf-8", errors="replace").read()
+                  nsc_tail = "\n".join(nsc.splitlines()[-25:])
+                  summary.write("\n### Release APK Cleartext Check (`aapt2` / `apkanalyzer`)\n\n```text\n" + nsc_tail + "\n```\n")
           PY
-
-      - name: Verify Release Kotlin Compilation & Release APK Build
-        working-directory: ./android-app
-        run: |
-          gradle :app:compileReleaseKotlin :app:assembleRelease --no-daemon --stacktrace
 
   interop:
     name: Bidirectional Interop Verification (Kotlin <-> TypeScript <-> Python)
@@ -197,12 +252,480 @@ jobs:
         env:
           REQUIRE_KOTLIN_ARTIFACTS: '1'
           INTEROP_KOTLIN_DIR: android-app/app/build/interop-kotlin
-        run: ./node_modules/.bin/tsx --test src/lib/zkWebSdk.test.ts
+        run: |
+          set -o pipefail
+          ./node_modules/.bin/tsx --test src/lib/zkWebSdk.test.ts 2>&1 | tee interop-ts.log
 
       - name: Run Independent Python Interop Verifier (Forward & Reverse)
         env:
           REQUIRE_KOTLIN_ARTIFACTS: '1'
-        run: python3 scripts/verify-interop.py --require-kotlin --kotlin-dir android-app/app/build/interop-kotlin
+        run: |
+          set -o pipefail
+          python3 scripts/verify-interop.py --require-kotlin --kotlin-dir android-app/app/build/interop-kotlin 2>&1 | tee interop-python.log
+
+      - name: Upload Interop Verification Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interop-verification-logs
+          path: |
+            interop-ts.log
+            interop-python.log
+          if-no-files-found: warn
+
+      - name: Publish Interop Summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+          ts_log = open("interop-ts.log", encoding="utf-8", errors="replace").read() if os.path.exists("interop-ts.log") else ""
+          py_log = open("interop-python.log", encoding="utf-8", errors="replace").read() if os.path.exists("interop-python.log") else ""
+
+          def extract(pattern: str, text: str) -> str:
+              m = re.search(pattern, text)
+              return m.group(1) if m else "N/A"
+
+          tests = extract(r"# tests\s+(\d+)", ts_log)
+          passed = extract(r"# pass\s+(\d+)", ts_log)
+          failed = extract(r"# fail\s+(\d+)", ts_log)
+          skipped = extract(r"# skipped\s+(\d+)", ts_log)
+          py_pass_cnt = len([ln for ln in py_log.splitlines() if "[PASS]" in ln])
+          py_fail_lines = [ln.strip() for ln in py_log.splitlines() if "[FAIL]" in ln or "FAILED" in ln or "[PENDING]" in ln]
+          py_status = "PASS" if py_pass_cnt > 0 and not py_fail_lines else "FAIL"
+
+          with open(summary_path, "a", encoding="utf-8") as summary:
+              summary.write("## Bidirectional Interop (Kotlin <-> TypeScript <-> Python)\n\n")
+              summary.write("| Check | Total | Pass | Fail | Skipped |\n")
+              summary.write("|---|---|---|---|---|\n")
+              summary.write(f"| TypeScript `zkWebSdk.test.ts` | {tests} | {passed} | {failed} | {skipped} |\n")
+              summary.write(f"| Python `verify-interop.py` ({py_status}) | {py_pass_cnt + len(py_fail_lines)} | {py_pass_cnt} | {len(py_fail_lines)} | 0 |\n\n")
+              fail_lines = [ln.strip() for ln in ts_log.splitlines() if ln.strip().startswith("not ok ")][:20]
+              if fail_lines or py_fail_lines:
+                  summary.write("### Failed Interop Checks\n\n")
+                  for ln in fail_lines + py_fail_lines:
+                      summary.write(f"- `{ln}`\n")
+          PY
+
+  android-integration:
+    name: Live Android-Node Integration & Documented Failing Mutations
+    needs: kotlin-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js >= 22.13.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: '>=22.13.0'
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'cmdline-tools;latest platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Setup Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Install Node Dependencies
+        run: npm ci
+
+      - name: Start Ephemeral v2 Server & Mask Setup Token (Outside Repo)
+        run: |
+          set -euo pipefail
+          TMP_WORK="$(mktemp -d "${RUNNER_TEMP:-/tmp}/pc-android-int-XXXXXX")"
+          RAW_SERVER_LOG="$TMP_WORK/server-raw.log"
+          E2E_DATA_DIR="$TMP_WORK/server-data"
+          CONFIG_PATH="$TMP_WORK/android-int-config.json"
+          OUT_PATH="$TMP_WORK/android-int-out.json"
+
+          E2E_PORT=0 E2E_DATA_DIR="$E2E_DATA_DIR" \
+            node --import tsx scripts/e2e-v2-server.ts </dev/null >"$RAW_SERVER_LOG" 2>&1 &
+          SRV_PID=$!
+
+          for _ in $(seq 1 60); do
+            if grep -q "E2E_SERVER_READY=" "$RAW_SERVER_LOG" 2>/dev/null && \
+               grep -q "First-registration single-use setup token" "$RAW_SERVER_LOG" 2>/dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+
+          BASE_URL="$(sed -n 's/^E2E_SERVER_READY=//p' "$RAW_SERVER_LOG" | tail -n 1 | tr -d '\r\n')"
+          SETUP_TOKEN="$(sed -n 's/^\[PhotoCloud v2 Setup\] First-registration single-use setup token (printed once): //p' "$RAW_SERVER_LOG" | tail -n 1 | tr -d '\r\n')"
+          test -n "$BASE_URL"
+          test -n "$SETUP_TOKEN"
+
+          echo "::add-mask::$SETUP_TOKEN"
+          sed "s/${SETUP_TOKEN}/***MASKED_SETUP_TOKEN***/g" "$RAW_SERVER_LOG" > android-int-server.log
+
+          {
+            echo "ZK_INT_TMP_DIR=$TMP_WORK"
+            echo "ZK_INT_SRV_PID=$SRV_PID"
+            echo "ZK_INT_BASE_URL=$BASE_URL"
+            echo "ZK_INT_SETUP_TOKEN=$SETUP_TOKEN"
+            echo "ZK_INT_CONFIG_PATH=$CONFIG_PATH"
+            echo "ZK_INT_OUT_PATH=$OUT_PATH"
+            echo "ZK_INT_RAW_SERVER_LOG=$RAW_SERVER_LOG"
+          } >> "$GITHUB_ENV"
+
+      - name: Seed Integration User & Encrypted Blob (Credentials Masked, Written Outside Repo)
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/tsx scripts/android-integration-seed.ts 2>&1 | tee android-int-seed.log
+
+      - name: Run Live Kotlin Integration Test (AndroidLiveIntegrationTest)
+        run: |
+          set -euo pipefail
+          cd android-app
+          REQUIRE_ANDROID_INTEGRATION=1 \
+          ZK_INTEGRATION_CONFIG="$ZK_INT_CONFIG_PATH" \
+          ZK_INTEGRATION_OUT="$ZK_INT_OUT_PATH" \
+            gradle testDebugUnitTest \
+              --tests "com.valerio.photocloud.zk.AndroidLiveIntegrationTest" \
+              --info --no-daemon --stacktrace 2>&1 | tee ../android-int-gradle.log
+          cp app/build/test-results/testDebugUnitTest/TEST-*AndroidLiveIntegrationTest*.xml ../live-integration-TEST.xml
+
+      - name: Verify Rewrap & Kotlin PCZK Blob Decryption in TypeScript
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/tsx scripts/android-integration-verify-kotlin-blob.ts 2>&1 | tee android-int-verify-ts.log
+
+      - name: Run Negative Mutation 1 (accept_weak_kdf — PASSES ONLY IF TEST FAILS RED)
+        run: |
+          set +e
+          (
+            cd android-app
+            gradle testDebugUnitTest \
+              --tests "com.valerio.photocloud.zk.PhotoCloudZkV2NetworkTest.*documented*" \
+              -Dzk.mutation=accept_weak_kdf \
+              --info --no-daemon --stacktrace > ../mutation-accept-weak-kdf.log 2>&1
+          )
+          MUT_RC=$?
+          set -e
+          cp android-app/app/build/test-results/testDebugUnitTest/TEST-*PhotoCloudZkV2NetworkTest*.xml mutation-accept-weak-kdf-TEST.xml || true
+          echo "MUTATION_ACCEPT_WEAK_KDF_RC=$MUT_RC" >> mutation-summary.txt
+          if [ "$MUT_RC" -eq 0 ]; then
+            echo "::error::Mutation accept_weak_kdf unexpectedly PASSED (expected test failure)!"
+            cat mutation-accept-weak-kdf.log
+            exit 1
+          fi
+          echo "Verified RED exit code ($MUT_RC) for -Dzk.mutation=accept_weak_kdf"
+
+      - name: Run Negative Mutation 2 (leak_vk_header — PASSES ONLY IF TEST FAILS RED)
+        run: |
+          set +e
+          (
+            cd android-app
+            gradle testDebugUnitTest \
+              --tests "com.valerio.photocloud.zk.PhotoCloudZkV2NetworkTest.*documented*" \
+              -Dzk.mutation=leak_vk_header \
+              --info --no-daemon --stacktrace > ../mutation-leak-vk-header.log 2>&1
+          )
+          MUT_RC=$?
+          set -e
+          cp android-app/app/build/test-results/testDebugUnitTest/TEST-*PhotoCloudZkV2NetworkTest*.xml mutation-leak-vk-header-TEST.xml || true
+          echo "MUTATION_LEAK_VK_HEADER_RC=$MUT_RC" >> mutation-summary.txt
+          if [ "$MUT_RC" -eq 0 ]; then
+            echo "::error::Mutation leak_vk_header unexpectedly PASSED (expected test failure)!"
+            cat mutation-leak-vk-header.log
+            exit 1
+          fi
+          echo "Verified RED exit code ($MUT_RC) for -Dzk.mutation=leak_vk_header"
+
+      - name: Stop Server & Verify Zero Test Credentials Leaked in Job Logs
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -n "${ZK_INT_SRV_PID:-}" ]; then
+            kill -TERM "$ZK_INT_SRV_PID" 2>/dev/null || true
+            wait "$ZK_INT_SRV_PID" 2>/dev/null || true
+          fi
+          if [ -f "${ZK_INT_RAW_SERVER_LOG:-}" ] && [ -n "${ZK_INT_SETUP_TOKEN:-}" ]; then
+            sed "s/${ZK_INT_SETUP_TOKEN}/***MASKED_SETUP_TOKEN***/g" "$ZK_INT_RAW_SERVER_LOG" > android-int-server.log || true
+          fi
+
+          node - <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+
+          const secrets = [];
+          const setupToken = (process.env.ZK_INT_SETUP_TOKEN || "").trim();
+          if (setupToken) secrets.push({ name: "setupToken", value: setupToken });
+
+          const cfgPath = process.env.ZK_INT_CONFIG_PATH || "";
+          if (cfgPath && fs.existsSync(cfgPath)) {
+            const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+            if (cfg.passphrase) secrets.push({ name: "passphrase", value: cfg.passphrase });
+            if (cfg.newPassphrase) secrets.push({ name: "newPassphrase", value: cfg.newPassphrase });
+            if (cfg.recoveryCode) secrets.push({ name: "recoveryCode", value: cfg.recoveryCode });
+            if (cfg.keyFile && cfg.keyFile.accountKey) {
+              secrets.push({ name: "accountKey(b64u)", value: cfg.keyFile.accountKey });
+              const rawHex = Buffer.from(cfg.keyFile.accountKey, "base64url").toString("hex");
+              secrets.push({ name: "accountKey(hex)", value: rawHex });
+            }
+          }
+
+          const filesToScan = [
+            "android-int-server.log",
+            "android-int-seed.log",
+            "android-int-gradle.log",
+            "android-int-verify-ts.log",
+            "mutation-accept-weak-kdf.log",
+            "mutation-leak-vk-header.log",
+            "live-integration-TEST.xml",
+            "mutation-accept-weak-kdf-TEST.xml",
+            "mutation-leak-vk-header-TEST.xml",
+          ].filter((f) => fs.existsSync(f));
+
+          const leaks = [];
+          for (const file of filesToScan) {
+            const content = fs.readFileSync(file, "utf8");
+            for (const s of secrets) {
+              if (s.value && content.toLowerCase().includes(s.value.toLowerCase())) {
+                leaks.push(`${file}: leaked ${s.name}`);
+              }
+            }
+          }
+
+          if (leaks.length > 0) {
+            console.error("::error::Secret leak detected in job logs:\n" + leaks.join("\n"));
+            process.exit(1);
+          }
+          console.log(`Secret leak audit PASS: scanned ${filesToScan.length} files against ${secrets.length} credential values (0 leaks).`);
+          NODE
+
+          if [ -n "${ZK_INT_TMP_DIR:-}" ] && [ -d "${ZK_INT_TMP_DIR}" ]; then
+            rm -rf "${ZK_INT_TMP_DIR}"
+          fi
+
+      - name: Upload Live Integration & Mutation Proof Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-live-integration-logs
+          path: |
+            android-int-server.log
+            android-int-seed.log
+            android-int-gradle.log
+            android-int-verify-ts.log
+            mutation-accept-weak-kdf.log
+            mutation-leak-vk-header.log
+            mutation-summary.txt
+            live-integration-TEST.xml
+            mutation-accept-weak-kdf-TEST.xml
+            mutation-leak-vk-header-TEST.xml
+          if-no-files-found: warn
+
+      - name: Publish Live Integration & Mutation Red-Test Summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+
+          def parse_xml(path: str):
+              if not os.path.exists(path):
+                  return 0, 0, 0, 0, 0, []
+              root = ET.parse(path).getroot()
+              t = int(root.get("tests", "0"))
+              f = int(root.get("failures", "0"))
+              e = int(root.get("errors", "0"))
+              s = int(root.get("skipped", "0"))
+              p = t - f - e - s
+              red = []
+              for c in root.iter("testcase"):
+                  for k in ("failure", "error"):
+                      n = c.find(k)
+                      if n is not None:
+                          msg = (n.get("message") or "").strip().splitlines()
+                          red.append(f"{c.get('classname')}.{c.get('name')} [{k}]: {msg[0] if msg else ''}")
+              return t, p, f, e, s, red
+
+          lt, lp, lf, le, ls, lred = parse_xml("live-integration-TEST.xml")
+          m1t, m1p, m1f, m1e, m1s, m1red = parse_xml("mutation-accept-weak-kdf-TEST.xml")
+          m2t, m2p, m2f, m2e, m2s, m2red = parse_xml("mutation-leak-vk-header-TEST.xml")
+
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+          with open(summary_path, "a", encoding="utf-8") as summary:
+              summary.write("## Live Android <-> Node Integration & Mutation Proofs\n\n")
+              summary.write("| Check | Executed | Passed | Failed | Errors | Skipped |\n")
+              summary.write("|---|---|---|---|---|---|\n")
+              summary.write(f"| `AndroidLiveIntegrationTest` | {lt} | {lp} | {lf} | {le} | {ls} |\n")
+              summary.write(f"| Mutation `accept_weak_kdf` (must fail RED) | {m1t} | {m1p} | {m1f} | {m1e} | {m1s} |\n")
+              summary.write(f"| Mutation `leak_vk_header` (must fail RED) | {m2t} | {m2p} | {m2f} | {m2e} | {m2s} |\n\n")
+              if lred:
+                  summary.write("### Failed Live Integration Tests\n\n")
+                  for item in lred:
+                      summary.write(f"- `{item}`\n")
+              summary.write("\n### Tests Turned RED by Negative Mutations (Expected)\n\n")
+              summary.write("**Mutation 1 (`-Dzk.mutation=accept_weak_kdf`):**\n")
+              for item in (m1red or ["NONE (unexpected!)"]):
+                  summary.write(f"- `{item}`\n")
+              summary.write("\n**Mutation 2 (`-Dzk.mutation=leak_vk_header`):**\n")
+              for item in (m2red or ["NONE (unexpected!)"]):
+                  summary.write(f"- `{item}`\n")
+          PY
+
+  android-emulator-tests:
+    name: Android Emulator Instrumented Tests (KeyStore & Argon2id 64MiB Benchmark)
+    needs: kotlin-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'cmdline-tools;latest platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Setup Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Enable KVM Acceleration for Android Emulator (best effort)
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
+            sudo udevadm control --reload-rules || true
+            sudo udevadm trigger --name-match=kvm || true
+            sudo chmod 666 /dev/kvm || true
+          fi
+
+      - name: Run Instrumented Android Tests on API 34 Emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: |
+            set -o pipefail
+            cd android-app
+            set +e
+            gradle connectedDebugAndroidTest --info --no-daemon --stacktrace 2>&1 | tee ../android-emulator-test.log
+            RC=$?
+            set -e
+            adb logcat -d -s Argon2idBenchmark:I *:E > ../android-emulator-logcat.txt || true
+            exit "$RC"
+
+      - name: Upload Instrumented Test Reports, Benchmark Logs & Logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-emulator-test-logs
+          path: |
+            android-emulator-test.log
+            android-emulator-logcat.txt
+            android-app/app/build/outputs/androidTest-results/**
+            android-app/app/build/reports/androidTests/**
+          if-no-files-found: warn
+
+      - name: Publish Emulator Instrumented Test & Argon2id Benchmark Summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob
+          import os
+          import re
+          import xml.etree.ElementTree as ET
+
+          xmls = sorted(glob.glob("android-app/app/build/outputs/androidTest-results/connected/**/TEST-*.xml", recursive=True))
+          total = passed = failed = errored = skipped = 0
+          failed_cases = []
+          for p in xmls:
+              root = ET.parse(p).getroot()
+              st = int(root.get("tests", "0"))
+              sf = int(root.get("failures", "0"))
+              se = int(root.get("errors", "0"))
+              ss = int(root.get("skipped", "0"))
+              total += st
+              failed += sf
+              errored += se
+              skipped += ss
+              passed += st - sf - se - ss
+              for c in root.iter("testcase"):
+                  for k in ("failure", "error"):
+                      n = c.find(k)
+                      if n is not None:
+                          msg = (n.get("message") or "").strip().splitlines()
+                          failed_cases.append(f"{c.get('classname')}.{c.get('name')} [{k}]: {msg[0] if msg else ''}")
+
+          bench_lines = []
+          summary_metrics = {}
+          search_files = ["android-emulator-logcat.txt", "android-emulator-test.log"] + xmls
+          for logfile in search_files:
+              if os.path.exists(logfile):
+                  with open(logfile, encoding="utf-8", errors="replace") as fh:
+                      for ln in fh:
+                          if "BENCHMARK_" in ln:
+                              bench_lines.append(ln.strip())
+                          if "BENCHMARK_SUMMARY" in ln:
+                              for kv in re.finditer(r"(\w+)=([^\s<]+)", ln):
+                                  summary_metrics[kv.group(1)] = kv.group(2)
+
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+          with open(summary_path, "a", encoding="utf-8") as summary:
+              summary.write("## Android Instrumented Tests (`connectedDebugAndroidTest`, API 34)\n\n")
+              if not xmls:
+                  summary.write("No connected `TEST-*.xml` files were produced.\n")
+              else:
+                  summary.write("| Executed | Passed | Failed | Errors | Skipped |\n")
+                  summary.write("|---|---|---|---|---|\n")
+                  summary.write(f"| {total} | {passed} | {failed} | {errored} | {skipped} |\n\n")
+
+              if summary_metrics:
+                  summary.write("### Argon2id 64 MiB (`BouncyCastle 1.82`) Emulator Benchmark\n\n")
+                  summary.write("| Provider | Params | Min (ms) | Avg (ms) | Max (ms) | Peak Heap (MiB) | Max Heap (MiB) |\n")
+                  summary.write("|---|---|---|---|---|---|---|\n")
+                  summary.write(
+                      f"| {summary_metrics.get('provider', 'BouncyCastle-1.82')} "
+                      f"| m={summary_metrics.get('mKiB', '65536')} KiB, t={summary_metrics.get('t', '3')}, p={summary_metrics.get('p', '1')} "
+                      f"| {summary_metrics.get('minMs', 'N/A')} "
+                      f"| {summary_metrics.get('avgMs', 'N/A')} "
+                      f"| {summary_metrics.get('maxMs', 'N/A')} "
+                      f"| {summary_metrics.get('peakHeapMiB', 'N/A')} "
+                      f"| {summary_metrics.get('maxHeapMiB', 'N/A')} |\n\n"
+                  )
+                  summary.write("> Nota: i numeri dell'emulatore CI x86_64 **NON sono sufficienti** per decidere l'adozione di `argon2kt`; è necessaria una misura su dispositivo ARM reale di fascia bassa (vedi `docs/zk-android-plan.md`).\n\n")
+
+              if bench_lines:
+                  summary.write("<details><summary>Raw Argon2id Benchmark Log Lines</summary>\n\n```text\n")
+                  summary.write("\n".join(bench_lines[:15]) + "\n```\n</details>\n\n")
+              if failed_cases:
+                  summary.write("\n### Failed Instrumented Tests\n\n")
+                  for fc in failed_cases:
+                      summary.write(f"- `{fc}`\n")
+          PY
 
   web-e2e:
     name: Web /v2 Browser E2E (Playwright Chromium + Service Worker Range)
@@ -227,7 +750,15 @@ jobs:
           npx playwright install --with-deps chromium
 
       - name: Execute PhotoCloud v2 Browser E2E Flows (1..9)
-        run: bash scripts/run-v2-playwright-e2e.sh
+        run: |
+          set -o pipefail
+          set +e
+          bash scripts/run-v2-playwright-e2e.sh 2>&1 | tee /tmp/web-e2e-runner.log
+          RC=$?
+          set -e
+          mkdir -p .playwright-e2e-artifacts
+          cp /tmp/web-e2e-runner.log .playwright-e2e-artifacts/e2e-runner.log || true
+          exit "$RC"
 
       - name: Upload Playwright E2E Traces & Screenshots
         if: always()
@@ -236,3 +767,31 @@ jobs:
           name: web-v2-playwright-e2e-artifacts
           path: .playwright-e2e-artifacts/**
           if-no-files-found: warn
+
+      - name: Publish Web E2E Summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+
+          log_path = ".playwright-e2e-artifacts/e2e-runner.log"
+          if not os.path.exists(log_path):
+              log_path = "/tmp/web-e2e-runner.log"
+          content = open(log_path, encoding="utf-8", errors="replace").read() if os.path.exists(log_path) else ""
+          pass_lines = [ln.strip() for ln in content.splitlines() if "[PASS]" in ln]
+          err_lines = [ln.strip() for ln in content.splitlines() if "[FAIL]" in ln or "ERROR" in ln or "Error:" in ln]
+          total = len(pass_lines) + len(err_lines)
+
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+          with open(summary_path, "a", encoding="utf-8") as summary:
+              summary.write("## Web /v2 Playwright E2E Flows (1..9)\n\n")
+              summary.write("| Suite | Total Markers | Passed | Failed |\n")
+              summary.write("|---|---|---|---|\n")
+              summary.write(f"| `e2e-v2-playwright.mjs` | {total} | {len(pass_lines)} | {len(err_lines)} |\n\n")
+              if err_lines:
+                  summary.write("### Failed / Error Flows\n\n")
+                  for ln in err_lines[:20]:
+                      summary.write(f"- `{ln}`\n")
+              elif pass_lines:
+                  summary.write("### Completed Flows\n\n```text\n" + "\n".join(pass_lines[-20:]) + "\n```\n")
+          PY

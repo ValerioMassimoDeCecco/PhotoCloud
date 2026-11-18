@@ -394,6 +394,36 @@ jobs:
             exit 1
           fi
 
+          AAPT2=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name "aapt2" 2>/dev/null | sort -V | tail -n 1 || true)
+          APKANALYZER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools" -name "apkanalyzer" 2>/dev/null | sort -V | tail -n 1 || true)
+          {
+            echo "=== Release APK Cleartext Audit ($APK_FILE) ==="
+            if [ -n "$APKANALYZER" ]; then
+              "$APKANALYZER" manifest print "$APK_FILE"
+            fi
+            echo "--- network_security_config.xml ---"
+            if [ -n "$AAPT2" ]; then
+              "$AAPT2" dump xmltree "$APK_FILE" --file res/xml/network_security_config.xml
+            else
+              AAPT=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name "aapt" 2>/dev/null | sort -V | tail -n 1)
+              "$AAPT" dump xmltree "$APK_FILE" res/xml/network_security_config.xml
+            fi
+          } | tee ../release-apk-cleartext-check.txt
+          if grep -E 'usesCleartextTraffic.*=.*(0xffffffff|true)' ../release-apk-cleartext-check.txt; then
+            echo "::error::L'APK release abilita usesCleartextTraffic=true!"
+            exit 1
+          fi
+          NSC_DUMP=$(sed -n '/--- network_security_config.xml ---/,$p' ../release-apk-cleartext-check.txt)
+          if echo "$NSC_DUMP" | grep -E 'cleartextTrafficPermitted.*(0xffffffff|true)' >/dev/null || \
+             echo "$NSC_DUMP" | grep -E 'localhost|127\.0\.0\.1|10\.0\.2\.2' >/dev/null; then
+            echo "::error::L'APK release include eccezioni cleartext in network_security_config.xml!"
+            exit 1
+          fi
+          if ! echo "$NSC_DUMP" | grep -E 'cleartextTrafficPermitted.*0x0' >/dev/null; then
+            echo "::error::cleartextTrafficPermitted=false (0x0) mancante in network_security_config.xml!"
+            exit 1
+          fi
+
           node <<'NODE'
           const actualCert = (process.env.EXPECTED_CERT_SHA256 || "").toLowerCase();
           const allowRotation = process.env.ALLOW_ROTATION === "true";
@@ -534,3 +564,32 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Release Cleartext Check Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: photocloud-release-audit-logs
+          path: |
+            release-apk-cleartext-check.txt
+            release/photocloud-release-build.json
+          if-no-files-found: warn
+
+      - name: Publish Release Build & Cleartext Check Summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+          with open(summary_path, "a", encoding="utf-8") as summary:
+              summary.write("## Build & Publish Android Release APK\n\n")
+              summary.write("- **Version**: `${{ steps.apk_check.outputs.VERSION_NAME }}` (`${{ steps.apk_check.outputs.VERSION_CODE }}`)\n")
+              summary.write("- **Cert SHA-256**: `${{ steps.apk_check.outputs.CERT_SHA256 }}`\n")
+              if os.path.exists("release-apk-cleartext-check.txt"):
+                  txt = open("release-apk-cleartext-check.txt", encoding="utf-8", errors="replace").read()
+                  tail = "\n".join(txt.splitlines()[-25:])
+                  summary.write("\n### Release APK Cleartext Audit (`aapt2` / `apkanalyzer`)\n\n```text\n" + tail + "\n```\n")
+              else:
+                  summary.write("\n- Cleartext audit log not produced (build failed before check).\n")
+          PY
+

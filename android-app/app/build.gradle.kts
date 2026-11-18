@@ -23,6 +23,7 @@ android {
         versionCode = 33
         versionName = "1.5.1"
 
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:3000\"")
     }
 
@@ -326,11 +327,14 @@ android {
     }
 
     testOptions {
-        unitTests.all {
-            // FASE 4A.3: Forziamo -Xmx128m per verificare che lo streaming PCZK da 305 MiB
+        unitTests.all { testTask ->
+            // FASE 4A.3 / 4B: Forziamo -Xmx128m per verificare che lo streaming PCZK da 305 MiB
             // non causi OOM e resti dentro il budget RAM rigoroso.
-            it.maxHeapSize = "128m"
-            it.testLogging {
+            testTask.maxHeapSize = "128m"
+            System.getProperty("zk.mutation")?.let { mutationMode ->
+                testTask.systemProperty("zk.mutation", mutationMode)
+            }
+            testTask.testLogging {
                 events("failed", "skipped")
                 exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
                 showStackTraces = true
@@ -378,4 +382,12 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("junit:junit:4.13.2")
 }
