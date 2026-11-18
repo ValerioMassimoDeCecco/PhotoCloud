@@ -98,14 +98,14 @@ data class V2ServerItem(
 )
 
 /**
- * Isolated OkHttp network client strictly bound to PhotoCloud `/api/v2/*` endpoints (FASE 4B).
+ * Isolated OkHttp network client strictly bound to PhotoCloud `/api/v2/` endpoints (FASE 4B).
  *
  * Security guarantees:
  * - Enforces HTTPS everywhere except explicit loopback hosts (`localhost`, `127.0.0.1`, `::1`, `10.0.2.2`)
  *   when [allowLocalhostHttpForTests] is enabled.
- * - Rejects any path outside `/api/v2/*` before issuing any network call.
+ * - Rejects any path outside the `/api/v2/` prefix before issuing any network call.
  * - Uses [TofuSpkiTrustManager] for self-signed servers (no TrustAll, default strict HostnameVerifier intact).
- * - Uses [ZkV2CookieJar] isolated to `/api/v2/*` in memory.
+ * - Uses [ZkV2CookieJar] isolated to `/api/v2/` in memory.
  * - Never sends or logs `passphrase`, `accountKey`, `root`, `kek`, `VK`, or `FK`.
  */
 class PhotoCloudZkApiClientV2(

@@ -158,7 +158,7 @@ class PhotoCloudZkV2NetworkTest {
                 e.challenge
             }!!
             assertEquals(0, server.requestCount)
-            assertEquals(TofuSpkiPinning.computeSpkiPin(heldCert1.certificate() as X509Certificate), challenge.spkiPin)
+            assertEquals(TofuSpkiPinning.computeSpkiPin(heldCert1.certificate as X509Certificate), challenge.spkiPin)
 
             // 2. Confirm TOFU pin -> request succeeds over HTTPS
             client.confirmTofuServer(challenge)
@@ -173,13 +173,14 @@ class PhotoCloudZkV2NetworkTest {
                 .addSubjectAlternativeName("127.0.0.1")
                 .build()
             val certs2 = HandshakeCertificates.Builder().heldCertificate(heldCert2).build()
+            // Free the port before rebinding a different certificate on the same host:port.
+            val originalHost = server.url("/").host
+            server.shutdown()
             val rotatedServer = MockWebServer()
             rotatedServer.useHttps(certs2.sslSocketFactory(), false)
             rotatedServer.start(server.port)
             try {
-                // Shut down original first so same port can bind
-                server.shutdown()
-                val baseUrl2 = "https://localhost:${rotatedServer.port}"
+                val baseUrl2 = "https://$originalHost:${rotatedServer.port}"
                 client.baseUrl = baseUrl2
                 try {
                     client.fetchLoginParams("alice")
@@ -209,8 +210,8 @@ class PhotoCloudZkV2NetworkTest {
                 val wrongClient = PhotoCloudZkApiClientV2(url3, pinStore = wrongPinStore)
                 wrongPinStore.savePin(
                     TofuPinRecord(
-                        hostPort = "localhost:${wrongHostServer.port}",
-                        spkiPin = TofuSpkiPinning.computeSpkiPin(wrongHostCert.certificate() as X509Certificate),
+                        hostPort = "${java.net.URI(url3).host}:${wrongHostServer.port}",
+                        spkiPin = TofuSpkiPinning.computeSpkiPin(wrongHostCert.certificate as X509Certificate),
                         certSha256Hex = "00".repeat(32),
                         subject = "CN=evil.internal",
                         issuer = "CN=evil.internal",
@@ -612,7 +613,7 @@ class PhotoCloudZkV2NetworkTest {
             "accept_weak_kdf" -> {
                 // Intentionally uncaught so Gradle fails RED when mutation CLI flag is passed in CI
                 runWeakKdfFloorCheck(MutatedAcceptWeakKdfPolicyForTest)
-                return
+                return@runTest
             }
             "leak_vk_header" -> {
                 // Intentionally uncaught so Gradle fails RED when mutation CLI flag is passed in CI
@@ -625,7 +626,7 @@ class PhotoCloudZkV2NetworkTest {
                     ),
                     sampleVk
                 )
-                return
+                return@runTest
             }
         }
 
@@ -660,3 +661,4 @@ class PhotoCloudZkV2NetworkTest {
         assertTrue("Documented mutation 2 (leak_vk_header) must fail Network Spy assertion", mut2Failed)
     }
 }
+

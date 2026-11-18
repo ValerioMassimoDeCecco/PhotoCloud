@@ -6,11 +6,11 @@ import okhttp3.HttpUrl
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Dedicated, strictly isolated [CookieJar] for `/api/v2/*` requests only (FASE 4B).
+ * Dedicated, strictly isolated [CookieJar] for `/api/v2/` requests only (FASE 4B).
  *
  * Security rules:
  * - Never accepts or sends cookies for non-`/api/v2` paths (prevents leaking v2 `photocloud_v2_sid`
- *   to legacy `/api/*` endpoints).
+ *   to legacy `/api/` endpoints).
  * - Only sends `Secure` cookies over HTTPS, except on explicit loopback test hosts
  *   (`localhost`, `127.0.0.1`, `::1`, `10.0.2.2`) when [allowLocalhostHttpForTests] is enabled,
  *   because `zkServerV2.ts` emits `; Secure` for `isSecureOrLocalhostRequest(req)`.

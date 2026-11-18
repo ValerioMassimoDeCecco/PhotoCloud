@@ -911,7 +911,7 @@ class ZkSessionManager(
                 newSaltB64u = newSaltB64u,
                 newKdfParams = newKdfParams,
                 newAuthSecretB64u = newAuthSecretB64u,
-                newWrappedVkB64u = newWrappedVkB64u
+                newWrappedVaultKeyB64u = newWrappedVkB64u
             )
 
             this.accountKey?.zeroize()

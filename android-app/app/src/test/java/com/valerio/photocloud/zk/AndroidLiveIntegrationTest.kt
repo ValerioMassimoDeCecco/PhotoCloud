@@ -20,7 +20,7 @@ import java.util.UUID
 /**
  * Live Android JVM <-> Express/Node Server Integration Test (FASE 4B):
  *
- * 1. Connects to live Node `/api/v2/*` seeded by TypeScript `ZkVaultClient`.
+ * 1. Connects to live Node `/api/v2/` endpoints seeded by TypeScript `ZkVaultClient`.
  * 2. Logs in with TS-generated KeyFile JSON + passphrase (real BouncyCastle 64 MiB Argon2id).
  * 3. Lists `/api/v2/items`, downloads & decrypts TS-uploaded `encMeta` and `PCZK v1` blob.
  * 4. Logs out, verifies memory wipe (`fill(0)`), logs back in using Recovery Code + passphrase.
@@ -93,7 +93,7 @@ class AndroidLiveIntegrationTest {
         // 2. Fetch TS-seeded item from live Node server and decrypt metadata + PCZK blob in Kotlin
         val items = api.listItems(state = "active", limit = 50)
         val seedItem = items.firstOrNull { it.blobId.equals(seedBlobId, ignoreCase = true) }
-            ?: fail("Seed blob $seedBlobId non trovato su /api/v2/items")
+            ?: throw AssertionError("Seed blob $seedBlobId non trovato su /api/v2/items")
 
         val encMetaBytes = ZkCoreCrypto.fromBase64Url(seedItem.encMetaB64u)
         val decryptedMetaJson = JSONObject(ZkCoreCrypto.decryptMeta(subkeys1.metaKey, seedItem.blobId, encMetaBytes))

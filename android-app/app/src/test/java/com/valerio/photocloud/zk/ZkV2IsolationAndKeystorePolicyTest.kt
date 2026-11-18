@@ -77,9 +77,9 @@ class ZkV2IsolationAndKeystorePolicyTest {
         val salt = ByteArray(16) { (it + 0x21).toByte() }
         val kdf = V2KdfParamsDto("Argon2id", 65536, 3, 1)
 
-        val fastProvider = ZkArgon2id.Argon2idProvider { ak, slt, _, _, _, len ->
+        val fastProvider = ZkArgon2id.Argon2idProvider { ak, slt, params, _, _, _ ->
             // Deterministic fast test KDF strictly for non-crypto session-flow assertions
-            ByteArray(len) { idx -> (ak[idx % ak.size].toInt() xor slt[idx % slt.size].toInt()).toByte() }
+            ByteArray(params.hashLength) { idx -> (ak[idx % ak.size].toInt() xor slt[idx % slt.size].toInt()).toByte() }
         }
         val root = ZkCoreCrypto.deriveRoot(accountKey, salt, passphrase, kdf.toArgon2Params(), argon2Provider = fastProvider)
         val keys = ZkCoreCrypto.deriveKekAndAuthSecret(root)
@@ -185,8 +185,8 @@ class ZkV2IsolationAndKeystorePolicyTest {
         val salt = ByteArray(16) { (it + 0x31).toByte() }
         val kdf = V2KdfParamsDto("Argon2id", 65536, 3, 1)
 
-        val fastProvider = ZkArgon2id.Argon2idProvider { ak, slt, _, _, _, len ->
-            ByteArray(len) { idx -> (ak[idx % ak.size].toInt() xor slt[idx % slt.size].toInt()).toByte() }
+        val fastProvider = ZkArgon2id.Argon2idProvider { ak, slt, params, _, _, _ ->
+            ByteArray(params.hashLength) { idx -> (ak[idx % ak.size].toInt() xor slt[idx % slt.size].toInt()).toByte() }
         }
         val root = ZkCoreCrypto.deriveRoot(accountKey, salt, passphrase, kdf.toArgon2Params(), argon2Provider = fastProvider)
         val keys = ZkCoreCrypto.deriveKekAndAuthSecret(root)
@@ -322,8 +322,8 @@ class ZkV2IsolationAndKeystorePolicyTest {
                         .put("parallelism", pinRecord.parallelism)
                 )
                 .toString()
-            Files.writeString(serializedPrefsFile, prefsDump)
-            val diskContents = Files.readString(serializedPrefsFile)
+            Files.write(serializedPrefsFile, prefsDump.toByteArray(Charsets.UTF_8))
+            val diskContents = String(Files.readAllBytes(serializedPrefsFile), Charsets.UTF_8)
             val diskBytes = Files.readAllBytes(serializedPrefsFile)
 
             assertFalse(diskBytes.decodeToString().contains(String(vkSnapshot, Charsets.ISO_8859_1)))
