@@ -1,16 +1,15 @@
 package com.valerio.photocloud.zk
 
 import android.os.Build
-import android.os.Bundle
 import android.os.Debug
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.Locale
 import kotlin.system.measureNanoTime
 
 /**
@@ -51,85 +50,84 @@ class Argon2idBenchmarkInstrumentedTest {
 
         val runtime = Runtime.getRuntime()
         val maxHeapMiB = runtime.maxMemory() / (1024.0 * 1024.0)
+        var warmupOut: ByteArray? = null
 
-        // Warmup JIT/ART once
-        val warmupOut = ZkCoreCrypto.deriveRoot(
-            accountKey = accountKey,
-            userSalt = userSalt,
-            passphrase = PASSPHRASE_UTF8,
-            argon2Params = params
-        )
-        assertEquals(EXPECTED_ROOT_HEX, ZkCoreCrypto.toHex(warmupOut))
-
-        val durationsMs = mutableListOf<Double>()
-        var peakHeapUsedMiB = 0.0
-
-        for (iter in 1..3) {
-            System.gc()
-            val heapBeforeBytes = runtime.totalMemory() - runtime.freeMemory()
-            val nativeBeforeBytes = Debug.getNativeHeapAllocatedSize()
-
-            lateinit var rootOut: ByteArray
-            val elapsedNs = measureNanoTime {
-                rootOut = ZkCoreCrypto.deriveRoot(
-                    accountKey = accountKey,
-                    userSalt = userSalt,
-                    passphrase = PASSPHRASE_UTF8,
-                    argon2Params = params
-                )
-            }
-            assertArrayEquals(warmupOut, rootOut)
-            assertEquals(32, rootOut.size)
-
-            val elapsedMs = elapsedNs / 1_000_000.0
-            durationsMs.add(elapsedMs)
-
-            val heapAfterBytes = runtime.totalMemory() - runtime.freeMemory()
-            val heapUsedMiB = heapAfterBytes / (1024.0 * 1024.0)
-            if (heapUsedMiB > peakHeapUsedMiB) {
-                peakHeapUsedMiB = heapUsedMiB
-            }
-            val nativeDeltaMiB = (Debug.getNativeHeapAllocatedSize() - nativeBeforeBytes) / (1024.0 * 1024.0)
-
-            Log.i(
-                TAG,
-                "BENCHMARK_ITER=$iter device=${Build.MANUFACTURER}/${Build.MODEL} " +
-                    "sdk=${Build.VERSION.SDK_INT} abi=${Build.SUPPORTED_ABIS.firstOrNull()} " +
-                    "mKiB=65536 t=3 p=1 elapsedMs=${"%.1f".format(elapsedMs)} " +
-                    "heapBeforeMiB=${"%.1f".format(heapBeforeBytes / (1024.0 * 1024.0))} " +
-                    "heapAfterMiB=${"%.1f".format(heapUsedMiB)} " +
-                    "maxHeapMiB=${"%.1f".format(maxHeapMiB)} " +
-                    "nativeDeltaMiB=${"%.2f".format(nativeDeltaMiB)}"
+        try {
+            // Warmup JIT/ART once
+            val warmup = ZkCoreCrypto.deriveRoot(
+                accountKey = accountKey,
+                userSalt = userSalt,
+                passphrase = PASSPHRASE_UTF8,
+                argon2Params = params
             )
-            rootOut.zeroize()
+            warmupOut = warmup
+            assertEquals(EXPECTED_ROOT_HEX, ZkCoreCrypto.toHex(warmup))
+            System.gc()
+
+            val durationsMs = mutableListOf<Double>()
+            var peakHeapUsedMiB = 0.0
+
+            for (iter in 1..3) {
+                System.gc()
+                val heapBeforeBytes = runtime.totalMemory() - runtime.freeMemory()
+                val nativeBeforeBytes = Debug.getNativeHeapAllocatedSize()
+
+                lateinit var rootOut: ByteArray
+                val elapsedNs = measureNanoTime {
+                    rootOut = ZkCoreCrypto.deriveRoot(
+                        accountKey = accountKey,
+                        userSalt = userSalt,
+                        passphrase = PASSPHRASE_UTF8,
+                        argon2Params = params
+                    )
+                }
+                assertArrayEquals(warmup, rootOut)
+                assertEquals(32, rootOut.size)
+
+                val elapsedMs = elapsedNs / 1_000_000.0
+                durationsMs.add(elapsedMs)
+
+                val heapAfterBytes = runtime.totalMemory() - runtime.freeMemory()
+                val heapUsedMiB = heapAfterBytes / (1024.0 * 1024.0)
+                if (heapUsedMiB > peakHeapUsedMiB) {
+                    peakHeapUsedMiB = heapUsedMiB
+                }
+                val nativeDeltaMiB =
+                    (Debug.getNativeHeapAllocatedSize() - nativeBeforeBytes) / (1024.0 * 1024.0)
+
+                Log.i(
+                    TAG,
+                    "BENCHMARK_ITER=$iter device=${Build.MANUFACTURER}/${Build.MODEL} " +
+                        "sdk=${Build.VERSION.SDK_INT} abi=${Build.SUPPORTED_ABIS.firstOrNull()} " +
+                        "mKiB=65536 t=3 p=1 elapsedMs=${String.format(Locale.US, "%.1f", elapsedMs)} " +
+                        "heapBeforeMiB=${String.format(Locale.US, "%.1f", heapBeforeBytes / (1024.0 * 1024.0))} " +
+                        "heapAfterMiB=${String.format(Locale.US, "%.1f", heapUsedMiB)} " +
+                        "maxHeapMiB=${String.format(Locale.US, "%.1f", maxHeapMiB)} " +
+                        "nativeDeltaMiB=${String.format(Locale.US, "%.2f", nativeDeltaMiB)}"
+                )
+                rootOut.zeroize()
+            }
+
+            val minMs = durationsMs.min()
+            val avgMs = durationsMs.average()
+            val maxMs = durationsMs.max()
+
+            val summaryLine =
+                "BENCHMARK_SUMMARY provider=BouncyCastle-1.82 mKiB=65536 t=3 p=1 " +
+                    "minMs=${String.format(Locale.US, "%.1f", minMs)} " +
+                    "avgMs=${String.format(Locale.US, "%.1f", avgMs)} " +
+                    "maxMs=${String.format(Locale.US, "%.1f", maxMs)} " +
+                    "peakHeapMiB=${String.format(Locale.US, "%.1f", peakHeapUsedMiB)} " +
+                    "maxHeapMiB=${String.format(Locale.US, "%.1f", maxHeapMiB)}"
+            Log.i(TAG, summaryLine)
+            println(summaryLine)
+
+            assertTrue("Expected positive execution duration", avgMs > 0.0)
+            assertTrue("Expected non-zero max JVM heap", maxHeapMiB > 0.0)
+        } finally {
+            accountKey.zeroize()
+            userSalt.zeroize()
+            warmupOut.zeroize()
         }
-
-        val minMs = durationsMs.min()
-        val avgMs = durationsMs.average()
-        val maxMs = durationsMs.max()
-
-        val summaryLine =
-            "BENCHMARK_SUMMARY provider=BouncyCastle-1.82 mKiB=65536 t=3 p=1 " +
-                "minMs=${"%.1f".format(minMs)} avgMs=${"%.1f".format(avgMs)} maxMs=${"%.1f".format(maxMs)} " +
-                "peakHeapMiB=${"%.1f".format(peakHeapUsedMiB)} maxHeapMiB=${"%.1f".format(maxHeapMiB)}"
-        Log.i(TAG, summaryLine)
-        println(summaryLine)
-
-        val statusBundle = Bundle().apply {
-            putString("argon2_provider", "BouncyCastle-1.82")
-            putDouble("min_ms", minMs)
-            putDouble("avg_ms", avgMs)
-            putDouble("max_ms", maxMs)
-            putDouble("peak_heap_mib", peakHeapUsedMiB)
-            putDouble("max_heap_mib", maxHeapMiB)
-        }
-        InstrumentationRegistry.getInstrumentation().sendStatus(0, statusBundle)
-
-        accountKey.zeroize()
-        userSalt.zeroize()
-        warmupOut.zeroize()
-
-        assertTrue("Expected positive execution duration", avgMs > 0.0)
-        assertTrue("Expected non-zero max JVM heap", maxHeapMiB > 0.0)
     }
 }

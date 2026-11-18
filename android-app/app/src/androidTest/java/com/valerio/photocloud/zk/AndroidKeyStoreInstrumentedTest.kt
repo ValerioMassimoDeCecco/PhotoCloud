@@ -1,5 +1,6 @@
 package com.valerio.photocloud.zk
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.os.Build
 import android.security.keystore.KeyInfo
@@ -55,7 +56,10 @@ class AndroidKeyStoreInstrumentedTest {
         val status = keyStore.wrapForBackground(vk)
         assertTrue(status.backgroundEnrolled)
         assertFalse(status.biometricEnrolled)
-        assertEquals(Build.VERSION.SDK_INT >= Build.VERSION_CODES.P, status.unlockedDeviceRequiredEnforced)
+        val keyguardManager = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        val expectedUnlockedRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            (keyguardManager?.isDeviceSecure == true)
+        assertEquals(expectedUnlockedRequired, status.unlockedDeviceRequiredEnforced)
 
         // Verify AndroidKeyStore actually holds photocloud_vk_bg_v2 with expected AES-GCM parameters
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

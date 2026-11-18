@@ -18,16 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: 'cmdline-tools;latest platform-tools platforms;android-35 build-tools;35.0.0'
 
@@ -36,7 +36,7 @@ jobs:
           yes | sdkmanager --licenses > /dev/null || true
 
       - name: Setup Gradle 8.10.2
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.10.2'
 
@@ -144,7 +144,7 @@ jobs:
 
       - name: Upload Kotlin-to-Web Interop Fixtures Artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: interop-kotlin-fixtures
           path: android-app/app/build/interop-kotlin/**
@@ -152,7 +152,7 @@ jobs:
 
       - name: Upload Android Unit Test & Build Logs and Reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: android-unit-test-logs
           path: |
@@ -258,15 +258,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js >= 22.13.0
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '>=22.13.0'
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -277,7 +277,7 @@ jobs:
         run: pip install --no-cache-dir cryptography argon2-cffi
 
       - name: Download Kotlin-to-Web Interop Fixtures Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: interop-kotlin-fixtures
           path: android-app/app/build/interop-kotlin
@@ -306,7 +306,7 @@ jobs:
 
       - name: Upload Interop Verification Logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: interop-verification-logs
           path: |
@@ -333,7 +333,7 @@ jobs:
           passed = extract(r"# pass\s+(\d+)", ts_log)
           failed = extract(r"# fail\s+(\d+)", ts_log)
           skipped = extract(r"# skipped\s+(\d+)", ts_log)
-          py_pass_cnt = len([ln for ln in py_log.splitlines() if "[PASS]" in ln])
+          py_pass_cnt = len([ln for ln in py_log.splitlines() if "[OK]" in ln or "[PASS]" in ln])
           py_fail_lines = [ln.strip() for ln in py_log.splitlines() if "[FAIL]" in ln or "FAILED" in ln or "[PENDING]" in ln]
           py_status = "PASS" if py_pass_cnt > 0 and not py_fail_lines else "FAIL"
 
@@ -356,21 +356,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js >= 22.13.0
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '>=22.13.0'
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: 'cmdline-tools;latest platform-tools platforms;android-35 build-tools;35.0.0'
 
@@ -379,7 +379,7 @@ jobs:
           yes | sdkmanager --licenses > /dev/null || true
 
       - name: Setup Gradle 8.10.2
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.10.2'
 
@@ -567,7 +567,7 @@ jobs:
 
       - name: Upload Live Integration & Mutation Proof Artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: android-live-integration-logs
           path: |
@@ -639,16 +639,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: 'cmdline-tools;latest platform-tools platforms;android-35 build-tools;35.0.0'
 
@@ -657,7 +657,7 @@ jobs:
           yes | sdkmanager --licenses > /dev/null || true
 
       - name: Setup Gradle 8.10.2
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.10.2'
 
@@ -677,14 +677,16 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_6
+          ram-size: 4096M
+          heap-size: 512M
           disable-animations: true
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           script: |
-            bash -lc 'set -o pipefail; cd android-app; gradle connectedDebugAndroidTest --info --no-daemon --stacktrace 2>&1 | tee ../android-emulator-test.log; RC=$?; adb logcat -d -s Argon2idBenchmark:I "*:E" > ../android-emulator-logcat.txt || true; exit $RC'
+            bash -c 'set -o pipefail; adb wait-for-device; adb shell svc power stayon true || true; adb shell input keyevent 82 || true; adb shell wm dismiss-keyguard || true; cd android-app; gradle connectedDebugAndroidTest --info --no-daemon --stacktrace 2>&1 | tee ../android-emulator-test.log; RC=$?; adb logcat -d -s Argon2idBenchmark:I TestRunner:* AndroidRuntime:E Keystore2:W KeyStore:E "*:E" > ../android-emulator-logcat.txt || true; exit $RC'
 
       - name: Upload Instrumented Test Reports, Benchmark Logs & Logcat
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: android-emulator-test-logs
           path: |
@@ -721,8 +723,9 @@ jobs:
                   for k in ("failure", "error"):
                       n = c.find(k)
                       if n is not None:
-                          msg = (n.get("message") or "").strip().splitlines()
-                          failed_cases.append(f"{c.get('classname')}.{c.get('name')} [{k}]: {msg[0] if msg else ''}")
+                          body = (n.text or n.get("message") or "").strip().splitlines()
+                          preview = " | ".join(body[:4]) if body else ""
+                          failed_cases.append(f"{c.get('classname')}.{c.get('name')} [{k}]: {preview}")
 
           bench_lines = []
           summary_metrics = {}
@@ -769,6 +772,10 @@ jobs:
                   summary.write("\n### Failed Instrumented Tests\n\n")
                   for fc in failed_cases:
                       summary.write(f"- `{fc}`\n")
+              if (not xmls or failed > 0 or errored > 0) and os.path.exists("android-emulator-test.log"):
+                  tail = open("android-emulator-test.log", encoding="utf-8", errors="replace").read().splitlines()[-60:]
+                  summary.write("\n<details><summary>Gradle Failure Log Tail</summary>\n\n```text\n")
+                  summary.write("\n".join(tail) + "\n```\n</details>\n")
           PY
 
   web-e2e:
@@ -776,10 +783,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js >= 22.13.0
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '>=22.13.0'
 
@@ -806,7 +813,7 @@ jobs:
 
       - name: Upload Playwright E2E Traces & Screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: web-v2-playwright-e2e-artifacts
           path: .playwright-e2e-artifacts/**
@@ -822,7 +829,7 @@ jobs:
           if not os.path.exists(log_path):
               log_path = "/tmp/web-e2e-runner.log"
           content = open(log_path, encoding="utf-8", errors="replace").read() if os.path.exists(log_path) else ""
-          pass_lines = [ln.strip() for ln in content.splitlines() if "[PASS]" in ln]
+          pass_lines = [ln.strip() for ln in content.splitlines() if "[PASS]" in ln or "[OK]" in ln or "[E2E Flow " in ln]
           err_lines = [ln.strip() for ln in content.splitlines() if "[FAIL]" in ln or "ERROR" in ln or "Error:" in ln]
           total = len(pass_lines) + len(err_lines)
 

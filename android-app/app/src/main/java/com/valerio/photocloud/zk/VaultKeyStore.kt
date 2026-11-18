@@ -1,5 +1,6 @@
 package com.valerio.photocloud.zk
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
@@ -9,6 +10,7 @@ import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import android.util.Base64
+import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.security.ProviderException
 import javax.crypto.Cipher
@@ -300,6 +302,11 @@ class AndroidHardwareVaultKeyStore(
         return KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
     }
 
+    private fun isDeviceLockScreenSecure(): Boolean {
+        val km = appContext.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        return km?.isDeviceSecure == true
+    }
+
     private fun buildKeySpec(
         alias: String,
         requireBiometricAuth: Boolean,
@@ -324,7 +331,10 @@ class AndroidHardwareVaultKeyStore(
             }
         } else {
             builder.setUserAuthenticationRequired(false)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            // On Android 12-14 (KeyStore2), setUnlockedDeviceRequired(true) requires a secure
+            // lock screen (PIN/pattern/password); setting it without a lock screen causes
+            // KeyStore2 to reject key usage with UserNotAuthenticatedException / KeyStoreException.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && isDeviceLockScreenSecure()) {
                 builder.setUnlockedDeviceRequired(true)
             }
         }
@@ -363,7 +373,8 @@ class AndroidHardwareVaultKeyStore(
             return KeyCreationOutcome(existing.secretKey, sb, hw)
         }
 
-        // First attempt StrongBox on API 28+, gracefully falling back to TEE if StrongBox is absent.
+        // First attempt StrongBox on API 28+, gracefully falling back to TEE if StrongBox is absent
+        // or rejects the key specification (e.g., API 34 emulators / KeyStore2 HARDWARE_TYPE_UNAVAILABLE).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {
                 val keyGen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
@@ -372,14 +383,13 @@ class AndroidHardwareVaultKeyStore(
                 val (sb, hw) = inspectKeyBacking(key)
                 prefs.edit().putBoolean(KEY_STRONGBOX_ACTIVE, sb).apply()
                 return KeyCreationOutcome(key, sb, hw)
-            } catch (e: StrongBoxUnavailableException) {
+            } catch (_: StrongBoxUnavailableException) {
                 // Expected fallback when hardware does not ship a StrongBox SE/Keymaster4 module.
-            } catch (e: ProviderException) {
-                val msg = e.message.orEmpty()
-                val isStrongBoxError = e.cause is StrongBoxUnavailableException ||
-                    msg.contains("StrongBox", ignoreCase = true) ||
-                    msg.contains("HARDWARE_TYPE_UNAVAILABLE", ignoreCase = true)
-                if (!isStrongBoxError) throw e
+            } catch (_: ProviderException) {
+                // KeyStore2 may wrap StrongBox unavailability in ProviderException without
+                // "StrongBox" in the top-level message; fall back to TEE below.
+            } catch (_: GeneralSecurityException) {
+                // StrongBox may reject parameters supported by TEE; fall back to TEE below.
             }
         }
 
@@ -416,18 +426,22 @@ class AndroidHardwareVaultKeyStore(
     }
 
     private fun checkSecurityException(t: Throwable): Throwable {
-        if (t is KeyPermanentlyInvalidatedException) {
-            return VaultKeyStore.KeyInvalidatedException(
-                "Biometric key invalidated (new biometric enrolled or removed). Re-login with passphrase.",
-                t
-            )
-        }
-        val className = t::class.java.simpleName
-        if (className == "UserNotAuthenticatedException") {
-            return VaultKeyStore.DeviceLockedException(
-                "Device or user authentication required by AndroidKeyStore.",
-                t
-            )
+        var cur: Throwable? = t
+        while (cur != null) {
+            if (cur is KeyPermanentlyInvalidatedException) {
+                return VaultKeyStore.KeyInvalidatedException(
+                    "Biometric key invalidated (new biometric enrolled or removed). Re-login with passphrase.",
+                    t
+                )
+            }
+            val className = cur::class.java.simpleName
+            if (className == "UserNotAuthenticatedException") {
+                return VaultKeyStore.DeviceLockedException(
+                    "Device or user authentication required by AndroidKeyStore.",
+                    t
+                )
+            }
+            cur = cur.cause
         }
         return t
     }
@@ -570,7 +584,8 @@ class AndroidHardwareVaultKeyStore(
             backgroundEnrolled = hasBackgroundWrappedVk(),
             strongBoxBacked = strongBox,
             hardwareBacked = hardwareBacked,
-            unlockedDeviceRequiredEnforced = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+            unlockedDeviceRequiredEnforced = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                isDeviceLockScreenSecure()
         )
     }
 
