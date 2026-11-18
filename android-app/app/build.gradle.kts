@@ -328,8 +328,14 @@ android {
     testOptions {
         unitTests.all {
             // FASE 4A.3: Forziamo -Xmx128m per verificare che lo streaming PCZK da 305 MiB
-            // e la matrice Argon2id da 64 MiB (LongArray contiguo da 64.003 MiB) non causino OOM.
+            // non causi OOM e resti dentro il budget RAM rigoroso.
             it.maxHeapSize = "128m"
+            it.testLogging {
+                events("failed", "skipped")
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                showStackTraces = true
+                showCauses = true
+            }
         }
     }
 
@@ -371,4 +377,5 @@ dependencies {
     implementation("org.bouncycastle:bcprov-jdk18on:1.82")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
