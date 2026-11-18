@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.valerio.photocloud.AutoBackupLogicTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-11-18T07:28:23" hostname="runnervmccnms" time="0.042">
+  <properties/>
+  <testcase name="nextStateAfterServerCheck_deduplicatesActiveAndRequeuesTrashedOrMissing" classname="com.valerio.photocloud.AutoBackupLogicTest" time="0.006"/>
+  <testcase name="planLruEvictions_evictsOldestFilesFirstUntilUnderBudget" classname="com.valerio.photocloud.AutoBackupLogicTest" time="0.015"/>
+  <testcase name="computeSha256HexStream_matchesExpectedAcrossMultiChunkStreams" classname="com.valerio.photocloud.AutoBackupLogicTest" time="0.019"/>
+  <testcase name="chunkedThresholdRetryCodesAndBackoff_behaveAsExpected" classname="com.valerio.photocloud.AutoBackupLogicTest" time="0.0"/>
+  <testcase name="shouldIncludeCandidate_respectsBucketsScopeLibraryModeAndMaxVideoSize" classname="com.valerio.photocloud.AutoBackupLogicTest" time="0.001"/>
+  <testcase name="insecureHttpConfirmation_requiredUntilConfirmedForSameOrigin" classname="com.valerio.photocloud.AutoBackupLogicTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
