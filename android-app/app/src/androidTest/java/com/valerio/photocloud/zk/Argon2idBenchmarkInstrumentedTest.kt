@@ -25,15 +25,15 @@ class Argon2idBenchmarkInstrumentedTest {
     companion object {
         private const val TAG = "Argon2idBenchmark"
 
-        // Matches test-vectors/zk-v1.json `keyHierarchy.withPassphraseSpec`
+        // Matches test-vectors/zk-v1.json `inputs` + `keyHierarchy.withPassphraseSpec`
         private const val ACCOUNT_KEY_HEX =
-            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+            "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
         private const val USER_SALT_HEX =
-            "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+            "a1a2a3a4a5a6a7a8a9aaabacadaeafb0"
         private const val PASSPHRASE_UTF8 =
-            "correct-horse-battery-staple-2026!"
+            "correct-horse-battery-staple-zk2"
         private const val EXPECTED_ROOT_HEX =
-            "2ea5889c71984d378b4b75684003578cc082b71bb9fe54a97d7d96f00f39e8d2"
+            "a834f62139e05e3e689154e57017fe9e9d7c866ebe4150c44820d55383b91fee"
     }
 
     @Test
