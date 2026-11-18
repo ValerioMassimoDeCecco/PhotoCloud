@@ -1192,4 +1192,140 @@ object ZkCoreCrypto {
             albumKey.zeroize()
         }
     }
+
+    fun encryptShareManifest(
+        shareKey: ByteArray,
+        shareId: String,
+        plaintextJson: String,
+        nonce: ByteArray? = null,
+        cryptoProvider: ZkCryptoProvider = JvmCryptoProvider
+    ): ByteArray {
+        if (shareKey.size != 32) {
+            throw ZkCryptoException(ZkErrorCode.INVALID_PARAMETER, "shareKey must be 32 bytes.")
+        }
+        val canonicalShareId = shareId.lowercase()
+        uuidToBytes(canonicalShareId)
+        val shareMetaKey = cryptoProvider.hkdfSha256(
+            shareKey,
+            ByteArray(0),
+            "photocloud/v2/share/meta".toByteArray(StandardCharsets.UTF_8),
+            32
+        )
+        try {
+            val iv = nonce ?: cryptoProvider.randomBytes(12)
+            val aad = "share-manifest|$canonicalShareId".toByteArray(StandardCharsets.UTF_8)
+            val pt = plaintextJson.toByteArray(StandardCharsets.UTF_8)
+            val ct = cryptoProvider.aes256GcmEncrypt(shareMetaKey, iv, pt, aad)
+            pt.zeroize()
+            return iv + ct
+        } finally {
+            shareMetaKey.zeroize()
+        }
+    }
+
+    fun decryptShareManifest(
+        shareKey: ByteArray,
+        shareId: String,
+        encryptedManifest: ByteArray,
+        cryptoProvider: ZkCryptoProvider = JvmCryptoProvider
+    ): String {
+        if (shareKey.size != 32) {
+            throw ZkCryptoException(ZkErrorCode.INVALID_PARAMETER, "shareKey must be 32 bytes.")
+        }
+        if (encryptedManifest.size < 28) {
+            throw ZkCryptoException(ZkErrorCode.TRUNCATED_BLOB, "encryptedManifest shorter than 28 bytes.")
+        }
+        val canonicalShareId = shareId.lowercase()
+        uuidToBytes(canonicalShareId)
+        val shareMetaKey = cryptoProvider.hkdfSha256(
+            shareKey,
+            ByteArray(0),
+            "photocloud/v2/share/meta".toByteArray(StandardCharsets.UTF_8),
+            32
+        )
+        try {
+            val iv = encryptedManifest.copyOfRange(0, 12)
+            val ct = encryptedManifest.copyOfRange(12, encryptedManifest.size)
+            val aad = "share-manifest|$canonicalShareId".toByteArray(StandardCharsets.UTF_8)
+            val pt = cryptoProvider.aes256GcmDecrypt(shareMetaKey, iv, ct, aad, ZkErrorCode.AUTH_TAG_MISMATCH)
+            return try {
+                String(pt, StandardCharsets.UTF_8)
+            } finally {
+                pt.zeroize()
+            }
+        } finally {
+            shareMetaKey.zeroize()
+        }
+    }
+
+    fun encryptShareItemMeta(
+        shareKey: ByteArray,
+        shareId: String,
+        blobId: String,
+        plaintextJson: String,
+        nonce: ByteArray? = null,
+        cryptoProvider: ZkCryptoProvider = JvmCryptoProvider
+    ): ByteArray {
+        if (shareKey.size != 32) {
+            throw ZkCryptoException(ZkErrorCode.INVALID_PARAMETER, "shareKey must be 32 bytes.")
+        }
+        val canonicalShareId = shareId.lowercase()
+        val canonicalBlobId = blobId.lowercase()
+        uuidToBytes(canonicalShareId)
+        uuidToBytes(canonicalBlobId)
+        val shareMetaKey = cryptoProvider.hkdfSha256(
+            shareKey,
+            ByteArray(0),
+            "photocloud/v2/share/meta".toByteArray(StandardCharsets.UTF_8),
+            32
+        )
+        try {
+            val iv = nonce ?: cryptoProvider.randomBytes(12)
+            val aad = "share-meta|$canonicalShareId|$canonicalBlobId".toByteArray(StandardCharsets.UTF_8)
+            val pt = plaintextJson.toByteArray(StandardCharsets.UTF_8)
+            val ct = cryptoProvider.aes256GcmEncrypt(shareMetaKey, iv, pt, aad)
+            pt.zeroize()
+            return iv + ct
+        } finally {
+            shareMetaKey.zeroize()
+        }
+    }
+
+    fun decryptShareItemMeta(
+        shareKey: ByteArray,
+        shareId: String,
+        blobId: String,
+        encryptedItemMeta: ByteArray,
+        cryptoProvider: ZkCryptoProvider = JvmCryptoProvider
+    ): String {
+        if (shareKey.size != 32) {
+            throw ZkCryptoException(ZkErrorCode.INVALID_PARAMETER, "shareKey must be 32 bytes.")
+        }
+        if (encryptedItemMeta.size < 28) {
+            throw ZkCryptoException(ZkErrorCode.TRUNCATED_BLOB, "encryptedItemMeta shorter than 28 bytes.")
+        }
+        val canonicalShareId = shareId.lowercase()
+        val canonicalBlobId = blobId.lowercase()
+        uuidToBytes(canonicalShareId)
+        uuidToBytes(canonicalBlobId)
+        val shareMetaKey = cryptoProvider.hkdfSha256(
+            shareKey,
+            ByteArray(0),
+            "photocloud/v2/share/meta".toByteArray(StandardCharsets.UTF_8),
+            32
+        )
+        try {
+            val iv = encryptedItemMeta.copyOfRange(0, 12)
+            val ct = encryptedItemMeta.copyOfRange(12, encryptedItemMeta.size)
+            val aad = "share-meta|$canonicalShareId|$canonicalBlobId".toByteArray(StandardCharsets.UTF_8)
+            val pt = cryptoProvider.aes256GcmDecrypt(shareMetaKey, iv, ct, aad, ZkErrorCode.AUTH_TAG_MISMATCH)
+            return try {
+                String(pt, StandardCharsets.UTF_8)
+            } finally {
+                pt.zeroize()
+            }
+        } finally {
+            shareMetaKey.zeroize()
+        }
+    }
 }

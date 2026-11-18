@@ -58,6 +58,7 @@ export const DEFAULT_QUOTA_BYTES = 10 * 1024 * 1024 * 1024; // 10 GiB
 export const DEFAULT_MAX_UPLOAD_BYTES = 500 * 1024 * 1024; // 500 MiB
 export const DEFAULT_MAX_UPLOAD_CHUNKS = 10_000;
 export const MAX_ENC_META_BYTES = 64 * 1024; // 64 KiB
+export const MAX_SHARE_MANIFEST_BYTES = 1024 * 1024; // 1 MiB
 export const MAX_ALBUM_BLOB_BYTES = 4 * 1024 * 1024; // 4 MiB
 export const MAX_THUMB_BLOB_BYTES = 2 * 1024 * 1024; // 2 MiB
 export const MAX_CHUNK_BODY_BYTES = 16 * 1024 * 1024; // 16 MiB per chunk HTTP PUT
@@ -74,6 +75,9 @@ const SENSITIVE_FIELD_NAMES = new Set([
   'wrappedvk',
   'wrappedfk',
   'encmeta',
+  'sharemanifest',
+  'setuptoken',
+  'invitetoken',
   'passwordwrap',
   'passphrase',
   'password',
@@ -414,24 +418,70 @@ export interface UploadSessionV2 {
   expires_at: number;
 }
 
+export interface IndexStatement {
+  run(...params: Array<string | number | bigint | Buffer | Uint8Array | null>): {
+    changes: number | bigint;
+    lastInsertRowid: number | bigint;
+  };
+  get(...params: Array<string | number | bigint | Buffer | Uint8Array | null>): unknown;
+  all(...params: Array<string | number | bigint | Buffer | Uint8Array | null>): unknown[];
+}
+
+/**
+ * Interfaccia sottile `IndexStore` che isola `node:sqlite` (`DatabaseSync`),
+ * consentendo di sostituire il motore di persistenza dell'indice senza modificare il router v2.
+ */
+export interface IndexStore {
+  exec(sql: string): void;
+  prepare(sql: string): IndexStatement;
+  close(): void;
+}
+
+export class SqliteIndexStore implements IndexStore {
+  private readonly sqliteDb: DatabaseSync;
+
+  constructor(dbPath: string) {
+    this.sqliteDb = new DatabaseSync(dbPath);
+  }
+
+  public exec(sql: string): void {
+    this.sqliteDb.exec(sql);
+  }
+
+  public prepare(sql: string): IndexStatement {
+    const stmt = this.sqliteDb.prepare(sql);
+    return {
+      run: (...params) => stmt.run(...params),
+      get: (...params) => stmt.get(...params),
+      all: (...params) => stmt.all(...params),
+    };
+  }
+
+  public close(): void {
+    this.sqliteDb.close();
+  }
+}
+
 export class ZkVaultStoreV2 {
-  public readonly db: DatabaseSync;
+  public readonly indexStore: IndexStore;
+  public readonly db: IndexStore;
   public readonly vaultV2Dir: string;
   public readonly tempUploadDir: string;
 
-  constructor(vaultV2Dir: string, tempUploadDir: string) {
+  constructor(vaultV2Dir: string, tempUploadDir: string, customIndexStore?: IndexStore) {
     this.vaultV2Dir = path.resolve(vaultV2Dir);
     this.tempUploadDir = path.resolve(tempUploadDir);
     fs.mkdirSync(this.vaultV2Dir, { recursive: true });
     fs.mkdirSync(this.tempUploadDir, { recursive: true });
 
     const dbPath = path.join(this.vaultV2Dir, 'index.sqlite');
-    this.db = new DatabaseSync(dbPath);
+    this.indexStore = customIndexStore ?? new SqliteIndexStore(dbPath);
+    this.db = this.indexStore;
     this.initSchema();
   }
 
   private initSchema(): void {
-    this.db.exec(`
+    this.indexStore.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
       PRAGMA foreign_keys = ON;
@@ -508,6 +558,7 @@ export class ZkVaultStoreV2 {
         share_id TEXT PRIMARY KEY,
         owner_id TEXT NOT NULL REFERENCES users_v2(id) ON DELETE CASCADE,
         enc_share_meta TEXT,
+        share_manifest TEXT,
         password_wrap TEXT,
         expires_at INTEGER,
         max_downloads INTEGER,
@@ -523,10 +574,15 @@ export class ZkVaultStoreV2 {
         PRIMARY KEY (share_id, blob_id)
       );
     `);
+    try {
+      this.indexStore.exec(`ALTER TABLE shares_v2 ADD COLUMN share_manifest TEXT`);
+    } catch {
+      // Colonna già presente
+    }
   }
 
   public close(): void {
-    this.db.close();
+    this.indexStore.close();
   }
 
   /**
@@ -612,8 +668,26 @@ export class ZkVaultStoreV2 {
     return { activeBytes, trashedBytes, activeCount, trashedCount };
   }
 
+  public setUserQuota(userId: string, quotaBytes: number): void {
+    if (!isValidUuidV4(userId)) {
+      throw new Error('INVALID_USER_ID');
+    }
+    if (!Number.isSafeInteger(quotaBytes) || quotaBytes < 0) {
+      throw new Error('INVALID_QUOTA_BYTES');
+    }
+    this.db
+      .prepare(`UPDATE users_v2 SET quota_bytes = ?, updated_at = ? WHERE id = ?`)
+      .run(quotaBytes, Date.now(), userId.toLowerCase());
+  }
+
+  public getUserCount(): number {
+    const row = this.db.prepare(`SELECT COUNT(*) as cnt FROM users_v2`).get() as { cnt: number };
+    return Number(row?.cnt || 0);
+  }
+
   /**
    * Purga gli elementi nel cestino il cui `trashed_at` supera il TTL configurato.
+   * Elimina dal disco sia il blob principale sia le eventuali miniature `.thumb320.pczk` e `.thumb1280.pczk`.
    */
   public purgeExpiredTrash(ttlMs: number, nowMs = Date.now()): number {
     const cutoff = nowMs - ttlMs;
@@ -648,24 +722,61 @@ export class ZkVaultStoreV2 {
   }
 
   /**
-   * Rimuove sessioni upload scadute e relativi file `.part` temporanei.
+   * Rimuove sessioni upload scadute in `uploads_v2`, i relativi file `.part` e
+   * qualsiasi file temporaneo orfano (`v2_upload_*.part` o `v2_atomic_*.tmp`) in `tempUploadDir`.
    */
-  public cleanupExpiredUploads(nowMs = Date.now()): number {
+  public cleanupExpiredUploads(nowMs = Date.now(), orphanMaxAgeMs = DEFAULT_UPLOAD_TTL_MS): number {
     const expired = this.db
       .prepare(`SELECT upload_id, temp_path FROM uploads_v2 WHERE expires_at <= ?`)
       .all(nowMs) as Array<{ upload_id: string; temp_path: string }>;
 
-    if (expired.length === 0) return 0;
-    const del = this.db.prepare(`DELETE FROM uploads_v2 WHERE upload_id = ?`);
-    for (const u of expired) {
-      del.run(u.upload_id);
-      try {
-        if (fs.existsSync(u.temp_path)) fs.unlinkSync(u.temp_path);
-      } catch {
-        // ignore
+    let removedCount = 0;
+    if (expired.length > 0) {
+      const del = this.db.prepare(`DELETE FROM uploads_v2 WHERE upload_id = ?`);
+      for (const u of expired) {
+        del.run(u.upload_id);
+        removedCount += 1;
+        try {
+          if (fs.existsSync(u.temp_path)) fs.unlinkSync(u.temp_path);
+        } catch {
+          // ignore
+        }
       }
     }
-    return expired.length;
+
+    // Scansione per file orfani `v2_upload_*.part` (non più presenti in uploads_v2) o `v2_atomic_*.tmp` vecchi
+    try {
+      if (fs.existsSync(this.tempUploadDir)) {
+        const activeRows = this.db
+          .prepare(`SELECT temp_path FROM uploads_v2`)
+          .all() as Array<{ temp_path: string }>;
+        const activePaths = new Set(activeRows.map((r) => path.resolve(r.temp_path)));
+
+        const entries = fs.readdirSync(this.tempUploadDir);
+        for (const name of entries) {
+          if (!name.startsWith('v2_upload_') && !name.startsWith('v2_atomic_')) {
+            continue;
+          }
+          const fullPath = path.resolve(this.tempUploadDir, name);
+          if (activePaths.has(fullPath)) {
+            continue;
+          }
+          try {
+            const st = fs.statSync(fullPath);
+            if (name.startsWith('v2_upload_') || nowMs - st.mtimeMs >= orphanMaxAgeMs) {
+              fs.unlinkSync(fullPath);
+              removedCount += 1;
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      // ignore directory scan errors
+    }
+
+    return removedCount;
   }
 }
 
@@ -673,15 +784,24 @@ export class ZkVaultStoreV2 {
 // Opzioni & Configurazione del Router v2
 // ============================================================================
 
+export type RegistrationPolicyV2 = boolean | 'setup_token_or_invite' | 'first_user_only';
+
 export interface ZkV2ServerOptions {
   vaultV2Dir: string;
   tempUploadDir: string;
   serverSecret: Buffer;
+  indexStore?: IndexStore;
   defaultQuotaBytes?: number;
   maxUploadBytes?: number;
   maxUploadChunks?: number;
   sessionTtlMs?: number;
   trashTtlMs?: number;
+  uploadTtlMs?: number;
+  cleanupIntervalMs?: number;
+  registrationEnabled?: RegistrationPolicyV2;
+  registrationInviteToken?: string;
+  initialSetupToken?: string;
+  onSetupTokenGenerated?: (setupToken: string) => void;
   loginRateLimitMax?: number;
   loginRateLimitWindowMs?: number;
   shareRateLimitMaxPerIp?: number;
@@ -697,6 +817,96 @@ interface AuthenticatedUserV2 {
   sidHash: Buffer;
   csrfToken: string;
   quotaBytes: number;
+}
+
+function parseRegistrationPolicyFromEnv(
+  explicit?: RegistrationPolicyV2
+): RegistrationPolicyV2 {
+  if (explicit === 'first_user_only') return 'setup_token_or_invite';
+  if (explicit !== undefined) return explicit;
+  const raw = String(process.env.REGISTRATION_ENABLED ?? '').trim().toLowerCase();
+  if (raw === 'true' || raw === '1' || raw === 'yes') return true;
+  if (raw === 'never' || raw === 'disabled') return false;
+  return 'setup_token_or_invite';
+}
+
+function parseDefaultQuotaFromEnv(explicit?: number): number {
+  if (explicit !== undefined && Number.isSafeInteger(explicit) && explicit > 0) {
+    return explicit;
+  }
+  const envMb = Number(process.env.USER_QUOTA_MB);
+  if (Number.isFinite(envMb) && envMb > 0) {
+    return Math.floor(envMb * 1024 * 1024);
+  }
+  return DEFAULT_QUOTA_BYTES;
+}
+
+export function verifyInviteTokenConstantTime(expectedToken: string | undefined, providedToken: unknown): boolean {
+  if (!expectedToken || expectedToken.trim().length === 0) return false;
+  if (typeof providedToken !== 'string' || providedToken.trim().length === 0) return false;
+  const hashExpected = crypto.createHash('sha256').update(expectedToken.trim(), 'utf8').digest();
+  const hashProvided = crypto.createHash('sha256').update(providedToken.trim(), 'utf8').digest();
+  return crypto.timingSafeEqual(hashExpected, hashProvided);
+}
+
+/**
+ * Verifica che la richiesta avvenga su HTTPS (`req.secure`, tenendo conto di `TRUST_PROXY` e `X-Forwarded-Proto`)
+ * oppure su `localhost` / `127.0.0.1` / `::1` per sviluppo locale.
+ * Qualsiasi richiesta HTTP verso IP LAN o domini remoti viene rifiutata perché WebCrypto (`crypto.subtle`)
+ * e i cookie `Secure` richiedono un Secure Context.
+ */
+export function isSecureOrLocalhostRequest(req: Request): boolean {
+  const trustProxyEnabled = Boolean(req.app?.get('trust proxy'));
+  const rawForwardedProto = trustProxyEnabled
+    ? String(req.headers['x-forwarded-proto'] || '')
+        .split(',')[0]
+        .trim()
+        .toLowerCase()
+    : '';
+
+  if (req.secure || rawForwardedProto === 'https') {
+    return true;
+  }
+
+  // Se il reverse proxy dichiara esplicitamente http su un host pubblico/LAN, verifichiamo se l'host è localhost
+  const rawHostHeader = String(
+    (trustProxyEnabled && req.headers['x-forwarded-host']
+      ? req.headers['x-forwarded-host']
+      : req.headers.host) ||
+      req.hostname ||
+      ''
+  )
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+
+  let hostnameOnly = rawHostHeader;
+  if (hostnameOnly.startsWith('[')) {
+    const closeIdx = hostnameOnly.indexOf(']');
+    if (closeIdx > 0) {
+      hostnameOnly = hostnameOnly.slice(1, closeIdx);
+    }
+  } else if (hostnameOnly.includes(':')) {
+    hostnameOnly = hostnameOnly.split(':')[0];
+  }
+
+  const isLocalHostname =
+    hostnameOnly === 'localhost' ||
+    hostnameOnly === '127.0.0.1' ||
+    hostnameOnly === '::1';
+
+  if (!isLocalHostname) {
+    return false;
+  }
+
+  const clientIp = String(req.ip || req.socket?.remoteAddress || '').trim().toLowerCase();
+  const isLoopbackIp =
+    clientIp === '127.0.0.1' ||
+    clientIp === '::1' ||
+    clientIp === '::ffff:127.0.0.1' ||
+    clientIp === '';
+
+  return isLoopbackIp;
 }
 
 function parseCookiesHeader(cookieHeader: string | undefined): Record<string, string> {
@@ -720,8 +930,8 @@ function validateKdfParams(raw: unknown): KdfParamsV2 | null {
   const memoryKiB = Number(obj.memoryKiB);
   const iterations = Number(obj.iterations);
   const parallelism = Number(obj.parallelism);
-  if (!Number.isSafeInteger(memoryKiB) || memoryKiB < 16384 || memoryKiB > 1048576) return null;
-  if (!Number.isSafeInteger(iterations) || iterations < 1 || iterations > 32) return null;
+  if (!Number.isSafeInteger(memoryKiB) || memoryKiB < 65536 || memoryKiB > 1048576) return null;
+  if (!Number.isSafeInteger(iterations) || iterations < 3 || iterations > 32) return null;
   if (!Number.isSafeInteger(parallelism) || parallelism < 1 || parallelism > 16) return null;
   return {
     algorithm: 'Argon2id',
@@ -770,6 +980,16 @@ function formatItemJson(row: ItemRecordV2) {
   };
 }
 
+function validateShareManifestString(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.length === 0) return null;
+  if (Buffer.byteLength(raw, 'utf8') > MAX_SHARE_MANIFEST_BYTES) return null;
+  if (!BASE64URL_REGEX.test(raw)) return null;
+  const decoded = Buffer.from(raw, 'base64url');
+  // Minimo 12B nonce + 16B tag = 28 byte
+  if (decoded.byteLength < 28 || decoded.byteLength > MAX_SHARE_MANIFEST_BYTES) return null;
+  return raw;
+}
+
 // ============================================================================
 // Creazione del Router `/api/v2`
 // ============================================================================
@@ -777,22 +997,57 @@ function formatItemJson(row: ItemRecordV2) {
 export function createZkV2Router(options: ZkV2ServerOptions): {
   router: Router;
   store: ZkVaultStoreV2;
+  getSetupToken: () => string | null;
   close: () => void;
 } {
-  const store = new ZkVaultStoreV2(options.vaultV2Dir, options.tempUploadDir);
+  const store = new ZkVaultStoreV2(options.vaultV2Dir, options.tempUploadDir, options.indexStore);
   const logger = options.logger ?? createRedactingLogger();
   const nowFn = options.nowFn ?? (() => Date.now());
-  const defaultQuotaBytes = options.defaultQuotaBytes ?? DEFAULT_QUOTA_BYTES;
+  const defaultQuotaBytes = parseDefaultQuotaFromEnv(options.defaultQuotaBytes);
   const maxUploadBytes = options.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES;
   const maxUploadChunks = options.maxUploadChunks ?? DEFAULT_MAX_UPLOAD_CHUNKS;
   const sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
   const trashTtlMs = options.trashTtlMs ?? DEFAULT_TRASH_TTL_MS;
+  const uploadTtlMs = options.uploadTtlMs ?? DEFAULT_UPLOAD_TTL_MS;
+  const registrationPolicy = parseRegistrationPolicyFromEnv(options.registrationEnabled);
+  const registrationInviteToken =
+    options.registrationInviteToken ?? process.env.REGISTRATION_INVITE_TOKEN;
+
+  // Token di setup monouso generato una sola volta all'avvio se il DB utenti v2 è vuoto
+  let activeSetupToken: string | null = null;
+  let setupTokenConsumed = false;
+  if (store.getUserCount() === 0) {
+    activeSetupToken =
+      options.initialSetupToken && options.initialSetupToken.trim().length >= 16
+        ? options.initialSetupToken.trim()
+        : crypto.randomBytes(24).toString('base64url');
+    if (options.onSetupTokenGenerated) {
+      options.onSetupTokenGenerated(activeSetupToken);
+    }
+  } else {
+    setupTokenConsumed = true;
+  }
 
   const loginRateLimitMax = options.loginRateLimitMax ?? 30;
   const loginRateLimitWindowMs = options.loginRateLimitWindowMs ?? 60_000;
   const shareRateLimitMaxPerIp = options.shareRateLimitMaxPerIp ?? 120;
   const shareRateLimitMaxPerShare = options.shareRateLimitMaxPerShare ?? 120;
   const shareRateLimitWindowMs = options.shareRateLimitWindowMs ?? 60_000;
+
+  // Pulizia iniziale degli upload scaduti/orfani e del cestino scaduto all'avvio
+  store.cleanupExpiredUploads(nowFn(), uploadTtlMs);
+  store.purgeExpiredTrash(trashTtlMs, nowFn());
+
+  const cleanupIntervalMs = options.cleanupIntervalMs ?? 15 * 60 * 1000;
+  const cleanupTimer = setInterval(() => {
+    try {
+      store.cleanupExpiredUploads(nowFn(), uploadTtlMs);
+      store.purgeExpiredTrash(trashTtlMs, nowFn());
+    } catch {
+      // ignore background cleanup error
+    }
+  }, cleanupIntervalMs);
+  cleanupTimer.unref();
 
   const loginRateBuckets = new Map<string, { count: number; resetAt: number }>();
   const shareIpRateBuckets = new Map<string, { count: number; resetAt: number }>();
@@ -954,7 +1209,20 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
     return sess;
   }
 
-  function issueSessionCookie(res: Response, userId: string): { csrfToken: string } {
+  function requireHttpsOrLocalhost(req: Request, res: Response): boolean {
+    if (!isSecureOrLocalhostRequest(req)) {
+      logger.warn('v2_insecure_http_rejected', { method: req.method, path: req.path });
+      res.status(403).json({
+        error: 'HTTPS_REQUIRED',
+        message:
+          'HTTPS è obbligatorio per le API Zero-Knowledge v2 (WebCrypto e cookie Secure richiedono HTTPS o localhost).',
+      });
+      return false;
+    }
+    return true;
+  }
+
+  function issueSessionCookie(req: Request, res: Response, userId: string): { csrfToken: string } {
     const rawSid = crypto.randomBytes(32).toString('base64url');
     const sidHash = crypto.createHash('sha256').update(rawSid, 'utf8').digest();
     const csrfToken = crypto.randomBytes(24).toString('base64url');
@@ -969,17 +1237,19 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
       .run(sidHash, userId, csrfToken, now, expiresAt);
 
     const maxAgeSec = Math.max(1, Math.floor(sessionTtlMs / 1000));
+    const secureFlag = isSecureOrLocalhostRequest(req) ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
-      `${V2_SESSION_COOKIE_NAME}=${rawSid}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAgeSec}`
+      `${V2_SESSION_COOKIE_NAME}=${rawSid}; Path=/; HttpOnly${secureFlag}; SameSite=Strict; Max-Age=${maxAgeSec}`
     );
     return { csrfToken };
   }
 
-  function clearSessionCookie(res: Response): void {
+  function clearSessionCookie(req: Request, res: Response): void {
+    const secureFlag = isSecureOrLocalhostRequest(req) ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
-      `${V2_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`
+      `${V2_SESSION_COOKIE_NAME}=; Path=/; HttpOnly${secureFlag}; SameSite=Strict; Max-Age=0`
     );
   }
 
@@ -998,7 +1268,41 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
   // ==========================================================================
 
   const handleRegister = async (req: Request, res: Response) => {
+    if (!requireHttpsOrLocalhost(req, res)) return;
     if (!enforceLoginRateLimit(req, res)) return;
+
+    // Controllo policy di registrazione: nessun "primo che arriva" senza token.
+    // Richiede setupToken monouso (solo se userCount === 0 e non ancora consumato) o inviteToken in constant-time.
+    const userCount = store.getUserCount();
+    const providedToken =
+      req.body?.setupToken ??
+      req.body?.inviteToken ??
+      req.headers['x-setup-token'] ??
+      req.headers['x-registration-token'];
+
+    const hasValidInvite = verifyInviteTokenConstantTime(registrationInviteToken, providedToken);
+    const hasValidSetupToken =
+      !setupTokenConsumed &&
+      userCount === 0 &&
+      activeSetupToken !== null &&
+      verifyInviteTokenConstantTime(activeSetupToken, providedToken);
+
+    if (registrationPolicy === false) {
+      if (!hasValidInvite) {
+        logger.warn('v2_registration_blocked', { reason: 'policy-disabled', userCount });
+        res.status(403).json({ error: 'REGISTRATION_DISABLED' });
+        return;
+      }
+    } else if (registrationPolicy === 'setup_token_or_invite') {
+      if (!hasValidInvite && !hasValidSetupToken) {
+        logger.warn('v2_registration_blocked', {
+          reason: userCount === 0 ? 'missing-or-invalid-setup-token' : 'missing-or-invalid-invite-token',
+          userCount,
+        });
+        res.status(403).json({ error: 'REGISTRATION_DISABLED' });
+        return;
+      }
+    }
 
     const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
     if (!USERNAME_V2_REGEX.test(username)) {
@@ -1031,15 +1335,27 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
       return;
     }
 
+    let requestedUserId: string | null = null;
+    if (req.body?.userId !== undefined && req.body?.userId !== null) {
+      if (!isValidUuidV4(req.body.userId)) {
+        authSecretBuf.fill(0);
+        res.status(400).json({ error: 'INVALID_USER_ID' });
+        return;
+      }
+      requestedUserId = req.body.userId.toLowerCase();
+    }
+    const userId = requestedUserId ?? crypto.randomUUID();
+
+    // Risposta uniforme per conflitto su id o username senza rivelare quale dei due esista
     const existing = store.db
-      .prepare(`SELECT id FROM users_v2 WHERE username = ?`)
-      .get(username) as { id: string } | undefined;
+      .prepare(`SELECT id FROM users_v2 WHERE username = ? OR id = ?`)
+      .get(username, userId) as { id: string } | undefined;
     if (existing) {
-      res.status(409).json({ error: 'USERNAME_ALREADY_EXISTS' });
+      authSecretBuf.fill(0);
+      res.status(409).json({ error: 'REGISTRATION_CONFLICT' });
       return;
     }
 
-    const userId = crypto.randomUUID();
     const serverSalt = crypto.randomBytes(16);
     const authVerifier = await computeScryptVerifierAsync(authSecretBuf, serverSalt);
     authSecretBuf.fill(0);
@@ -1065,11 +1381,17 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
           now
         );
     } catch {
-      res.status(409).json({ error: 'USERNAME_ALREADY_EXISTS' });
+      res.status(409).json({ error: 'REGISTRATION_CONFLICT' });
       return;
     }
 
-    const { csrfToken } = issueSessionCookie(res, userId);
+    // Consuma definitivamente il setupToken monouso dopo la prima registrazione
+    if (userCount === 0 || hasValidSetupToken) {
+      setupTokenConsumed = true;
+      activeSetupToken = null;
+    }
+
+    const { csrfToken } = issueSessionCookie(req, res, userId);
     logger.info('v2_user_registered', { userId });
     res.status(201).json({
       userId,
@@ -1085,6 +1407,7 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
   router.post('/auth/register', handleRegister);
 
   const handleLoginParams = async (req: Request, res: Response) => {
+    if (!requireHttpsOrLocalhost(req, res)) return;
     if (!enforceLoginRateLimit(req, res)) return;
 
     const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
@@ -1136,6 +1459,7 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
   router.post('/auth/params', handleLoginParams);
 
   const handleLogin = async (req: Request, res: Response) => {
+    if (!requireHttpsOrLocalhost(req, res)) return;
     if (!enforceLoginRateLimit(req, res)) return;
 
     const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
@@ -1178,7 +1502,7 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
       return;
     }
 
-    const { csrfToken } = issueSessionCookie(res, row.id);
+    const { csrfToken } = issueSessionCookie(req, res, row.id);
     let parsedKdf: KdfParamsV2 = DEFAULT_KDF_PARAMS;
     try {
       parsedKdf = JSON.parse(row.kdf_params) as KdfParamsV2;
@@ -1206,7 +1530,7 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
       store.db.prepare(`DELETE FROM sessions_v2 WHERE sid_hash = ?`).run(sess.sidHash);
       logger.info('v2_logout', { userId: sess.userId });
     }
-    clearSessionCookie(res);
+    clearSessionCookie(req, res);
     res.status(200).json({ ok: true });
   };
 
@@ -1214,6 +1538,7 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
   router.post('/auth/logout', handleLogout);
 
   const handleAccountRewrap = async (req: Request, res: Response) => {
+    if (!requireHttpsOrLocalhost(req, res)) return;
     const sess = requireAuth(req, res);
     if (!sess) return;
 
@@ -1799,11 +2124,15 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
       }
 
       const bodyBuf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-      if (bodyBuf.byteLength < PCZK_MIN_BLOB_BYTES || bodyBuf.byteLength > MAX_THUMB_BLOB_BYTES) {
+      if (bodyBuf.byteLength < 28 || bodyBuf.byteLength > MAX_THUMB_BLOB_BYTES) {
         res.status(400).json({ error: 'INVALID_THUMB_SIZE' });
         return;
       }
-      if (!bodyBuf.subarray(0, 4).equals(PCZK_MAGIC) || bodyBuf[4] !== PCZK_VERSION_V1) {
+      if (
+        bodyBuf.byteLength >= 5 &&
+        bodyBuf.subarray(0, 4).equals(PCZK_MAGIC) &&
+        bodyBuf[4] !== PCZK_VERSION_V1
+      ) {
         res.status(400).json({ error: 'INVALID_PCZK_MAGIC_OR_VERSION' });
         return;
       }
@@ -2437,6 +2766,15 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
     const sess = requireAuth(req, res);
     if (!sess) return;
 
+    let shareManifest: string | null = null;
+    if (req.body?.shareManifest !== undefined && req.body?.shareManifest !== null) {
+      shareManifest = validateShareManifestString(req.body.shareManifest);
+      if (!shareManifest) {
+        res.status(400).json({ error: 'INVALID_SHARE_MANIFEST' });
+        return;
+      }
+    }
+
     const itemsInput = req.body?.items;
     if (!Array.isArray(itemsInput) || itemsInput.length === 0 || itemsInput.length > 500) {
       res.status(400).json({ error: 'INVALID_SHARE_ITEMS' });
@@ -2549,8 +2887,8 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
 
     const insertShare = store.db.prepare(
       `INSERT INTO shares_v2 (
-         share_id, owner_id, enc_share_meta, password_wrap, expires_at, max_downloads, download_count, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, 0, ?)`
+         share_id, owner_id, enc_share_meta, share_manifest, password_wrap, expires_at, max_downloads, download_count, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`
     );
     const insertShareItem = store.db.prepare(
       `INSERT INTO share_items_v2 (share_id, blob_id, wrapped_fk, enc_item_meta)
@@ -2559,7 +2897,16 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
 
     store.db.exec('BEGIN IMMEDIATE');
     try {
-      insertShare.run(shareId, sess.userId, encShareMeta, passwordWrap, expiresAt, maxDownloads, now);
+      insertShare.run(
+        shareId,
+        sess.userId,
+        encShareMeta,
+        shareManifest,
+        passwordWrap,
+        expiresAt,
+        maxDownloads,
+        now
+      );
       for (const item of validatedItems) {
         insertShareItem.run(shareId, item.blobId, item.wrappedFk, item.encItemMeta);
       }
@@ -2641,7 +2988,7 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
 
     const shareRow = store.db
       .prepare(
-        `SELECT share_id, owner_id, enc_share_meta, password_wrap, expires_at, max_downloads, download_count, created_at
+        `SELECT share_id, owner_id, enc_share_meta, share_manifest, password_wrap, expires_at, max_downloads, download_count, created_at
          FROM shares_v2 WHERE share_id = ?`
       )
       .get(shareId) as
@@ -2649,6 +2996,7 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
           share_id: string;
           owner_id: string;
           enc_share_meta: string | null;
+          share_manifest: string | null;
           password_wrap: string | null;
           expires_at: number | null;
           max_downloads: number | null;
@@ -2698,6 +3046,7 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
     res.status(200).json({
       shareId: shareRow.share_id,
       encShareMeta: shareRow.enc_share_meta,
+      shareManifest: shareRow.share_manifest ?? null,
       passwordWrap: shareRow.password_wrap,
       expiresAt: shareRow.expires_at,
       createdAt: shareRow.created_at,
@@ -2785,7 +3134,11 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
   return {
     router,
     store,
-    close: () => store.close(),
+    getSetupToken: () => activeSetupToken,
+    close: () => {
+      clearInterval(cleanupTimer);
+      store.close();
+    },
   };
 }
 
@@ -2813,6 +3166,7 @@ export function createZkV2App(options: ZkV2ServerOptions & { trustProxy?: string
   return {
     app,
     store: v2.store,
+    getSetupToken: v2.getSetupToken,
     close: v2.close,
   };
 }

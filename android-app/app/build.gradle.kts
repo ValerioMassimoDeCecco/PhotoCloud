@@ -325,6 +325,14 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        unitTests.all {
+            // FASE 4A.3: Forziamo -Xmx128m per verificare che lo streaming PCZK da 305 MiB
+            // e la matrice Argon2id da 64 MiB (LongArray contiguo da 64.003 MiB) non causino OOM.
+            it.maxHeapSize = "128m"
+        }
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -353,5 +361,14 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
+
+    // Zero-Knowledge v2 Core Crypto (FASE 4A-bis):
+    // BouncyCastle LightWeight API (Argon2BytesGenerator + Argon2Parameters) usato in modo
+    // identico sia in produzione Android sia nei test JVM.
+    // Versione pinnata: 1.82 (rilasciata 2025-09-17) | Licenza: The Bouncy Castle License (MIT-style).
+    // Note: argon2kt (NDK off-heap) resta opzionale solo se benchmark/test strumentati su device reale
+    // mostreranno latenza o pressione RAM inaccettabili.
+    implementation("org.bouncycastle:bcprov-jdk18on:1.82")
+
     testImplementation("junit:junit:4.13.2")
 }

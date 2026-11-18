@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "description": "PhotoCloud Zero-Knowledge v2 Web-Android Interop Fixtures",
+  "userId": "99999999-8888-4777-8666-555555555555",
+  "blobId": "12345678-1234-4123-8123-123456789abc",
+  "shareId": "abcdef01-2345-4678-89ab-cdef01234567",
+  "passphrase": "Interop-Phase3-Phase4-Passphrase!",
+  "kdfParams": {
+    "memoryKiB": 65536,
+    "iterations": 3,
+    "parallelism": 1,
+    "hashLength": 32
+  },
+  "accountKeyHex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "userSaltHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+  "rootHex": "dd209acca317b8d78fdd5b6314d560b479097b354ca1b266c25a3983dfcb3550",
+  "kekHex": "2f19bbcffe9c23e6b91aaa5b29885302a9b019fc8fd56b570adb6a098a33dead",
+  "authSecretHex": "6ab2bbbee59b32635ef540a6cb93d8d88d1508f3ad696708d9edac4af2169f54",
+  "vaultKeyHex": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
+  "shareKeyHex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+  "plaintextUtf8": "PhotoCloud Zero-Knowledge v2 Interop Payload between Web TypeScript SDK and Android Kotlin Client.",
+  "ciphertextSha256Hex": "8ec72b859ea7ec5ee41e56c6962ddec27f24bda8d79347f1a00a7d10ffd33ad2",
+  "dedupTagHex": "f78d48ee96301b9611c648539cdd56ba50d3a7c22ca888b507d8cf9197c9aeab",
+  "headerChunkSizeLog2": 20,
+  "expectedMetaName": "interop_photo_2026.jpg",
+  "files": {
+    "blob": "blob.pczk",
+    "encMeta": "encMeta.bin",
+    "wrappedVk": "wrappedVk.bin",
+    "shareManifest": "shareManifest.bin",
+    "albums": "albums.bin"
+  }
+}

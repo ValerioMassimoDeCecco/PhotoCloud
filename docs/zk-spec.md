@@ -33,8 +33,8 @@ Il server vede esclusivamente:
 ## 2. Regole Crittografiche Non Negoziabili
 
 1. **Primitive standard certificate**:
-   - **Web**: esclusivamente `window.crypto.subtle` (WebCrypto API) per `HKDF-SHA256`, `HMAC-SHA256`, `SHA-256`, `AES-GCM` (256-bit) e `crypto.getRandomValues` per CSPRNG; `hash-wasm` (o `libsodium-wrappers`) per `Argon2id`.
-   - **Android**: esclusivamente `javax.crypto` (`AES/GCM/NoPadding`, `Mac.getInstance("HmacSHA256")`, `MessageDigest.getInstance("SHA-256")`), `java.security.SecureRandom`, `AndroidKeyStore` per il wrapping locale della `VK`, e `argon2kt` / `lazysodium-android` (o implementazione conforme RFC 9106) per `Argon2id`.
+   - **Web**: esclusivamente `window.crypto.subtle` (WebCrypto API) per `HKDF-SHA256`, `HMAC-SHA256`, `SHA-256`, `AES-GCM` (256-bit) e `crypto.getRandomValues` per CSPRNG; `hash-wasm@4.12.0` per `Argon2id`.
+   - **Android**: esclusivamente `javax.crypto` (`AES/GCM/NoPadding`, `Mac.getInstance("HmacSHA256")`, `MessageDigest.getInstance("SHA-256")`), `java.security.SecureRandom`, `AndroidKeyStore` per il wrapping locale della `VK`, e BouncyCastle (`org.bouncycastle:bcprov-jdk18on:1.82`, `Argon2BytesGenerator`, Bouncy Castle / MIT-style License) sullo stesso percorso sia in produzione sia in `testDebugUnitTest` *(deviazione documentata rispetto ad `argon2kt`, che resta opzionale solo se benchmark strumentati su device reale mostrano latenza o heap inaccettabili)*.
    - **Server (Node.js)**: esclusivamente `node:crypto` (`scrypt`/`argon2`, `timingSafeEqual`, `createHash('sha256')`, `randomBytes`, `randomUUID`). Nessuna funzione di cifratura/decifrazione vault sul server.
 2. **Divieto assoluto di `Math.random()`**: ogni byte casuale (`accountKey`, `VK`, `FK`, `userSalt`, `noncePrefix`, IV GCM da 12B, `blobId`, `shareId`, `shareKey`) deve provenire da un CSPRNG (`crypto.getRandomValues` / `SecureRandom` / `node:crypto.randomBytes`).
 3. **Unicità dei Nonce**:
@@ -285,10 +285,11 @@ Tutti gli album dell'utente sono rappresentati da un singolo documento JSON cifr
    - Il client cifra i metadati di visualizzazione della share (`{ name, mime, size, takenAt, width, height, duration }`) con `shareMetaKey`:
      $$\text{shareEncryptedMeta} = \text{AES-256-GCM}(\text{key}=\text{shareMetaKey},\ \text{nonce}=12\text{B},\ \text{plaintext}=\text{JSON},\ \text{AAD}=\text{UTF8}(\texttt{"share-meta|"} + \text{shareId} + \texttt{"|"} + \text{blobId}))$$
    - Se presente una miniatura `320px`, il client la cifra con `shareMetaKey` e `AAD = UTF8("share-thumb|" + shareId + "|" + blobId)`.
-4. Il client invia al server `POST /api/v2/shares` con `{ shareId, expiresAt, passwordProtected: false, items: [{ blobId, shareWrappedFK, shareEncryptedMeta, shareEncryptedThumb }] }`.
-5. Il link generato per l'utente è:
-   `https://<host>/share/<shareId>#<base64url(shareKey)>`
-6. Quando il destinatario apre `/share/<shareId>#<shareKey>`, il browser legge `<shareKey>` da `window.location.hash`, pulisce immediatamente l'hash dalla barra degli indirizzi con `history.replaceState(null, '', window.location.pathname)`, scarica il manifesto cifrato da `GET /api/v2/shares/<shareId>`, decifra i metadati e le `FK` dei singoli blob in WebCrypto, e scarica/decifra i blob `PCZK` v1 (sostituendo l'unwrap della `FK` con `shareWrappedFK`).
+   - Il client può inoltre impacchettare l'intero manifesto cifrato della condivisione (`shareManifest`, fino a `1 MiB` base64url) cifrato con `shareMetaKey` e `AAD = UTF8("share-manifest|" + shareId)` contenente la mappa completa `{ v: 1, shareId, title, createdAt, items: [{ blobId, wrappedFk, encMeta }] }`.
+4. Il client invia al server `POST /api/v2/shares` con `{ shareId, expiresAt, maxDownloads, shareManifest, passwordWrap, items: [{ blobId, wrappedFk, encItemMeta }] }`.
+5. Il link generato per l'utente sul client web v2 è:
+   `https://<host>/v2/share/<shareId>#<base64url(shareKey)>`
+6. Quando il destinatario apre `/v2/share/<shareId>#<shareKey>`, il browser legge `<shareKey>` esclusivamente dal fragment `window.location.hash` (mai dalla query string o dal path), pulisce immediatamente l'hash dalla barra degli indirizzi con `history.replaceState(null, '', window.location.pathname)`, scarica il manifesto cifrato (`shareManifest` e `items`) da `GET /api/v2/shares/<shareId>`, decifra i metadati e le `FK` dei singoli blob in WebCrypto, e scarica/decifra i blob `PCZK` v1 (anche con streaming `Range` per i video).
 
 ### 6.2 Condivisione Protetta da Password Opzionale
 Se il creatore della share imposta una password opzionale:
@@ -333,64 +334,77 @@ Su Android, dopo il login/registrazione iniziale in cui la `VK` (32B) viene sblo
 
 ## 8. Architettura Storage Server v2 e Specifica Completa API HTTP (`/api/v2/*`)
 
-### 8.1 Storage Engine (SQLite WAL + Filesystem Sharded `vault_v2/`)
-1. **Database Indice (`vault_v2/index.sqlite`)**:
-   - Motore: SQLite in modalità `WAL` (`PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;`) tramite il modulo nativo `node:sqlite` (`DatabaseSync`).
-   - Tabelle:
-     - `users_v2`: `user_id TEXT PRIMARY KEY`, `username TEXT UNIQUE NOT NULL`, `user_salt BLOB NOT NULL`, `kdf_params TEXT NOT NULL`, `server_salt BLOB NOT NULL`, `auth_verifier BLOB NOT NULL`, `wrapped_vk BLOB NOT NULL`, `quota_bytes INTEGER NOT NULL`, `created_at INTEGER NOT NULL`, `updated_at INTEGER NOT NULL`.
-     - `sessions_v2`: `session_id TEXT PRIMARY KEY`, `user_id TEXT NOT NULL`, `csrf_token TEXT NOT NULL`, `created_at INTEGER NOT NULL`, `expires_at INTEGER NOT NULL`.
-     - `items_v2`: `id TEXT PRIMARY KEY` (UUIDv4 = `blobId` corrente o `itemId`), `owner_id TEXT NOT NULL`, `blob_id TEXT NOT NULL`, `version INTEGER NOT NULL DEFAULT 1`, `size_bytes INTEGER NOT NULL`, `ciphertext_sha256 TEXT NOT NULL`, `state TEXT NOT NULL CHECK(state IN ('active','trashed'))`, `trashed_at INTEGER`, `enc_meta BLOB NOT NULL`, `dedup_tag TEXT`, `thumbs_json TEXT NOT NULL DEFAULT '{}'`, `created_at INTEGER NOT NULL`, `updated_at INTEGER NOT NULL`.
-     - `uploads_v2`: `upload_id TEXT PRIMARY KEY`, `owner_id TEXT NOT NULL`, `blob_id TEXT NOT NULL`, `total_size INTEGER NOT NULL`, `chunk_size INTEGER NOT NULL`, `total_chunks INTEGER NOT NULL`, `received_chunks INTEGER NOT NULL DEFAULT 0`, `expected_sha256 TEXT NOT NULL`, `enc_meta BLOB NOT NULL`, `dedup_tag TEXT`, `replace_item_id TEXT`, `expected_version INTEGER`, `temp_path TEXT NOT NULL`, `created_at INTEGER NOT NULL`, `expires_at INTEGER NOT NULL`.
-     - `albums_v2`: `owner_id TEXT PRIMARY KEY`, `etag TEXT NOT NULL`, `size_bytes INTEGER NOT NULL`, `updated_at INTEGER NOT NULL`.
-     - `shares_v2` & `share_items_v2`: `share_id TEXT PRIMARY KEY`, `owner_id TEXT NOT NULL`, `expires_at INTEGER`, `password_wrap BLOB`, `created_at INTEGER NOT NULL`; `share_items_v2(share_id, blob_id, wrapped_fk BLOB, enc_meta BLOB, enc_thumb BLOB)`.
+### 8.1 Storage Engine (SQLite WAL dietro `IndexStore` + Filesystem Sharded `vault_v2/`)
+1. **Database Indice (`vault_v2/index.sqlite`) — Deviazione Documentata (`node:sqlite` dietro `IndexStore` vs `better-sqlite3`)**:
+   - **Scelta progettuale (Deviazione da `better-sqlite3`)**: invece di introdurre l'addon nativo C++ `better-sqlite3` (che richiede toolchain `node-gyp`/`python3`/`make`/`g++` durante `npm install` e può fallire su container minimali o aggiornamenti ABI), utilizziamo il modulo nativo built-in **`node:sqlite` (`DatabaseSync`)**, isolato dietro l'interfaccia sottile **`IndexStore` (`SqliteIndexStore`)** in `src/lib/zkServerV2.ts` così da poter sostituire il motore SQLite senza toccare il router v2.
+   - **Versione minima di Node.js senza flag (`>= 22.13.0`)**: in Node.js 22.12.0 `node:sqlite` richiedeva ancora il flag CLI `--experimental-sqlite`; a partire da **Node.js `22.13.0` LTS** `node:sqlite` è importabile direttamente senza alcun flag. Pertanto `package.json` (`"engines": { "node": ">=22.13.0" }`), `photocloud.sh`, `photocloud.bat`, i workflow GitHub Actions (`.github/workflows/android-ci.yml` e `android-release.yml`) e `README.md` sono allineati a **`>= 22.13.0`**.
+   - **Configurazione SQLite**: modalità `WAL` (`PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;`).
+   - **Tabelle**:
+     - `users_v2`: `id TEXT PRIMARY KEY`, `username TEXT NOT NULL UNIQUE COLLATE NOCASE`, `user_salt TEXT NOT NULL`, `kdf_params TEXT NOT NULL`, `server_salt BLOB NOT NULL`, `auth_verifier BLOB NOT NULL`, `wrapped_vk TEXT NOT NULL`, `quota_bytes INTEGER NOT NULL DEFAULT 10737418240`, `created_at INTEGER NOT NULL`, `updated_at INTEGER NOT NULL`.
+     - `sessions_v2`: **`sid_hash BLOB PRIMARY KEY`** (esclusivamente l'hash `SHA-256` a 32 byte del token di sessione; il token grezzo del cookie non è **mai** salvato in chiaro nel database), `user_id TEXT NOT NULL REFERENCES users_v2(id) ON DELETE CASCADE`, `csrf_token TEXT NOT NULL`, `created_at INTEGER NOT NULL`, `expires_at INTEGER NOT NULL`.
+     - `items_v2`: `id TEXT PRIMARY KEY` (UUIDv4), `owner_id TEXT NOT NULL`, `blob_id TEXT NOT NULL UNIQUE`, `version INTEGER NOT NULL DEFAULT 1`, `size INTEGER NOT NULL`, `sha256_hex TEXT NOT NULL`, `enc_meta TEXT NOT NULL`, `dedup_tag TEXT`, `state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','trashed'))`, `trashed_at INTEGER`, `thumb_320 INTEGER NOT NULL DEFAULT 0`, `thumb_1280 INTEGER NOT NULL DEFAULT 0`, `created_at INTEGER NOT NULL`, `updated_at INTEGER NOT NULL`.
+     - `uploads_v2`: `upload_id TEXT PRIMARY KEY`, `owner_id TEXT NOT NULL`, `blob_id TEXT NOT NULL`, `total_size INTEGER NOT NULL`, `chunk_size INTEGER NOT NULL`, `total_chunks INTEGER NOT NULL`, `received_chunks INTEGER NOT NULL DEFAULT 0`, `received_bytes INTEGER NOT NULL DEFAULT 0`, `expected_sha256 TEXT NOT NULL`, `enc_meta TEXT NOT NULL`, `dedup_tag TEXT`, `item_id TEXT`, `temp_path TEXT NOT NULL`, `created_at INTEGER NOT NULL`, `expires_at INTEGER NOT NULL`.
+     - `albums_v2`: `owner_id TEXT PRIMARY KEY`, `etag TEXT NOT NULL`, `size INTEGER NOT NULL`, `updated_at INTEGER NOT NULL`.
+     - `shares_v2` & `share_items_v2`: `share_id TEXT PRIMARY KEY`, `owner_id TEXT NOT NULL`, `enc_share_meta TEXT`, `share_manifest TEXT` (payload opaco cifrato con `shareKey` fino a `1 MiB` contenente per ogni blob condiviso `FK` wrappata ed `encMeta`), `password_wrap TEXT`, `expires_at INTEGER`, `max_downloads INTEGER`, `download_count INTEGER NOT NULL DEFAULT 0`, `created_at INTEGER NOT NULL`; `share_items_v2(share_id, blob_id, wrapped_fk TEXT NOT NULL, enc_item_meta TEXT)`.
 2. **Layout Filesystem Ciphertext (`vault_v2/`)**:
    - Ogni `blobId` è validato rigorosamente come UUID v4 canonico lowercase (`/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/`). Nessun nome file fornito dal client tocca mai il filesystem.
-   - Path del blob: `vault_v2/<userId>/<blobId[0..1]>/<blobId>` (dove `<blobId[0..1]>` sono i primi 2 caratteri esadecimali di `blobId`).
-   - Path miniature cifrate: `vault_v2/<userId>/<blobId[0..1]>/<blobId>.thumb.<variant>` (`variant` $\in \{\texttt{320}, \texttt{1280}\}$).
-   - Path catalogo album cifrato: `vault_v2/<userId>/albums.bin`.
-   - **Scrittura Atomica**: ogni file viene scritto in `temp_uploads/v2_tmp_<uuid>`, sottoposto a `fsync` sul file descriptor, chiuso, e spostato atomicamente con `fs.renameSync(tmpPath, finalPath)` seguito da `fsync` della directory padre.
+   - Path del blob principale: `vault_v2/<userId>/<blobId[0..1]>/<blobId>` (dove `<blobId[0..1]>` sono i primi 2 caratteri esadecimali di `blobId`).
+   - Path miniature cifrate: `vault_v2/<userId>/<blobId[0..1]>/<blobId>.thumb320.pczk` e `<blobId>.thumb1280.pczk`.
+   - Path catalogo album cifrato: `vault_v2/<userId>/albums/albums.pczk`.
+   - **Scrittura Atomica**: ogni file viene scritto in `temp_uploads/v2_atomic_<ts>_<rand>.tmp` (o `v2_upload_<uploadId>.part`), sottoposto a `fsync` sul file descriptor, chiuso, e spostato atomicamente con `fs.renameSync(tmpPath, finalPath)` seguito da `fsync` best-effort della directory padre.
+   - **Pulizia Automatica Upload Abbandonati e File Orfani**: all'avvio del server, a ogni `POST /api/v2/blobs/upload/init` e periodicamente in background (ogni 15 minuti), `cleanupExpiredUploads` elimina le righe di `uploads_v2` con `expires_at <= now`, rimuove i relativi file `.part` e cancella qualsiasi file temporaneo orfano `v2_upload_*.part` o `v2_atomic_*.tmp` in `temp_uploads/`.
 3. **Crittografia Ammessa sul Server**:
    - Il modulo server v2 **non importa né contiene alcuna funzione di cifratura/decifrazione AES o derivazione chiavi di contenuto**.
    - Uniche operazioni crittografiche eseguite dal server (`node:crypto`):
      1. Verifica di `authSecret` tramite `crypto.scrypt(authSecretBytes, serverSalt, 32, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 })` + `crypto.timingSafeEqual`.
-     2. Generazione deterministica di parametri finti su `/api/v2/login/params` per utenti inesistenti tramite `HMAC-SHA256(serverSecret, "login-params|" + username)` + calcolo KDF dummy in tempo costante per prevenire user enumeration.
-     3. Verifica `SHA-256` in streaming del **ciphertext** caricato.
+     2. Generazione deterministica di parametri finti su `/api/v2/login/params` per utenti inesistenti tramite `HMAC-SHA256(serverSecret, "PhotoCloud-v2-fake-salt|" + username.toLowerCase())` + calcolo `scrypt` dummy in tempo costante per prevenire user enumeration.
+     3. Verifica `SHA-256` in streaming del **ciphertext** caricato e hash `SHA-256` del token di sessione (`sid_hash`).
      4. Generazione di ID/token casuali (`crypto.randomUUID()`, `crypto.randomBytes(32)`).
-4. **Limiti e Sicurezza Trasversale**:
-   - `MAX_UPLOAD_MB` (default `2048 MiB`, configurabile via env/options), `MAX_UPLOAD_CHUNKS = 4096`, `MAX_ENC_META_BYTES = 65536` (64 KiB), `MAX_ALBUM_BLOB_BYTES = 4194304` (4 MiB), `MAX_THUMB_BLOB_BYTES = 2097152` (2 MiB).
+4. **Limiti, Registrazione, Quota e Sicurezza Trasversale**:
+   - `MAX_UPLOAD_MB` (default `500 MiB`, configurabile via env/options), `MAX_UPLOAD_CHUNKS = 10000`, `MAX_ENC_META_BYTES = 65536` (64 KiB), `MAX_SHARE_MANIFEST_BYTES = 1048576` (1 MiB), `MAX_ALBUM_BLOB_BYTES = 4194304` (4 MiB), `MAX_THUMB_BLOB_BYTES = 2097152` (2 MiB).
+   - **Controllo Registrazione (`setupToken` monouso & `REGISTRATION_INVITE_TOKEN`, nessun "primo che arriva")**:
+      - Non esiste alcuna registrazione aperta "primo che arriva": quando `users_v2` è vuoto all'avvio del server, il server genera un `setupToken` casuale ad alta entropia (24 byte CSPRNG codificati in base64url) e lo stampa **una sola volta** sullo standard output (`stdout`) di avvio (mai in file di log persistenti e mai salvato in chiaro in SQLite).
+      - La prima registrazione su `POST /api/v2/register` richiede obbligatoriamente il `setupToken` (nel body JSON `setupToken`/`inviteToken` o nell'header `X-Setup-Token`/`X-Registration-Token`) oppure `REGISTRATION_INVITE_TOKEN`, confrontato in **constant-time** (`crypto.timingSafeEqual` sui digest SHA-256). Senza token valido il server risponde `403 Forbidden` (`REGISTRATION_DISABLED`).
+      - Non appena il primo utente completa la registrazione, il `setupToken` viene immediatamente marcato come consumato e azzerato in memoria (**monouso**): qualsiasi tentativo successivo con lo stesso `setupToken` riceve `403 Forbidden` (`REGISTRATION_DISABLED`).
+      - **Soglia minima KDF (KDF Floor)**: sia il server in registrazione/rewrap sia i client (Web e Android) prima di eseguire Argon2id impongono `memoryKiB >= 65536` (64 MiB), `iterations >= 3`, `parallelism >= 1` e `salt >= 16` byte.
+      - **Recovery Code vs Passphrase**: il Recovery Code (codifica testuale dei 32 byte di `accountKey`) sostituisce esclusivamente il file chiave JSON, **mai la passphrase**. La perdita della passphrase comporta la perdita irreversibile dei dati cifrati (cfr. `docs/threat-model.md`).
+      - **Semantica Ticket Video nel Service Worker (`/v2/sw-stream.js`)**: il ticket di decifrazione streaming è vincolato alla coppia `(blobId, clientId)`, è accettato esclusivamente da client appartenenti allo scope `/v2/`, resta valido per tutte le richieste HTTP `Range` di quel blob fino alla scadenza (TTL) o al messaggio `LOCK_ALL_KEYS` (che azzera tutte le `FK`), e produce risposte con `Cache-Control: no-store` senza mai toccare la Cache API.
+   - **Quota per Utente (`USER_QUOTA_MB` / `quota_bytes`)**: ogni utente ha una quota dedicata salvata in `users_v2.quota_bytes` (default `10 GiB` o `USER_QUOTA_MB * 1024 * 1024`, personalizzabile per singolo utente con `store.setUserQuota(userId, bytes)`), verificata su `activeBytes + trashedBytes + inflightBytes + totalSize`.
    - Ogni risorsa è filtrata per `owner_id = session.userId`; qualsiasi accesso a risorse inesistenti o appartenenti ad altri utenti restituisce **`404 Not Found`** (mai `403`).
-   - Redazione rigorosa dei log: nessun body di richiesta nei log; redazione automatica di `authSecret`, `oldAuthSecret`, `newAuthSecret`, `wrappedVaultKey`, `wrappedVk`, `encMeta`, `Cookie`, `Authorization`.
+   - Redazione rigorosa dei log: nessun body di richiesta o porzione di ciphertext nei log; redazione automatica di `authSecret`, `oldAuthSecret`, `newAuthSecret`, `wrappedVaultKey`, `wrappedVk`, `encMeta`, `shareManifest`, `setupToken`, `inviteToken`, `Cookie`, `Authorization`.
 
 ### 8.2 Endpoint Account (`/api/v2/register`, `/api/v2/login/params`, `/api/v2/login`, `/api/v2/logout`, `/api/v2/account/rewrap`)
+- **Requisito HTTPS Obbligatorio**: Tutti gli endpoint di autenticazione (`/register`, `/login/params`, `/login`, `/account/rewrap` e relativi alias `/auth/*`) verificano che la richiesta arrivi su **HTTPS** (`req.secure === true`, tenendo conto di `TRUST_PROXY` e `X-Forwarded-Proto: https`) oppure da **`localhost` / `127.0.0.1` / `::1`**. Qualsiasi richiesta HTTP in chiaro verso IP LAN (es. `http://192.168.1.50:3000`) o domini remoti viene rifiutata immediatamente con **`403 Forbidden` (`HTTPS_REQUIRED`)**, poiché nel browser `window.crypto.subtle` (WebCrypto) e i cookie con attributo `Secure` sono disabilitati fuori dai *Secure Contexts*.
 1. **`POST /api/v2/register`** *(alias: `POST /api/v2/auth/register`)*
-   - Request JSON: `{ "username": "alice", "userId"?: "<uuid-v4>", "salt": "<base64url 16B>", "kdfParams": { "memoryKiB": 65536, "iterations": 3, "parallelism": 1, "hashLength": 32 }, "authSecret": "<base64url 32B>", "wrappedVaultKey": "<base64url 60B>" }`
-   - Response `201 Created`: `{ "userId": "...", "username": "alice", "csrfToken": "..." }` + cookie `photocloud_v2_sid` (`HttpOnly; Secure; SameSite=Strict; Path=/`).
+   - Request JSON: `{ "userId"?: "<uuid-v4>", "username": "alice", "salt": "<base64url 16B>", "kdfParams": { "algorithm": "Argon2id", "memoryKiB": 65536, "iterations": 3, "parallelism": 1 }, "authSecret": "<base64url 32B>", "wrappedVaultKey": "<base64url 60B>", "setupToken"?: "<string>", "inviteToken"?: "<string>" }`
+   - Se `userId` è fornito dal client, viene validato rigorosamente come UUIDv4 canonico (`400 INVALID_USER_ID` altrimenti). Se `username` o `userId` esistono già in `users_v2`, il server restituisce la medesima risposta generica `409 Conflict` (`{ "error": "REGISTRATION_CONFLICT" }`) senza rivelare quale dei due campi sia già presente.
+   - Response `201 Created`: `{ "userId": "...", "username": "alice", "salt": "...", "kdfParams": { ... }, "wrappedVaultKey": "...", "csrfToken": "..." }` + cookie `photocloud_v2_sid` (`HttpOnly; Secure; SameSite=Strict; Path=/`).
 2. **`POST /api/v2/login/params`** *(alias: `POST /api/v2/auth/params`)*
    - Request JSON: `{ "username": "alice" }`
-   - Response `200 OK`: `{ "salt": "<base64url 16B>", "kdfParams": { "algorithm": "argon2id", "memoryKiB": 65536, "iterations": 3, "parallelism": 1, "hashLength": 32 } }`.
-   - Se `username` non esiste, deriva `salt = HMAC-SHA256(serverSecret, "salt|" + username)[0..15]` ed esegue una derivazione `scrypt` dummy con gli stessi parametri del login per uniformare forma e tempo di risposta.
+   - Response `200 OK`: `{ "salt": "<base64url 16B>", "kdfParams": { "algorithm": "Argon2id", "memoryKiB": 65536, "iterations": 3, "parallelism": 1 } }`.
+   - Se `username` non esiste, deriva `salt = HMAC-SHA256(serverSecret, "PhotoCloud-v2-fake-salt|" + username.toLowerCase())[0..15]` ed esegue una derivazione `scrypt` dummy con gli stessi parametri del login per uniformare forma e tempo di risposta. Protetto dallo stesso rate-limiter di `/login` (`429 RATE_LIMITED`).
 3. **`POST /api/v2/login`** *(alias: `POST /api/v2/auth/login`)*
    - Request JSON: `{ "username": "alice", "authSecret": "<base64url 32B>" }`
    - Response `200 OK`: `{ "userId": "...", "username": "alice", "salt": "<base64url 16B>", "kdfParams": { ... }, "wrappedVaultKey": "<base64url 60B>", "csrfToken": "..." }` + cookie `photocloud_v2_sid` (`HttpOnly; Secure; SameSite=Strict`).
 4. **`POST /api/v2/logout`** *(alias: `POST /api/v2/auth/logout`)*
-   - Invalida la sessione nel DB SQLite e azzera il cookie `photocloud_v2_sid`.
+   - Invalida la sessione (`DELETE FROM sessions_v2 WHERE sid_hash = ?`) e azzera il cookie `photocloud_v2_sid`.
 5. **`POST /api/v2/account/rewrap`** *(alias: `PUT /api/v2/auth/passphrase`)*
-   - Request JSON: `{ "oldAuthSecret": "<base64url 32B>", "newSalt": "<base64url 16B>", "newKdfParams": { ... }, "newAuthSecret": "<base64url 32B>", "newWrappedVaultKey": "<base64url 60B>" }`
-   - Verifica `oldAuthSecret` in constant-time, aggiorna atomicamente in transazione SQLite `user_salt`, `kdf_params`, `server_salt`, `auth_verifier` e `wrapped_vk`, e revoca tutte le altre sessioni dell'utente.
+   - Request JSON: `{ "oldAuthSecret": "<base64url 32B>", "newSalt"?: "<base64url 16B>", "newKdfParams"?: { ... }, "newAuthSecret": "<base64url 32B>", "newWrappedVaultKey": "<base64url 60B>" }`
+   - Verifica `oldAuthSecret` in constant-time, aggiorna atomicamente in transazione SQLite `user_salt`, `kdf_params`, `server_salt`, `auth_verifier` e `wrapped_vk`, e revoca tutte le altre sessioni dell'utente (`sid_hash != current`).
 
 ### 8.3 Endpoint Blob e Upload Chunked/Resumable (`/api/v2/blobs/*`)
 1. **`POST /api/v2/blobs/upload/init`**:
-   - Request JSON: `{ "blobId": "<uuid-v4>", "totalSize": 150134, "chunkSize": 65536, "totalChunks": 3, "expectedSha256": "<64-hex>", "encMeta": "<base64url>", "dedupTag"?: "<base64url 32B>", "replaceItemId"?: "<uuid-v4>", "expectedVersion"?: 1 }`
-   - Valida `blobId` (UUIDv4 rigoroso), limiti (`totalSize >= 102`, `totalSize <= MAX_UPLOAD_BYTES`, `totalChunks <= MAX_UPLOAD_CHUNKS`, `encMeta <= MAX_ENC_META_BYTES`) e quota disponibile dell'utente (`activeBytes + trashedBytes + totalSize <= quotaBytes`, altrimenti `413 Payload Too Large` `QUOTA_EXCEEDED`).
-   - Response `201 Created`: `{ "uploadId": "<uuid-v4>", "blobId": "<uuid-v4>", "receivedChunks": 0 }`.
+   - Request JSON: `{ "blobId": "<uuid-v4>", "totalSize": 150134, "chunkSize": 65536, "totalChunks": 3, "expectedSha256": "<64-hex>", "encMeta": "<base64url>", "dedupTag"?: "<hex|base64url 32B>", "itemId"?: "<uuid-v4>" }`
+   - Valida `blobId` (UUIDv4 rigoroso), limiti (`totalSize >= 102`, `totalSize <= MAX_UPLOAD_BYTES`, `totalChunks <= MAX_UPLOAD_CHUNKS`, `encMeta <= MAX_ENC_META_BYTES`) e quota disponibile dell'utente (`activeBytes + trashedBytes + inflightBytes + totalSize <= quotaBytes`, altrimenti `413 Payload Too Large` `QUOTA_EXCEEDED`).
+   - Response `201 Created`: `{ "uploadId": "<uuid-v4>", "blobId": "<uuid-v4>", "receivedChunks": 0, "expiresAt": <ms> }`.
 2. **`PUT /api/v2/blobs/upload/:uploadId/:chunkIndex`**:
    - Body: `application/octet-stream` (bytes del chunk di ciphertext).
    - Verifica che `uploadId` appartenga all'utente (`404` altrimenti), che `chunkIndex === received_chunks` (rifiuta chunk fuori ordine con `409 Conflict` `CHUNK_OUT_OF_ORDER`), che sul chunk `0` i primi 5 byte siano `PCZK\x01` e i byte `6..21` coincidano con `blobId`, e che la somma dei byte non superi `totalSize`.
-   - Appende i byte di ciphertext a `temp_uploads/v2_<uploadId>.part` con `fsync`.
+   - Appende i byte di ciphertext a `temp_uploads/v2_upload_<uploadId>.part` con `fsync`.
 3. **`POST /api/v2/blobs/upload/:uploadId/complete`**:
-   - Verifica che tutti i chunk siano stati ricevuti e che la dimensione totale coincida con `totalSize`.
-   - Calcola in streaming `SHA-256` del file ciphertext in `temp_uploads/v2_<uploadId>.part` e lo confronta in constant-time con `expectedSha256` (`422 CIPHERTEXT_INTEGRITY_MISMATCH` e cancellazione del `.part` in caso di mismatch).
-   - Esegue `fsync` + `rename` atomico in `vault_v2/<userId>/<blobId[0..1]>/<blobId>` e registra/aggiorna il record in `items_v2` in transazione SQLite.
+   - Verifica che `uploadId` appartenga all'utente (`404` altrimenti) e che tutti i chunk siano stati ricevuti (`received_chunks === total_chunks` e `received_bytes === total_size`).
+   - Calcola in streaming `SHA-256` del file ciphertext in `temp_uploads/v2_upload_<uploadId>.part` e lo confronta in constant-time con `expectedSha256` (`422 CIPHERTEXT_INTEGRITY_MISMATCH` e cancellazione del `.part` in caso di mismatch).
+   - Esegue `fsync` + `rename` atomico in `vault_v2/<userId>/<blobId[0..1]>/<blobId>` e registra il record in `items_v2` in transazione SQLite.
 4. **`GET /api/v2/blobs/:id`**:
    - Verifica che il blob appartenga all'utente (`404` altrimenti).
    - Imposta sempre:
@@ -405,23 +419,68 @@ Su Android, dopo il login/registrazione iniziale in cui la `VK` (32B) viene sblo
      - Suffix range `Range: bytes=-suffixLen` (`suffixLen > 0`) → ultimi `min(suffixLen, size)` byte con `206 Partial Content`.
      - Range sintatticamente malformato, `start >= size`, `start > end`, `-0`, o multi-range non supportato → `416 Range Not Satisfiable` con `Content-Range: bytes */size`.
 5. **Miniature Cifrate**:
-   - `PUT /api/v2/blobs/:id/thumbs/:variant` (`variant` $\in \{\texttt{320}, \texttt{1280}\}$) e `GET /api/v2/blobs/:id/thumbs/:variant`.
+   - `PUT /api/v2/blobs/:id/thumbs/:variant` (`variant` $\in \{\texttt{320}, \texttt{1280}\}$) e `GET /api/v2/blobs/:id/thumbs/:variant` (sempre filtrate per `owner_id = sess.userId`, altrimenti `404`).
 
 ### 8.4 Endpoint Item, Editing/Versione, Dedup, Album, Trash, Stats e Share
-1. **Item (`GET /api/v2/items`, `GET /api/v2/items/:id`, `PATCH /api/v2/items/:id/meta`, `POST /api/v2/items/:id/replace`)**:
-   - Record: `{ id, blobId, version, size, createdAt, updatedAt, state, trashedAt, encMeta, dedupTag, thumbs }`.
-   - `GET /api/v2/items?state=active|trashed&limit=50&cursor=<base64url>` restituisce `{ items: [...], nextCursor: "..." | null }`.
-   - `PATCH /api/v2/items/:id/meta` aggiorna `encMeta` (validando limite 64 KiB) e `updatedAt`.
-   - `POST /api/v2/items/:id/replace` (o `replaceItemId` in upload chunked) sostituisce il blob associato all'item verificando `expectedVersion` (`409 Conflict` / `412 Precondition Failed` se obsoleto), incrementa `version = version + 1`, aggiorna `blobId`, `size`, `encMeta`, `dedupTag`, e rimuove il vecchio blob fisico da `vault_v2/`.
+1. **Item (`GET /api/v2/items`, `GET /api/v2/items/:id`, `PATCH|PUT /api/v2/items/:id/meta`, `POST /api/v2/items/:id/replace`)**:
+   - Record: `{ id, blobId, version, size, sha256, createdAt, updatedAt, state, trashedAt, encMeta, dedupTag, thumbs }`.
+   - `GET /api/v2/items?state=active|trashed&limit=100&cursor=<base64url>` restituisce `{ items: [...], nextCursor: "..." | null }`.
+   - `PATCH /api/v2/items/:id/meta` aggiorna `encMeta` (validando limite 64 KiB), incrementa `version` e aggiorna `updatedAt`.
+   - `POST /api/v2/items/:id/replace` sostituisce il blob associato all'item verificando `expectedVersion` (`412 Precondition Failed` se obsoleto), verifica che `newBlobId` esista nella directory `vault_v2/<userId>/` dell'utente (`404` se inesistente o di altro utente), incrementa `version = version + 1`, aggiorna `blobId`, `size`, `sha256`, `encMeta`, `dedupTag`, e rimuove il vecchio blob principale e le sue miniature `.thumb320.pczk` / `.thumb1280.pczk` da `vault_v2/`.
 2. **Dedup (`POST /api/v2/backup/check`)**:
-   - Riceve `{ "dedupTags": ["<b64u>", ...] }`, interroga SQLite solo sugli item con `owner_id = userId AND state = 'active'`, e restituisce `{ "existing": { "<dedupTag>": "<itemId>" }, "matchedTags": ["..."] }`.
+   - Riceve `{ "dedupTags": ["<hex|b64u>", ...] }`, interroga SQLite **solo** sugli item con `owner_id = userId AND state = 'active'`, e restituisce `{ "existingTags": ["..."], "existingItems": { "<tag>": { "itemId": "...", "blobId": "..." } } }`.
 3. **Album (`GET /api/v2/albums`, `PUT /api/v2/albums`)**:
-   - `GET /api/v2/albums`: serve il blob cifrato `vault_v2/<userId>/albums.bin` con `Content-Type: application/octet-stream` e header `ETag`. Se non esiste, `204 No Content`.
+   - `GET /api/v2/albums`: serve il blob cifrato `vault_v2/<userId>/albums/albums.pczk` con `Content-Type: application/octet-stream` e header `ETag`. Se non inizializzato per l'utente corrente, risponde `404 Not Found`.
    - `PUT /api/v2/albums`: richiede `If-Match: "<etag>"` (o `If-None-Match: *` per la prima scrittura). Se l'ETag non corrisponde a quello corrente, risponde `412 Precondition Failed`.
-4. **Trash (`POST /api/v2/trash`, `POST /api/v2/trash/restore`, `DELETE /api/v2/trash/items`, `DELETE /api/v2/trash`)**:
-   - Transizione `active` ↔ `trashed` con timestamp `trashedAt`, cancellazione definitiva di singoli item, svuotamento cestino (`DELETE /api/v2/trash`) e funzione di purge per TTL (`purgeExpiredTrashV2`).
+4. **Trash (`POST /api/v2/trash`, `POST /api/v2/trash/restore`, `DELETE /api/v2/items/:id`, `DELETE /api/v2/trash`)**:
+   - Transizione `active` ↔ `trashed` con timestamp `trashedAt` (`404` se anche un solo `itemId` appartiene a un altro utente o non esiste).
+   - L'eliminazione definitiva (`DELETE /api/v2/items/:id`), lo svuotamento cestino (`DELETE /api/v2/trash`) e la purga automatica per TTL (`purgeExpiredTrash`) rimuovono dal disco **sia il blob principale sia i file `.thumb320.pczk` e `.thumb1280.pczk`** tramite `deleteBlobFilesBestEffort`.
 5. **Stats (`GET /api/v2/stats`)**:
    - Restituisce esclusivamente `{ "activeBytes": number, "trashedBytes": number, "activeCount": number, "trashedCount": number, "quotaBytes": number }` (nessuna categoria MIME).
 6. **Share (`POST /api/v2/shares`, `DELETE /api/v2/shares/:shareId`, `GET /api/v2/shares/:shareId`, `GET /api/v2/shares/:shareId/blobs/:blobId`)**:
-   - Creazione e revoca di share su blob dell'utente (con `expiresAt` opzionale e `passwordWrap` opzionale salvato come blob opaco), e download pubblico del manifesto e del ciphertext (con supporto `Range`) protetto da rate limit dedicato per IP e per `shareId`.
+   - Creazione e revoca di share solo su blob attivi di proprietà dell'utente (`404` altrimenti), con supporto per `shareManifest` (payload opaco base64url cifrato con `shareKey` fino a `1 MiB` contenente per ciascun blob la `FK` wrappata ed `encMeta`), `expiresAt`, `maxDownloads` e `passwordWrap` (blob opaco base64url).
+   - Download pubblico del manifesto (`shareManifest` + `items`) e del ciphertext (con supporto `Range`) protetto da rate limit dedicato per IP e per `shareId`, e rifiuto `404` automatico se `now >= expiresAt` o `downloadCount >= maxDownloads`.
+
+### 8.5 Requisito HTTPS Obbligatorio e Configurazione Minima per Caddy e mkcert (LAN)
+Poiché i browser moderni disabilitano `window.crypto.subtle` (WebCrypto API) e ignorano i cookie con attributo `Secure` su origini HTTP non-localhost, PhotoCloud v2 richiede obbligatoriamente **HTTPS** per qualsiasi accesso via LAN o Internet (consentendo HTTP in chiaro esclusivamente su `localhost` / `127.0.0.1` / `::1`).
+
+#### Opzione A — Reverse Proxy con Caddy (Dominio Pubblico o TLS Interno LAN)
+1. Impostare nel file `.env` di PhotoCloud:
+   ```env
+   TRUST_PROXY=127.0.0.1
+   ```
+2. Creare un `Caddyfile` minimale:
+   ```caddyfile
+   # Per dominio pubblico (Let's Encrypt automatico):
+   foto.tuodominio.it {
+       request_body {
+           max_size 512MB
+       }
+       reverse_proxy 127.0.0.1:3000
+   }
+
+   # Oppure per rete locale / LAN (CA locale integrata di Caddy):
+   https://photocloud.local, https://192.168.1.50 {
+       tls internal
+       reverse_proxy 127.0.0.1:3000
+   }
+   ```
+3. Avviare Caddy (`sudo systemctl reload caddy` o `caddy run`): Caddy imposta automaticamente `X-Forwarded-Proto: https` e `X-Forwarded-Host`, permettendo a PhotoCloud (`TRUST_PROXY=127.0.0.1`) di validare `req.secure === true` e di emettere i cookie `Secure; HttpOnly; SameSite=Strict`.
+
+#### Opzione B — Certificati Locali Fidate in LAN con `mkcert`
+Per utilizzare PhotoCloud in una rete domestica/LAN (es. `192.168.1.50`) con certificati riconosciuti da browser desktop e Android senza avvisi TLS:
+1. Installare `mkcert` sulla macchina host e generare la CA locale:
+   ```bash
+   mkcert -install
+   mkcert photocloud.local 192.168.1.50 localhost 127.0.0.1 ::1
+   ```
+2. Configurare Caddy (o nginx) per usare i file generati da `mkcert`:
+   ```caddyfile
+   https://192.168.1.50:8443, https://photocloud.local:8443 {
+       tls ./photocloud.local+4.pem ./photocloud.local+4-key.pem
+       reverse_proxy 127.0.0.1:3000
+   }
+   ```
+3. Sui dispositivi mobili Android/iOS in LAN, installare il file `rootCA.pem` (ottenuto con `mkcert -CAROOT`) tra i certificati CA attendibili di sistema così che sia il browser sia l'app Android comunichino via HTTPS con `TRUST_PROXY=127.0.0.1`.
+
 

@@ -1,28 +1,20 @@
-name: Android Kotlin Compile CI
+name: Android Kotlin, Interop & Web E2E CI
 
 on:
   push:
     branches:
-      - main
-    paths:
-      - 'android-app/**'
-      - '.github/workflows/android-ci.yml'
-      - '.github/workflows/android-release.yml'
+      - '**'
   pull_request:
     branches:
-      - main
-    paths:
-      - 'android-app/**'
-      - '.github/workflows/android-ci.yml'
-      - '.github/workflows/android-release.yml'
+      - '**'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  compile-android-kotlin:
-    name: Verify Android Release Kotlin Compilation
+  kotlin-tests:
+    name: Kotlin Unit Tests (JDK 17, Gradle 8.10.2) & Reverse Interop Fixtures
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -84,7 +76,111 @@ jobs:
             echo "PHOTOCLOUD_KEY_PASSWORD=$KEY_PASS"
           } >> "$GITHUB_ENV"
 
+      - name: Run Android Unit Tests (testDebugUnitTest under -Xmx128m)
+        working-directory: ./android-app
+        run: |
+          set -o pipefail
+          gradle testDebugUnitTest --info --no-daemon --stacktrace 2>&1 | tee unit-test-execution.log
+
+      - name: Upload Kotlin-to-Web Interop Fixtures Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: interop-kotlin-fixtures
+          path: android-app/app/build/interop-kotlin/**
+          if-no-files-found: error
+
+      - name: Upload Android Unit Test Logs and Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-logs
+          path: |
+            android-app/unit-test-execution.log
+            android-app/app/build/reports/tests/testDebugUnitTest/**
+            android-app/app/build/test-results/testDebugUnitTest/**
+
       - name: Verify Release Kotlin Compilation & Release APK Build
         working-directory: ./android-app
         run: |
           gradle :app:compileReleaseKotlin :app:assembleRelease --no-daemon --stacktrace
+
+  interop:
+    name: Bidirectional Interop Verification (Kotlin <-> TypeScript <-> Python)
+    needs: kotlin-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js >= 22.13.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: '>=22.13.0'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Node Dependencies
+        run: npm ci
+
+      - name: Install Python Interop Dependencies
+        run: pip install --no-cache-dir cryptography argon2-cffi
+
+      - name: Download Kotlin-to-Web Interop Fixtures Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: interop-kotlin-fixtures
+          path: android-app/app/build/interop-kotlin
+
+      - name: Verify Downloaded Kotlin Interop Manifest Exists
+        run: |
+          test -f android-app/app/build/interop-kotlin/manifest.json
+          test -f android-app/app/build/interop-kotlin/blob.pczk
+          test -f android-app/app/build/interop-kotlin/wrappedVk.bin
+          test -f android-app/app/build/interop-kotlin/encMeta.bin
+
+      - name: Run TypeScript SDK + Reverse Interop Tests (FAIL if Kotlin artifact missing)
+        env:
+          REQUIRE_KOTLIN_ARTIFACTS: '1'
+          INTEROP_KOTLIN_DIR: android-app/app/build/interop-kotlin
+        run: ./node_modules/.bin/tsx --test src/lib/zkWebSdk.test.ts
+
+      - name: Run Independent Python Interop Verifier (Forward & Reverse)
+        env:
+          REQUIRE_KOTLIN_ARTIFACTS: '1'
+        run: python3 scripts/verify-interop.py --require-kotlin --kotlin-dir android-app/app/build/interop-kotlin
+
+  web-e2e:
+    name: Web /v2 Browser E2E (Playwright Chromium + Service Worker Range)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js >= 22.13.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: '>=22.13.0'
+
+      - name: Install Dependencies & Build Web App
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Playwright & Chromium with System Deps
+        run: |
+          npm install --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium
+
+      - name: Execute PhotoCloud v2 Browser E2E Flows (1..9)
+        run: bash scripts/run-v2-playwright-e2e.sh
+
+      - name: Upload Playwright E2E Traces & Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-v2-playwright-e2e-artifacts
+          path: .playwright-e2e-artifacts/**
+          if-no-files-found: warn

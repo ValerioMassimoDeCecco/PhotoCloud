@@ -11,3 +11,11 @@
 -keep class * extends androidx.room.RoomDatabase
 -keep @androidx.room.Entity class *
 
+# BouncyCastle bcprov-jdk18on (Argon2id KDF - Argon2BytesGenerator)
+-keep class org.bouncycastle.crypto.generators.Argon2BytesGenerator { *; }
+-keep class org.bouncycastle.crypto.params.Argon2Parameters { *; }
+-keep class org.bouncycastle.crypto.params.Argon2Parameters$Builder { *; }
+-keep class org.bouncycastle.crypto.digests.Blake2bDigest { *; }
+-dontwarn org.bouncycastle.jce.provider.**
+-dontwarn org.bouncycastle.jcajce.**
+-dontwarn javax.naming.**

@@ -90,6 +90,7 @@ import {
   generateMainActivityKt,
 } from './src/lib/androidBuilder';
 import { createZkV2Router } from './src/lib/zkServerV2';
+import { createZkV2WebRouter } from './src/client/v2-app/router';
 
 const APP_ROOT = process.cwd();
 const UPLOAD_FOLDER = path.resolve(APP_ROOT, 'user_media');
@@ -858,8 +859,14 @@ async function startServer() {
     tempUploadDir: TEMP_UPLOAD_DIR,
     serverSecret: getOrCreateServerSecret(UPLOAD_FOLDER),
     maxUploadBytes: MAX_UPLOAD_BYTES,
+    onSetupTokenGenerated: (token) => {
+      console.log(
+        `[PhotoCloud v2 Setup] First-registration single-use setup token (printed once): ${token}`
+      );
+    },
   });
   app.use('/api/v2', zkV2.router);
+  app.use('/v2', createZkV2WebRouter(APP_ROOT));
 
   app.use('/static', express.static(STATIC_DIR));
   app.use(express.static(path.resolve(process.cwd(), 'public'), { index: false }));

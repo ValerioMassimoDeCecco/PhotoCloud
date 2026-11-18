@@ -87,7 +87,18 @@ check_system_tools() {
     fi
 
     if command -v node &>/dev/null; then
-        print_success "Node.js è installato: $(node -v 2>/dev/null)"
+        local NODE_VER
+        NODE_VER="$(node -v 2>/dev/null)"
+        local NODE_MAJ
+        NODE_MAJ="$(echo "$NODE_VER" | sed -E 's/^v([0-9]+).*/\1/')"
+        local NODE_MIN
+        NODE_MIN="$(echo "$NODE_VER" | sed -E 's/^v[0-9]+\.([0-9]+).*/\1/')"
+        if [ "${NODE_MAJ:-0}" -lt 22 ] || { [ "${NODE_MAJ:-0}" -eq 22 ] && [ "${NODE_MIN:-0}" -lt 13 ]; }; then
+            print_warning "Node.js $NODE_VER rilevato, ma PhotoCloud v2 richiede Node.js >= 22.13.0 (node:sqlite senza flag)."
+            missing_deps+=("node")
+        else
+            print_success "Node.js è installato: $NODE_VER (>= 22.13.0)"
+        fi
     else
         print_warning "Node.js NON risulta installato."
         missing_deps+=("node")
@@ -116,7 +127,7 @@ check_system_tools() {
                         print_info "Installazione tramite apt (Ubuntu / Debian)..."
                         sudo apt-get update
                         if [[ " ${missing_deps[*]} " =~ " node " ]]; then
-                            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+                            curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
                             sudo apt-get install -y nodejs git build-essential || return 1
                         else
                             sudo apt-get install -y "${missing_deps[@]}" || return 1

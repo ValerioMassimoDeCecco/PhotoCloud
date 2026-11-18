@@ -3,7 +3,7 @@
 **Archivio self-hosted e cifrato per foto, video e documenti, con web app (PWA) e app Android nativa.**
 
 [![Versione](https://img.shields.io/github/package-json/v/ValerioMassimoDeCecco/PhotoCloud?label=versione)](CHANGELOG.md)
-[![Node.js](https://img.shields.io/badge/Node.js-20.19%2B%20%7C%2022.12%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org)
+[![Node.js](https://img.shields.io/badge/Node.js-22.13%2B%20LTS-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](#app-android)
 [![Kotlin](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white)](android-app)
 
@@ -121,7 +121,7 @@ Limiti noti:
 
 ## Avvio rapido
 
-**Requisiti:** [Node.js](https://nodejs.org) 20.19+ oppure 22.12+ (requisito di Vite 8) e Git.
+**Requisiti:** [Node.js](https://nodejs.org) 22.13+ LTS (`>= 22.13.0`, richiesto da Vite 8 e dal motore nativo `node:sqlite` senza flag per il vault Zero-Knowledge v2) e Git.
 
 ### Con gli script interattivi
 

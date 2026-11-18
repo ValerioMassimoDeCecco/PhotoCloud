@@ -1,3 +1,4 @@
+import { argon2id as hashWasmArgon2id } from 'hash-wasm';
 import { ZkCryptoError, ZkErrorCode } from './errors.ts';
 import type { Argon2idOptions, Argon2idParams, Argon2idProvider } from './provider.ts';
 import { concatBytes, zeroize } from './zeroize.ts';
@@ -386,6 +387,35 @@ export class Rfc9106Argon2idProvider implements Argon2idProvider {
 
     const secret = options?.secret ?? new Uint8Array(0);
     const ad = options?.associatedData ?? new Uint8Array(0);
+
+    if (secret.byteLength === 0 && ad.byteLength === 0) {
+      try {
+        const wasmOut = await hashWasmArgon2id({
+          password,
+          salt,
+          memorySize: m,
+          iterations: t,
+          parallelism: p,
+          hashLength: tagLen,
+          outputType: 'binary',
+        });
+        if (options?.onProgress) {
+          for (let pass = 1; pass <= t; pass++) {
+            for (let slice = 1; slice <= 4; slice++) {
+              options.onProgress({
+                percent: Math.round((((pass - 1) * 4 + slice) / (t * 4)) * 100),
+                pass,
+                totalPasses: t,
+                slice,
+              });
+            }
+          }
+        }
+        return new Uint8Array(wasmOut);
+      } catch {
+        // Fallback to pure-TS RFC 9106 engine (e.g. when CSP blocks WebAssembly without wasm-unsafe-eval)
+      }
+    }
 
     const h0Input = concatBytes(
       u32le(p),

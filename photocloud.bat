@@ -88,7 +88,7 @@ set "TOOLS_OK=0"
 goto CHECK_NPM
 
 :NODE_FOUND
-for /f "delims=" %%N in ('node -v 2^>nul') do echo [OK] Node.js versione %%N
+for /f "delims=" %%N in ('node -v 2^>nul') do echo [OK] Node.js versione %%N (richiesto ^>= v22.13.0 per node:sqlite senza flag)
 
 :CHECK_NPM
 :: 3. Controllo npm

@@ -31,6 +31,9 @@ interface TestServerHandle {
   vaultV2Dir: string;
   tempUploadDir: string;
   serverSecret: Buffer;
+  store: ReturnType<typeof createZkV2App>['store'];
+  getSetupToken: () => string | null;
+  printedSetupTokens: string[];
   logLines: string[];
   setNow: (ms: number) => void;
   advanceTime: (deltaMs: number) => void;
@@ -45,6 +48,10 @@ async function startTestV2Server(opts?: {
   maxUploadBytes?: number;
   sessionTtlMs?: number;
   trashTtlMs?: number;
+  uploadTtlMs?: number;
+  registrationEnabled?: boolean | 'setup_token_or_invite' | 'first_user_only';
+  registrationInviteToken?: string;
+  initialSetupToken?: string;
   loginRateLimitMax?: number;
   shareRateLimitMaxPerIp?: number;
   shareRateLimitMaxPerShare?: number;
@@ -56,13 +63,14 @@ async function startTestV2Server(opts?: {
   const tempUploadDir = opts?.tempUploadDir ?? path.join(rootTmp, 'temp_uploads');
   const serverSecret = opts?.serverSecret ?? crypto.randomBytes(32);
   const logLines: string[] = [];
+  const printedSetupTokens: string[] = [];
   let currentNow = opts?.initialNow ?? Date.now();
 
   const logger = createRedactingLogger((line) => {
     logLines.push(line);
   });
 
-  const { app, close: closeStore } = createZkV2App({
+  const { app, store, getSetupToken, close: closeStore } = createZkV2App({
     vaultV2Dir,
     tempUploadDir,
     serverSecret,
@@ -70,6 +78,11 @@ async function startTestV2Server(opts?: {
     maxUploadBytes: opts?.maxUploadBytes,
     sessionTtlMs: opts?.sessionTtlMs,
     trashTtlMs: opts?.trashTtlMs,
+    uploadTtlMs: opts?.uploadTtlMs,
+    registrationEnabled: opts?.registrationEnabled ?? true,
+    registrationInviteToken: opts?.registrationInviteToken,
+    initialSetupToken: opts?.initialSetupToken,
+    onSetupTokenGenerated: (t) => printedSetupTokens.push(t),
     loginRateLimitMax: opts?.loginRateLimitMax,
     shareRateLimitMaxPerIp: opts?.shareRateLimitMaxPerIp,
     shareRateLimitMaxPerShare: opts?.shareRateLimitMaxPerShare,
@@ -93,6 +106,9 @@ async function startTestV2Server(opts?: {
     vaultV2Dir,
     tempUploadDir,
     serverSecret,
+    store,
+    getSetupToken,
+    printedSetupTokens,
     logLines,
     setNow: (ms: number) => {
       currentNow = ms;
@@ -166,7 +182,8 @@ async function generateValidPczkBlob(
 
 async function registerTestUser(
   baseUrl: string,
-  username: string
+  username: string,
+  extra?: { inviteToken?: string; setupToken?: string; headers?: Record<string, string> }
 ): Promise<{
   userId: string;
   cookie: string;
@@ -188,7 +205,7 @@ async function registerTestUser(
 
   const res = await fetch(`${baseUrl}/api/v2/register`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(extra?.headers ?? {}) },
     body: JSON.stringify({
       username,
       salt: saltB64,
@@ -200,6 +217,8 @@ async function registerTestUser(
       },
       authSecret: authSecretB64,
       wrappedVaultKey: wrappedVkB64,
+      ...(extra?.inviteToken ? { inviteToken: extra.inviteToken } : {}),
+      ...(extra?.setupToken ? { setupToken: extra.setupToken } : {}),
     }),
   });
 
@@ -219,7 +238,7 @@ async function registerTestUser(
 }
 
 // ============================================================================
-// Suite di Test FASE 2 — Server API v2
+// Suite di Test FASE 2 & 2b — Server API v2
 // ============================================================================
 
 describe('FASE 2 — PhotoCloud Zero-Knowledge Server API v2 (/api/v2/*)', () => {
@@ -604,104 +623,434 @@ describe('FASE 2 — PhotoCloud Zero-Knowledge Server API v2 (/api/v2/*)', () =>
     }
   });
 
-  it('4. Isolamento cross-user: tentare di accedere o modificare risorse di un altro utente restituisce sempre 404 (mai 403)', async () => {
+  it('4. Isolamento cross-user table-driven: per OGNI rotta v2 con ID o risorsa utente, User B riceve 404 e lo stato di User A resta invariato', async () => {
     const srv = await startTestV2Server();
     try {
       const userA = await registerTestUser(srv.baseUrl, 'user_a');
       const userB = await registerTestUser(srv.baseUrl, 'user_b');
 
-      const blobIdA = crypto.randomUUID();
-      const pczkA = await generateValidPczkBlob(userA.vaultKey, blobIdA, crypto.randomBytes(1024));
+      // Helper per caricare un blob completo per un utente
+      const uploadBlobFor = async (
+        owner: Awaited<ReturnType<typeof registerTestUser>>,
+        createItem = true
+      ) => {
+        const blobId = crypto.randomUUID();
+        const pczk = await generateValidPczkBlob(owner.vaultKey, blobId, crypto.randomBytes(1024));
+        const initR = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/init`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: owner.cookie },
+          body: JSON.stringify({
+            blobId,
+            totalSize: pczk.ciphertext.byteLength,
+            chunkSize: pczk.ciphertext.byteLength,
+            totalChunks: 1,
+            expectedSha256: pczk.sha256Hex,
+            encMeta: pczk.encMetaB64,
+            dedupTag: pczk.dedupTagHex,
+          }),
+        });
+        assert.equal(initR.status, 201);
+        const { uploadId } = (await initR.json()) as { uploadId: string };
+        const putR = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/${uploadId}/0`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/octet-stream', Cookie: owner.cookie },
+          body: new Uint8Array(pczk.ciphertext),
+        });
+        assert.equal(putR.status, 200);
+        const compR = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/${uploadId}/complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: owner.cookie },
+          body: JSON.stringify({ createItem }),
+        });
+        assert.equal(compR.status, 201);
+        return { blobId, pczk };
+      };
 
-      const initRes = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/init`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Cookie: userA.cookie },
-        body: JSON.stringify({
-          blobId: blobIdA,
-          totalSize: pczkA.ciphertext.byteLength,
-          chunkSize: pczkA.ciphertext.byteLength,
-          totalChunks: 1,
-          expectedSha256: pczkA.sha256Hex,
-          encMeta: pczkA.encMetaB64,
-          dedupTag: pczkA.dedupTagHex,
-        }),
-      });
-      const { uploadId } = (await initRes.json()) as { uploadId: string };
+      // 1) Item attivo di User A con thumb 320 e 1280
+      const activeA = await uploadBlobFor(userA, true);
+      const thumb320A = Buffer.concat([PCZK_MAGIC, Buffer.from([PCZK_VERSION_V1]), crypto.randomBytes(150)]);
+      const thumb1280A = Buffer.concat([PCZK_MAGIC, Buffer.from([PCZK_VERSION_V1]), crypto.randomBytes(250)]);
 
-      // User B tenta di caricare un chunk sull'uploadId di User A -> 404
-      const crossChunk = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/${uploadId}/0`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/octet-stream', Cookie: userB.cookie },
-        body: new Uint8Array(pczkA.ciphertext),
-      });
-      assert.equal(crossChunk.status, 404);
-
-      // User A completa l'upload
-      await fetch(`${srv.baseUrl}/api/v2/blobs/upload/${uploadId}/0`, {
+      const putT320 = await fetch(`${srv.baseUrl}/api/v2/blobs/${activeA.blobId}/thumbs/320`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/octet-stream', Cookie: userA.cookie },
-        body: new Uint8Array(pczkA.ciphertext),
+        body: thumb320A,
       });
-      await fetch(`${srv.baseUrl}/api/v2/blobs/upload/${uploadId}/complete`, {
+      assert.equal(putT320.status, 200);
+
+      const putT1280 = await fetch(`${srv.baseUrl}/api/v2/blobs/${activeA.blobId}/thumbs/1280`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream', Cookie: userA.cookie },
+        body: thumb1280A,
+      });
+      assert.equal(putT1280.status, 200);
+
+      // 2) Blob sostitutivo di User A e di User B (per testare replace cross-user)
+      const replacementBlobA = await uploadBlobFor(userA, false);
+      const replacementBlobB = await uploadBlobFor(userB, false);
+
+      // 3) Item nel cestino di User A (per testare /trash/restore cross-user)
+      const trashedA = await uploadBlobFor(userA, true);
+      const trashResA = await fetch(`${srv.baseUrl}/api/v2/trash`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Cookie: userA.cookie },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ itemIds: [trashedA.blobId] }),
       });
+      assert.equal(trashResA.status, 200);
 
-      // User B tenta GET blob di User A -> 404
-      const crossGetBlob = await fetch(`${srv.baseUrl}/api/v2/blobs/${blobIdA}`, {
-        headers: { Cookie: userB.cookie },
-      });
-      assert.equal(crossGetBlob.status, 404);
-
-      // User B tenta GET item di User A -> 404
-      const crossGetItem = await fetch(`${srv.baseUrl}/api/v2/items/${blobIdA}`, {
-        headers: { Cookie: userB.cookie },
-      });
-      assert.equal(crossGetItem.status, 404);
-
-      // User B tenta PATCH meta di User A -> 404
-      const crossPatchMeta = await fetch(`${srv.baseUrl}/api/v2/items/${blobIdA}/meta`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Cookie: userB.cookie },
-        body: JSON.stringify({ encMeta: pczkA.encMetaB64 }),
-      });
-      assert.equal(crossPatchMeta.status, 404);
-
-      // User B tenta di spostare nel cestino o eliminare l'item di User A -> 404
-      const crossTrash = await fetch(`${srv.baseUrl}/api/v2/trash`, {
+      // 4) Due sessioni upload in-flight di User A:
+      //    - uploadChunkA (0/1 chunk ricevuti, per testare PUT chunk altrui)
+      //    - uploadCompleteA (1/1 chunk ricevuti, pronto per complete, per testare POST complete altrui)
+      const blobChunkA = crypto.randomUUID();
+      const pczkChunkA = await generateValidPczkBlob(userA.vaultKey, blobChunkA, crypto.randomBytes(600));
+      const initChunkA = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/init`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Cookie: userB.cookie },
-        body: JSON.stringify({ itemIds: [blobIdA] }),
-      });
-      assert.equal(crossTrash.status, 404);
-
-      const crossDelete = await fetch(`${srv.baseUrl}/api/v2/items/${blobIdA}`, {
-        method: 'DELETE',
-        headers: { Cookie: userB.cookie },
-      });
-      assert.equal(crossDelete.status, 404);
-
-      // User B tenta di creare uno share con il blobId di User A -> 404
-      const crossShare = await fetch(`${srv.baseUrl}/api/v2/shares`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Cookie: userB.cookie },
+        headers: { 'Content-Type': 'application/json', Cookie: userA.cookie },
         body: JSON.stringify({
+          blobId: blobChunkA,
+          totalSize: pczkChunkA.ciphertext.byteLength,
+          chunkSize: pczkChunkA.ciphertext.byteLength,
+          totalChunks: 1,
+          expectedSha256: pczkChunkA.sha256Hex,
+          encMeta: pczkChunkA.encMetaB64,
+        }),
+      });
+      const { uploadId: uploadIdChunkA } = (await initChunkA.json()) as { uploadId: string };
+
+      const blobCompleteA = crypto.randomUUID();
+      const pczkCompleteA = await generateValidPczkBlob(userA.vaultKey, blobCompleteA, crypto.randomBytes(600));
+      const initCompleteA = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/init`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: userA.cookie },
+        body: JSON.stringify({
+          blobId: blobCompleteA,
+          totalSize: pczkCompleteA.ciphertext.byteLength,
+          chunkSize: pczkCompleteA.ciphertext.byteLength,
+          totalChunks: 1,
+          expectedSha256: pczkCompleteA.sha256Hex,
+          encMeta: pczkCompleteA.encMetaB64,
+        }),
+      });
+      const { uploadId: uploadIdCompleteA } = (await initCompleteA.json()) as { uploadId: string };
+      await fetch(`${srv.baseUrl}/api/v2/blobs/upload/${uploadIdCompleteA}/0`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream', Cookie: userA.cookie },
+        body: new Uint8Array(pczkCompleteA.ciphertext),
+      });
+
+      // 5) Share creato da User A
+      const shareIdA = crypto.randomUUID();
+      const createShareA = await fetch(`${srv.baseUrl}/api/v2/shares`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: userA.cookie },
+        body: JSON.stringify({
+          shareId: shareIdA,
           items: [
             {
-              blobId: blobIdA,
+              blobId: activeA.blobId,
               wrappedFk: crypto.randomBytes(60).toString('base64url'),
             },
           ],
         }),
       });
-      assert.equal(crossShare.status, 404);
+      assert.equal(createShareA.status, 201);
 
-      // User B tenta backup/check con il dedupTag di User A -> non deve trovarlo
+      // 6) Catalogo Album cifrato di User A
+      const albumBlobA = Buffer.concat([PCZK_MAGIC, Buffer.from([PCZK_VERSION_V1]), crypto.randomBytes(180)]);
+      const putAlbumA = await fetch(`${srv.baseUrl}/api/v2/albums`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          Cookie: userA.cookie,
+          'If-None-Match': '*',
+        },
+        body: albumBlobA,
+      });
+      assert.equal(putAlbumA.status, 200);
+      const { etag: albumEtagA } = (await putAlbumA.json()) as { etag: string };
+
+      const forgedMetaB64 = Buffer.alloc(48, 0xaa).toString('base64url');
+      const forgedThumb = Buffer.concat([PCZK_MAGIC, Buffer.from([PCZK_VERSION_V1]), crypto.randomBytes(160)]);
+
+      // Funzione che verifica che TUTTO lo stato di User A sia rimasto identico
+      const assertUserAStateUnchanged = async (stepName: string) => {
+        // Active item A: stato active, version 1, encMeta originale, thumbs [320, 1280]
+        const itemRes = await fetch(`${srv.baseUrl}/api/v2/items/${activeA.blobId}`, {
+          headers: { Cookie: userA.cookie },
+        });
+        assert.equal(itemRes.status, 200, `[${stepName}] activeA item deve esistere`);
+        const { item } = (await itemRes.json()) as {
+          item: {
+            id: string;
+            blobId: string;
+            version: number;
+            state: string;
+            encMeta: string;
+            thumbs: number[];
+          };
+        };
+        assert.equal(item.blobId, activeA.blobId, `[${stepName}] blobId invariato`);
+        assert.equal(item.version, 1, `[${stepName}] version invariata`);
+        assert.equal(item.state, 'active', `[${stepName}] state active invariato`);
+        assert.equal(item.encMeta, activeA.pczk.encMetaB64, `[${stepName}] encMeta invariato`);
+        assert.deepEqual(item.thumbs, [320, 1280], `[${stepName}] thumbs invariati`);
+
+        // Thumb 320 e 1280 di User A intatte su disco
+        const t320Res = await fetch(`${srv.baseUrl}/api/v2/blobs/${activeA.blobId}/thumbs/320`, {
+          headers: { Cookie: userA.cookie },
+        });
+        assert.equal(t320Res.status, 200);
+        assert.equal(
+          Buffer.compare(Buffer.from(await t320Res.arrayBuffer()), thumb320A),
+          0,
+          `[${stepName}] thumb 320 bytes invariati`
+        );
+
+        const t1280Res = await fetch(`${srv.baseUrl}/api/v2/blobs/${activeA.blobId}/thumbs/1280`, {
+          headers: { Cookie: userA.cookie },
+        });
+        assert.equal(t1280Res.status, 200);
+        assert.equal(
+          Buffer.compare(Buffer.from(await t1280Res.arrayBuffer()), thumb1280A),
+          0,
+          `[${stepName}] thumb 1280 bytes invariati`
+        );
+
+        // Item trashedA ancora nel cestino
+        const trashedRes = await fetch(`${srv.baseUrl}/api/v2/items/${trashedA.blobId}`, {
+          headers: { Cookie: userA.cookie },
+        });
+        assert.equal(trashedRes.status, 200);
+        const trashedBody = (await trashedRes.json()) as { item: { state: string } };
+        assert.equal(trashedBody.item.state, 'trashed', `[${stepName}] trashedA deve restare trashed`);
+
+        // Upload in-flight di User A intatti nel DB
+        const chunkRow = srv.store.db
+          .prepare(`SELECT received_chunks, received_bytes FROM uploads_v2 WHERE upload_id = ?`)
+          .get(uploadIdChunkA) as { received_chunks: number; received_bytes: number } | undefined;
+        assert.ok(chunkRow, `[${stepName}] uploadIdChunkA deve esistere`);
+        assert.equal(Number(chunkRow.received_chunks), 0, `[${stepName}] uploadIdChunkA received_chunks === 0`);
+
+        const completeRow = srv.store.db
+          .prepare(`SELECT received_chunks FROM uploads_v2 WHERE upload_id = ?`)
+          .get(uploadIdCompleteA) as { received_chunks: number } | undefined;
+        assert.ok(completeRow, `[${stepName}] uploadIdCompleteA non deve essere stato completato da User B`);
+        assert.equal(Number(completeRow.received_chunks), 1);
+
+        // Share di User A ancora attivo
+        const shareCheck = await fetch(`${srv.baseUrl}/api/v2/shares/${shareIdA}`);
+        assert.equal(shareCheck.status, 200, `[${stepName}] shareIdA deve restare attivo`);
+
+        // Album di User A intatto
+        const albumCheck = await fetch(`${srv.baseUrl}/api/v2/albums`, {
+          headers: { Cookie: userA.cookie },
+        });
+        assert.equal(albumCheck.status, 200, `[${stepName}] album di User A deve esistere`);
+        assert.equal(albumCheck.headers.get('etag'), albumEtagA, `[${stepName}] album ETag invariato`);
+        assert.equal(
+          Buffer.compare(Buffer.from(await albumCheck.arrayBuffer()), albumBlobA),
+          0,
+          `[${stepName}] album bytes invariati`
+        );
+      };
+
+      // Tabella completa di tutte le rotte v2 con ID o risorsa utente
+      const crossUserTable: Array<{
+        group: string;
+        name: string;
+        method: string;
+        path: string;
+        headers?: Record<string, string>;
+        body?: BodyInit;
+        expectedStatus: number;
+      }> = [
+        {
+          group: 'blobs',
+          name: 'GET /api/v2/blobs/:id (blob altrui)',
+          method: 'GET',
+          path: `/api/v2/blobs/${activeA.blobId}`,
+          expectedStatus: 404,
+        },
+        {
+          group: 'thumbs',
+          name: 'PUT /api/v2/blobs/:id/thumbs/320 (sovrascrittura thumb 320 altrui)',
+          method: 'PUT',
+          path: `/api/v2/blobs/${activeA.blobId}/thumbs/320`,
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: forgedThumb,
+          expectedStatus: 404,
+        },
+        {
+          group: 'thumbs',
+          name: 'GET /api/v2/blobs/:id/thumbs/320 (lettura thumb 320 altrui)',
+          method: 'GET',
+          path: `/api/v2/blobs/${activeA.blobId}/thumbs/320`,
+          expectedStatus: 404,
+        },
+        {
+          group: 'thumbs',
+          name: 'PUT /api/v2/blobs/:id/thumbs/1280 (sovrascrittura thumb 1280 altrui)',
+          method: 'PUT',
+          path: `/api/v2/blobs/${activeA.blobId}/thumbs/1280`,
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: forgedThumb,
+          expectedStatus: 404,
+        },
+        {
+          group: 'thumbs',
+          name: 'GET /api/v2/blobs/:id/thumbs/1280 (lettura thumb 1280 altrui)',
+          method: 'GET',
+          path: `/api/v2/blobs/${activeA.blobId}/thumbs/1280`,
+          expectedStatus: 404,
+        },
+        {
+          group: 'items',
+          name: 'GET /api/v2/items/:id (item altrui)',
+          method: 'GET',
+          path: `/api/v2/items/${activeA.blobId}`,
+          expectedStatus: 404,
+        },
+        {
+          group: 'items',
+          name: 'PATCH /api/v2/items/:id/meta (modifica encMeta altrui)',
+          method: 'PATCH',
+          path: `/api/v2/items/${activeA.blobId}/meta`,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ encMeta: forgedMetaB64 }),
+          expectedStatus: 404,
+        },
+        {
+          group: 'items',
+          name: 'PUT /api/v2/items/:id/meta (modifica encMeta altrui via PUT)',
+          method: 'PUT',
+          path: `/api/v2/items/${activeA.blobId}/meta`,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ encMeta: forgedMetaB64 }),
+          expectedStatus: 404,
+        },
+        {
+          group: 'items',
+          name: 'POST /api/v2/items/:id/replace (sostituzione blob su item altrui)',
+          method: 'POST',
+          path: `/api/v2/items/${activeA.blobId}/replace`,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            expectedVersion: 1,
+            newBlobId: replacementBlobB.blobId,
+            encMeta: forgedMetaB64,
+          }),
+          expectedStatus: 404,
+        },
+        {
+          group: 'items',
+          name: 'POST /api/v2/items/:id/replace (uso di newBlobId appartenente a User A su proprio item)',
+          method: 'POST',
+          path: `/api/v2/items/${activeA.blobId}/replace`,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            expectedVersion: 1,
+            newBlobId: replacementBlobA.blobId,
+            encMeta: forgedMetaB64,
+          }),
+          expectedStatus: 404,
+        },
+        {
+          group: 'trash',
+          name: 'POST /api/v2/trash (cestinamento item altrui)',
+          method: 'POST',
+          path: `/api/v2/trash`,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itemIds: [activeA.blobId] }),
+          expectedStatus: 404,
+        },
+        {
+          group: 'trash',
+          name: 'POST /api/v2/trash/restore (ripristino item altrui dal cestino)',
+          method: 'POST',
+          path: `/api/v2/trash/restore`,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itemIds: [trashedA.blobId] }),
+          expectedStatus: 404,
+        },
+        {
+          group: 'trash',
+          name: 'DELETE /api/v2/items/:id (eliminazione definitiva item altrui)',
+          method: 'DELETE',
+          path: `/api/v2/items/${activeA.blobId}`,
+          expectedStatus: 404,
+        },
+        {
+          group: 'shares',
+          name: 'POST /api/v2/shares (creazione share con blobId altrui)',
+          method: 'POST',
+          path: `/api/v2/shares`,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: [
+              {
+                blobId: activeA.blobId,
+                wrappedFk: crypto.randomBytes(60).toString('base64url'),
+              },
+            ],
+          }),
+          expectedStatus: 404,
+        },
+        {
+          group: 'shares',
+          name: 'DELETE /api/v2/shares/:shareId (revoca share altrui)',
+          method: 'DELETE',
+          path: `/api/v2/shares/${shareIdA}`,
+          expectedStatus: 404,
+        },
+        {
+          group: 'uploads',
+          name: 'PUT /api/v2/blobs/upload/:uploadId/0 (invio chunk su uploadId altrui)',
+          method: 'PUT',
+          path: `/api/v2/blobs/upload/${uploadIdChunkA}/0`,
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: new Uint8Array(pczkChunkA.ciphertext),
+          expectedStatus: 404,
+        },
+        {
+          group: 'uploads',
+          name: 'POST /api/v2/blobs/upload/:uploadId/complete (completamento uploadId altrui)',
+          method: 'POST',
+          path: `/api/v2/blobs/upload/${uploadIdCompleteA}/complete`,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+          expectedStatus: 404,
+        },
+        {
+          group: 'albums',
+          name: 'GET /api/v2/albums (User B non vede il catalogo album di User A -> 404)',
+          method: 'GET',
+          path: `/api/v2/albums`,
+          expectedStatus: 404,
+        },
+      ];
+
+      for (const tc of crossUserTable) {
+        const res = await fetch(`${srv.baseUrl}${tc.path}`, {
+          method: tc.method,
+          headers: {
+            Cookie: userB.cookie,
+            ...(tc.headers ?? {}),
+          },
+          body: tc.body,
+        });
+        assert.equal(
+          res.status,
+          tc.expectedStatus,
+          `Fallito isolamento cross-user per [${tc.group}] ${tc.name}: atteso ${tc.expectedStatus}, ottenuto ${res.status}`
+        );
+        await assertUserAStateUnchanged(tc.name);
+      }
+
+      // Verifica aggiuntiva su /backup/check: User B non rileva i dedupTag di User A
       const crossDedup = await fetch(`${srv.baseUrl}/api/v2/backup/check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Cookie: userB.cookie },
-        body: JSON.stringify({ dedupTags: [pczkA.dedupTagHex] }),
+        body: JSON.stringify({ dedupTags: [activeA.pczk.dedupTagHex] }),
       });
       assert.equal(crossDedup.status, 200);
       const dedupBody = (await crossDedup.json()) as { existingTags: string[] };
@@ -1046,9 +1395,10 @@ describe('FASE 2 — PhotoCloud Zero-Knowledge Server API v2 (/api/v2/*)', () =>
     }
   });
 
-  it('7. Difesa CSRF Origin, TRUST_PROXY e Rate Limiting su login e share pubblici', async () => {
+  it('7. Difesa CSRF Origin, TRUST_PROXY e Rate Limiting su /login, /login/params e share pubblici', async () => {
     const srv = await startTestV2Server({
       trustProxy: true,
+      loginRateLimitMax: 4,
       shareRateLimitMaxPerShare: 3,
     });
     try {
@@ -1106,12 +1456,57 @@ describe('FASE 2 — PhotoCloud Zero-Knowledge Server API v2 (/api/v2/*)', () =>
       }
       const fourthShareReq = await fetch(`${srv.baseUrl}/api/v2/shares/${fakeShareId}`);
       assert.equal(fourthShareReq.status, 429);
+
+      // Rate limiting su /api/v2/login e /api/v2/login/params (loginRateLimitMax = 4, 1 già consumata da register)
+      const params1 = await fetch(`${srv.baseUrl}/api/v2/login/params`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'dave' }),
+      });
+      assert.equal(params1.status, 200);
+
+      const login1 = await fetch(`${srv.baseUrl}/api/v2/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: 'dave',
+          authSecret: crypto.randomBytes(32).toString('base64url'),
+        }),
+      });
+      assert.equal(login1.status, 401);
+
+      const params2 = await fetch(`${srv.baseUrl}/api/v2/login/params`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'dave' }),
+      });
+      assert.equal(params2.status, 200);
+
+      // La 5a richiesta auth nella finestra supera loginRateLimitMax=4 -> 429 su /login/params e su /login
+      const rateLimitedParams = await fetch(`${srv.baseUrl}/api/v2/login/params`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'dave' }),
+      });
+      assert.equal(rateLimitedParams.status, 429);
+      assert.ok(Number(rateLimitedParams.headers.get('retry-after')) >= 1);
+
+      const rateLimitedLogin = await fetch(`${srv.baseUrl}/api/v2/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: 'dave',
+          authSecret: user.authSecretB64,
+        }),
+      });
+      assert.equal(rateLimitedLogin.status, 429);
+      assert.ok(Number(rateLimitedLogin.headers.get('retry-after')) >= 1);
     } finally {
       await srv.close();
     }
   });
 
-  it('8. Persistenza al riavvio del server/DB e rifiuto delle sessioni scadute + Redazione totale dei segreti nei log', async () => {
+  it('8. Persistenza al riavvio del server/DB, rifiuto sessioni scadute e assenza totale di segreti/ciphertext nei log', async () => {
     const sharedTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'photocloud-v2-persist-'));
     const vaultV2Dir = path.join(sharedTmp, 'vault_v2');
     const tempUploadDir = path.join(sharedTmp, 'temp_uploads');
@@ -1161,7 +1556,7 @@ describe('FASE 2 — PhotoCloud Zero-Knowledge Server API v2 (/api/v2/*)', () =>
         body: JSON.stringify({}),
       });
 
-      // Verifica che nei log catturati non compaia mai alcun segreto
+      // Verifica che nei log catturati non compaia mai alcun segreto né porzioni di ciphertext
       const joinedLogs = srv1.logLines.join('\n');
       assert.ok(srv1.logLines.length > 0);
       assert.equal(joinedLogs.includes(eve.authSecretB64), false, 'authSecret non deve mai apparire nei log');
@@ -1169,6 +1564,10 @@ describe('FASE 2 — PhotoCloud Zero-Knowledge Server API v2 (/api/v2/*)', () =>
       assert.equal(joinedLogs.includes(pczk.encMetaB64), false, 'encMeta non deve mai apparire nei log');
       const rawCookieToken = eve.cookie.split('=')[1];
       assert.equal(joinedLogs.includes(rawCookieToken), false, 'Il cookie di sessione non deve mai apparire nei log');
+      const ciphertextPayloadSliceB64 = pczk.ciphertext.subarray(70, 134).toString('base64url');
+      const ciphertextPayloadSliceHex = pczk.ciphertext.subarray(70, 134).toString('hex');
+      assert.equal(joinedLogs.includes(ciphertextPayloadSliceB64), false, 'Il ciphertext b64 non deve mai apparire nei log');
+      assert.equal(joinedLogs.includes(ciphertextPayloadSliceHex), false, 'Il ciphertext hex non deve mai apparire nei log');
     } finally {
       // Chiudi completamente la prima istanza (server HTTP + SQLite WAL)
       await srv1.close();
@@ -1206,6 +1605,415 @@ describe('FASE 2 — PhotoCloud Zero-Knowledge Server API v2 (/api/v2/*)', () =>
       assert.equal(expiredRes.status, 401);
     } finally {
       await srv2.close();
+    }
+  });
+
+  it('9. Verifiche FASE 2b & 3.0: setupToken monouso obbligatorio alla prima registrazione (senza token 403, con token 201, riuso 403), session token SHA-256, cleanup upload, purga cestino incluse thumb, shareManifest/scadenza/passwordWrap e quota per utente', async () => {
+    const inviteSecret = 'pc-invite-2026-secret-token';
+    const srv = await startTestV2Server({
+      registrationEnabled: 'setup_token_or_invite',
+      registrationInviteToken: inviteSecret,
+      defaultQuotaBytes: 50_000,
+      uploadTtlMs: 30_000,
+      trashTtlMs: 30_000,
+      initialNow: 1_700_000_000_000,
+    });
+    try {
+      // 9a. Nessun "primo che arriva": all'avvio viene stampato una sola volta un setupToken casuale
+      assert.equal(srv.printedSetupTokens.length, 1);
+      const startupSetupToken = srv.getSetupToken();
+      assert.ok(startupSetupToken && startupSetupToken.length >= 24);
+      assert.equal(srv.printedSetupTokens[0], startupSetupToken);
+
+      // Tentativo di prima registrazione SENZA setupToken -> 403 REGISTRATION_DISABLED
+      const noTokenFirstReg = await fetch(`${srv.baseUrl}/api/v2/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: 'unauthenticated_first',
+          salt: crypto.randomBytes(16).toString('base64url'),
+          kdfParams: { algorithm: 'Argon2id', memoryKiB: 65536, iterations: 3, parallelism: 1 },
+          authSecret: crypto.randomBytes(32).toString('base64url'),
+          wrappedVaultKey: crypto.randomBytes(60).toString('base64url'),
+        }),
+      });
+      assert.equal(noTokenFirstReg.status, 403);
+      assert.equal(((await noTokenFirstReg.json()) as { error: string }).error, 'REGISTRATION_DISABLED');
+
+      // Prima registrazione CON setupToken valido -> 201 Created
+      const firstUser = await registerTestUser(srv.baseUrl, 'first_owner', {
+        setupToken: startupSetupToken,
+      });
+      assert.ok(firstUser.userId);
+      // Il setupToken monouso viene immediatamente azzerato in memoria
+      assert.equal(srv.getSetupToken(), null);
+
+      // Tentativo di riusare lo STESSO setupToken monouso per una seconda registrazione -> 403 REGISTRATION_DISABLED
+      const reusedSetupTokenReg = await fetch(`${srv.baseUrl}/api/v2/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: 'reused_setup_token_user',
+          salt: crypto.randomBytes(16).toString('base64url'),
+          kdfParams: { algorithm: 'Argon2id', memoryKiB: 65536, iterations: 3, parallelism: 1 },
+          authSecret: crypto.randomBytes(32).toString('base64url'),
+          wrappedVaultKey: crypto.randomBytes(60).toString('base64url'),
+          setupToken: startupSetupToken,
+        }),
+      });
+      assert.equal(reusedSetupTokenReg.status, 403);
+      assert.equal(((await reusedSetupTokenReg.json()) as { error: string }).error, 'REGISTRATION_DISABLED');
+
+      // Il secondo utente senza inviteToken viene rifiutato con 403 REGISTRATION_DISABLED
+      const blockedRegRes = await fetch(`${srv.baseUrl}/api/v2/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: 'uninvited_user',
+          salt: crypto.randomBytes(16).toString('base64url'),
+          kdfParams: { algorithm: 'Argon2id', memoryKiB: 65536, iterations: 3, parallelism: 1 },
+          authSecret: crypto.randomBytes(32).toString('base64url'),
+          wrappedVaultKey: crypto.randomBytes(60).toString('base64url'),
+        }),
+      });
+      assert.equal(blockedRegRes.status, 403);
+      const blockedBody = (await blockedRegRes.json()) as { error: string };
+      assert.equal(blockedBody.error, 'REGISTRATION_DISABLED');
+
+      // Il secondo utente con inviteToken valido si registra con successo -> 201
+      const invitedUser = await registerTestUser(srv.baseUrl, 'invited_user', {
+        inviteToken: inviteSecret,
+      });
+      assert.ok(invitedUser.userId);
+
+      // 9a-bis (4.0.1 & 4.0.6): KDF floor (>= 64 MiB, t >= 3), validazione userId UUIDv4, 409 REGISTRATION_CONFLICT uniforme e assenza setupToken in log/SQLite
+      const weakKdfReg = await fetch(`${srv.baseUrl}/api/v2/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: 'weak_kdf_user',
+          salt: crypto.randomBytes(16).toString('base64url'),
+          kdfParams: { algorithm: 'Argon2id', memoryKiB: 32768, iterations: 2, parallelism: 1 },
+          authSecret: crypto.randomBytes(32).toString('base64url'),
+          wrappedVaultKey: crypto.randomBytes(60).toString('base64url'),
+          inviteToken: inviteSecret,
+        }),
+      });
+      assert.equal(weakKdfReg.status, 400);
+      assert.equal(((await weakKdfReg.json()) as { error: string }).error, 'INVALID_KDF_PARAMS');
+
+      const badUserIdReg = await fetch(`${srv.baseUrl}/api/v2/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: 'not-a-valid-uuid-v4',
+          username: 'bad_userid_user',
+          salt: crypto.randomBytes(16).toString('base64url'),
+          kdfParams: { algorithm: 'Argon2id', memoryKiB: 65536, iterations: 3, parallelism: 1 },
+          authSecret: crypto.randomBytes(32).toString('base64url'),
+          wrappedVaultKey: crypto.randomBytes(60).toString('base64url'),
+          inviteToken: inviteSecret,
+        }),
+      });
+      assert.equal(badUserIdReg.status, 400);
+      assert.equal(((await badUserIdReg.json()) as { error: string }).error, 'INVALID_USER_ID');
+
+      // Conflitto su username esistente vs conflitto su userId esistente: stessa identica risposta 409 REGISTRATION_CONFLICT
+      const dupUsernameRes = await fetch(`${srv.baseUrl}/api/v2/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: crypto.randomUUID(),
+          username: 'invited_user',
+          salt: crypto.randomBytes(16).toString('base64url'),
+          kdfParams: { algorithm: 'Argon2id', memoryKiB: 65536, iterations: 3, parallelism: 1 },
+          authSecret: crypto.randomBytes(32).toString('base64url'),
+          wrappedVaultKey: crypto.randomBytes(60).toString('base64url'),
+          inviteToken: inviteSecret,
+        }),
+      });
+      assert.equal(dupUsernameRes.status, 409);
+      const dupUsernameBody = (await dupUsernameRes.json()) as Record<string, unknown>;
+
+      const dupUserIdRes = await fetch(`${srv.baseUrl}/api/v2/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: invitedUser.userId,
+          username: 'brand_new_unique_username',
+          salt: crypto.randomBytes(16).toString('base64url'),
+          kdfParams: { algorithm: 'Argon2id', memoryKiB: 65536, iterations: 3, parallelism: 1 },
+          authSecret: crypto.randomBytes(32).toString('base64url'),
+          wrappedVaultKey: crypto.randomBytes(60).toString('base64url'),
+          inviteToken: inviteSecret,
+        }),
+      });
+      assert.equal(dupUserIdRes.status, 409);
+      const dupUserIdBody = (await dupUserIdRes.json()) as Record<string, unknown>;
+      assert.deepEqual(dupUsernameBody, { error: 'REGISTRATION_CONFLICT' });
+      assert.deepEqual(dupUserIdBody, dupUsernameBody);
+
+      // Verifica che setupToken non compaia mai nei log né in SQLite index.db
+      for (const line of srv.logLines) {
+        assert.equal(line.includes(startupSetupToken), false, 'setupToken non deve mai apparire nei log');
+      }
+      const sqliteRawBytes = fs.readFileSync(path.join(srv.vaultV2Dir, 'index.sqlite'));
+      assert.equal(
+        sqliteRawBytes.includes(Buffer.from(startupSetupToken, 'utf8')),
+        false,
+        'setupToken non deve mai essere salvato in chiaro in SQLite'
+      );
+
+      // 9b. Verifica in SQLite che il session token sia salvato SOLO come hash SHA-256 (mai in chiaro)
+      const rawSid = firstUser.cookie.split('=')[1];
+      const expectedSidHash = crypto.createHash('sha256').update(rawSid, 'utf8').digest();
+      const sessionRows = srv.store.db
+        .prepare(`SELECT sid_hash, user_id FROM sessions_v2 WHERE user_id = ?`)
+        .all(firstUser.userId) as Array<{ sid_hash: Uint8Array; user_id: string }>;
+      assert.equal(sessionRows.length, 1);
+      assert.equal(Buffer.compare(Buffer.from(sessionRows[0].sid_hash), expectedSidHash), 0);
+      assert.notEqual(Buffer.from(sessionRows[0].sid_hash).toString('utf8'), rawSid);
+
+      // 9c. Quota personalizzata per utente (store.setUserQuota)
+      srv.store.setUserQuota(invitedUser.userId, 123_456);
+      const statsInvited = await fetch(`${srv.baseUrl}/api/v2/stats`, {
+        headers: { Cookie: invitedUser.cookie },
+      });
+      const statsInvitedBody = (await statsInvited.json()) as { quotaBytes: number };
+      assert.equal(statsInvitedBody.quotaBytes, 123_456);
+
+      // 9d. Cleanup automatico degli upload abbandonati (uploads_v2 + file .part + file orfani)
+      const abandonedBlobId = crypto.randomUUID();
+      const abandonedPczk = await generateValidPczkBlob(
+        firstUser.vaultKey,
+        abandonedBlobId,
+        crypto.randomBytes(500)
+      );
+      const initAbandoned = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/init`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: firstUser.cookie },
+        body: JSON.stringify({
+          blobId: abandonedBlobId,
+          totalSize: abandonedPczk.ciphertext.byteLength,
+          chunkSize: abandonedPczk.ciphertext.byteLength,
+          totalChunks: 2,
+          expectedSha256: abandonedPczk.sha256Hex,
+          encMeta: abandonedPczk.encMetaB64,
+        }),
+      });
+      assert.equal(initAbandoned.status, 201);
+      const { uploadId: abandonedUploadId } = (await initAbandoned.json()) as { uploadId: string };
+      const abandonedPartPath = path.join(srv.tempUploadDir, `v2_upload_${abandonedUploadId}.part`);
+      assert.equal(fs.existsSync(abandonedPartPath), true);
+
+      // Creiamo anche un file .part orfano non referenziato in SQLite
+      const orphanPartPath = path.join(srv.tempUploadDir, `v2_upload_${crypto.randomUUID()}.part`);
+      fs.writeFileSync(orphanPartPath, Buffer.from('orphan-ciphertext'));
+      assert.equal(fs.existsSync(orphanPartPath), true);
+
+      // Avanziamo il tempo oltre uploadTtlMs (24h+) e inneschiamo un nuovo init (o cleanupExpiredUploads)
+      srv.advanceTime(25 * 60 * 60 * 1000);
+      srv.store.cleanupExpiredUploads(Date.now() + 25 * 60 * 60 * 1000, 1000);
+
+      assert.equal(fs.existsSync(abandonedPartPath), false, 'Il file .part scaduto deve essere rimosso');
+      assert.equal(fs.existsSync(orphanPartPath), false, 'Il file .part orfano deve essere rimosso');
+      const remainingUploads = srv.store.db
+        .prepare(`SELECT COUNT(*) as cnt FROM uploads_v2 WHERE upload_id = ?`)
+        .get(abandonedUploadId) as { cnt: number };
+      assert.equal(Number(remainingUploads.cnt), 0);
+
+      // 9e. Purga del cestino elimina sia il blob principale sia le miniature .thumb320.pczk e .thumb1280.pczk su disco
+      const mediaBlobId = crypto.randomUUID();
+      const mediaPczk = await generateValidPczkBlob(firstUser.vaultKey, mediaBlobId, crypto.randomBytes(900));
+      const initMedia = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/init`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: firstUser.cookie },
+        body: JSON.stringify({
+          blobId: mediaBlobId,
+          totalSize: mediaPczk.ciphertext.byteLength,
+          chunkSize: mediaPczk.ciphertext.byteLength,
+          totalChunks: 1,
+          expectedSha256: mediaPczk.sha256Hex,
+          encMeta: mediaPczk.encMetaB64,
+        }),
+      });
+      const { uploadId: mediaUpId } = (await initMedia.json()) as { uploadId: string };
+      await fetch(`${srv.baseUrl}/api/v2/blobs/upload/${mediaUpId}/0`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream', Cookie: firstUser.cookie },
+        body: new Uint8Array(mediaPczk.ciphertext),
+      });
+      await fetch(`${srv.baseUrl}/api/v2/blobs/upload/${mediaUpId}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: firstUser.cookie },
+        body: JSON.stringify({}),
+      });
+
+      const validThumb = Buffer.concat([PCZK_MAGIC, Buffer.from([PCZK_VERSION_V1]), crypto.randomBytes(140)]);
+      await fetch(`${srv.baseUrl}/api/v2/blobs/${mediaBlobId}/thumbs/320`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream', Cookie: firstUser.cookie },
+        body: validThumb,
+      });
+      await fetch(`${srv.baseUrl}/api/v2/blobs/${mediaBlobId}/thumbs/1280`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream', Cookie: firstUser.cookie },
+        body: validThumb,
+      });
+
+      const mainBlobDisk = srv.store.resolveBlobPath(firstUser.userId, mediaBlobId, '');
+      const thumb320Disk = srv.store.resolveBlobPath(firstUser.userId, mediaBlobId, '.thumb320.pczk');
+      const thumb1280Disk = srv.store.resolveBlobPath(firstUser.userId, mediaBlobId, '.thumb1280.pczk');
+      assert.equal(fs.existsSync(mainBlobDisk), true);
+      assert.equal(fs.existsSync(thumb320Disk), true);
+      assert.equal(fs.existsSync(thumb1280Disk), true);
+
+      // 9f. Share con shareManifest opaco cifrato, scadenza (expiresAt), maxDownloads e passwordWrap
+      const passwordWrapB64 = crypto.randomBytes(64).toString('base64url');
+      const shareManifestB64 = crypto.randomBytes(128).toString('base64url');
+      const shareExpTime = 1_700_000_000_000 + 25 * 60 * 60 * 1000 + 10_000;
+      const createSharePw = await fetch(`${srv.baseUrl}/api/v2/shares`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: firstUser.cookie },
+        body: JSON.stringify({
+          shareManifest: shareManifestB64,
+          passwordWrap: passwordWrapB64,
+          expiresAt: shareExpTime,
+          maxDownloads: 1,
+          items: [
+            {
+              blobId: mediaBlobId,
+              wrappedFk: crypto.randomBytes(60).toString('base64url'),
+            },
+          ],
+        }),
+      });
+      assert.equal(createSharePw.status, 201);
+      const { shareId: pwShareId } = (await createSharePw.json()) as { shareId: string };
+
+      const getSharePw = await fetch(`${srv.baseUrl}/api/v2/shares/${pwShareId}`);
+      assert.equal(getSharePw.status, 200);
+      const getSharePwBody = (await getSharePw.json()) as {
+        shareManifest: string;
+        passwordWrap: string;
+        expiresAt: number;
+      };
+      assert.equal(getSharePwBody.shareManifest, shareManifestB64);
+      assert.equal(getSharePwBody.passwordWrap, passwordWrapB64);
+      assert.equal(getSharePwBody.expiresAt, shareExpTime);
+
+      // Avanziamo oltre shareExpTime -> lo share scaduto risponde 404 sia su metadati sia su blob
+      srv.advanceTime(15_000);
+      const expiredShareMeta = await fetch(`${srv.baseUrl}/api/v2/shares/${pwShareId}`);
+      assert.equal(expiredShareMeta.status, 404);
+      const expiredShareBlob = await fetch(
+        `${srv.baseUrl}/api/v2/shares/${pwShareId}/blobs/${mediaBlobId}`
+      );
+      assert.equal(expiredShareBlob.status, 404);
+
+      // Spostiamo mediaBlobId nel cestino e avanziamo oltre trashTtlMs (30s) -> purga automatica rimuove blob e thumb dal disco
+      await fetch(`${srv.baseUrl}/api/v2/trash`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: firstUser.cookie },
+        body: JSON.stringify({ itemIds: [mediaBlobId] }),
+      });
+      srv.advanceTime(35_000);
+      await fetch(`${srv.baseUrl}/api/v2/items?state=trashed`, {
+        headers: { Cookie: firstUser.cookie },
+      });
+
+      assert.equal(fs.existsSync(mainBlobDisk), false, 'Il blob principale deve essere rimosso dal disco');
+      assert.equal(fs.existsSync(thumb320Disk), false, 'La thumb 320 deve essere rimossa dal disco');
+      assert.equal(fs.existsSync(thumb1280Disk), false, 'La thumb 1280 deve essere rimossa dal disco');
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('10. Requisito HTTPS obbligatorio su /register, /login/params, /login e /account/rewrap per host non-localhost', async () => {
+    const srv = await startTestV2Server({
+      trustProxy: true,
+    });
+    try {
+      // 10a. Richiesta HTTP non-secure verso IP LAN o dominio remoto (senza X-Forwarded-Proto: https) -> 403 HTTPS_REQUIRED
+      const lanRegister = await fetch(`${srv.baseUrl}/api/v2/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Forwarded-Host': '192.168.1.50:3000',
+          'X-Forwarded-Proto': 'http',
+        },
+        body: JSON.stringify({
+          username: 'lan_user',
+          salt: crypto.randomBytes(16).toString('base64url'),
+          kdfParams: { algorithm: 'Argon2id', memoryKiB: 65536, iterations: 3, parallelism: 1 },
+          authSecret: crypto.randomBytes(32).toString('base64url'),
+          wrappedVaultKey: crypto.randomBytes(60).toString('base64url'),
+        }),
+      });
+      assert.equal(lanRegister.status, 403);
+      const lanRegBody = (await lanRegister.json()) as { error: string };
+      assert.equal(lanRegBody.error, 'HTTPS_REQUIRED');
+
+      const lanParams = await fetch(`${srv.baseUrl}/api/v2/login/params`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Forwarded-Host': 'cloud.example.com',
+          'X-Forwarded-Proto': 'http',
+        },
+        body: JSON.stringify({ username: 'lan_user' }),
+      });
+      assert.equal(lanParams.status, 403);
+      assert.equal(((await lanParams.json()) as { error: string }).error, 'HTTPS_REQUIRED');
+
+      const lanLogin = await fetch(`${srv.baseUrl}/api/v2/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Forwarded-Host': 'cloud.example.com',
+          'X-Forwarded-Proto': 'http',
+        },
+        body: JSON.stringify({
+          username: 'lan_user',
+          authSecret: crypto.randomBytes(32).toString('base64url'),
+        }),
+      });
+      assert.equal(lanLogin.status, 403);
+      assert.equal(((await lanLogin.json()) as { error: string }).error, 'HTTPS_REQUIRED');
+
+      // 10b. Richiesta dietro reverse proxy HTTPS (TRUST_PROXY=true + X-Forwarded-Proto: https) -> 201 Created + Cookie Secure
+      const httpsUser = await registerTestUser(srv.baseUrl, 'https_user', {
+        headers: {
+          'X-Forwarded-Host': 'cloud.example.com',
+          'X-Forwarded-Proto': 'https',
+          Origin: 'https://cloud.example.com',
+        },
+      });
+      assert.match(httpsUser.setCookieRaw, /Secure/i);
+      assert.match(httpsUser.setCookieRaw, /HttpOnly/i);
+      assert.match(httpsUser.setCookieRaw, /SameSite=Strict/i);
+
+      // 10c. /account/rewrap su HTTP non-secure viene rifiutato con 403 HTTPS_REQUIRED
+      const insecureRewrap = await fetch(`${srv.baseUrl}/api/v2/account/rewrap`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: httpsUser.cookie,
+          'X-Forwarded-Host': 'cloud.example.com',
+          'X-Forwarded-Proto': 'http',
+          Origin: 'http://cloud.example.com',
+        },
+        body: JSON.stringify({
+          oldAuthSecret: httpsUser.authSecretB64,
+          newAuthSecret: crypto.randomBytes(32).toString('base64url'),
+          newWrappedVaultKey: httpsUser.wrappedVkB64,
+        }),
+      });
+      assert.equal(insecureRewrap.status, 403);
+      assert.equal(((await insecureRewrap.json()) as { error: string }).error, 'HTTPS_REQUIRED');
+    } finally {
+      await srv.close();
     }
   });
 });
