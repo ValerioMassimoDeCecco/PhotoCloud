@@ -653,13 +653,57 @@ test('Mandatory negative tests: bit-flips, truncation (including exact chunk bou
       0
     );
 
-    // Duplicate chunk 0 at index 1 -> chunk 0 is valid, then index 1 fails immediately
+    const multiPt = new Uint8Array(150000);
+    for (let i = 0; i < multiPt.byteLength; i++) {
+      multiPt[i] = (i * 31 + 17) & 0xff;
+    }
+
+    async function assertStreamFailsWithVerifiedPrefix(
+      corruptedBlob: Uint8Array,
+      expectedCode: ZkErrorCode,
+      expectedVerifiedPrefix: Uint8Array
+    ) {
+      const emittedChunks: Uint8Array[] = [];
+      await assert.rejects(
+        async () => {
+          for await (const chunk of decryptBlobStream(corruptedBlob, {
+            fkWrapKey,
+            expectedBlobId: blobId,
+          })) {
+            emittedChunks.push(chunk);
+          }
+        },
+        (err: unknown) => err instanceof ZkCryptoError && err.code === expectedCode
+      );
+      const emitted = concatBytes(...emittedChunks);
+      assert.equal(emitted.byteLength, expectedVerifiedPrefix.byteLength);
+      assert.deepEqual(emitted, expectedVerifiedPrefix);
+    }
+
+    // Duplicate chunk 0 at index 1 -> chunk 0 (65536 B) is verified & identical to original, then index 1 fails with 0 B leaked
     const duplicated = concatBytes(header, chunk0, chunk0, chunk2);
-    await assert.rejects(
-      async () => {
-        await decryptBlobToBytes(duplicated, { fkWrapKey, expectedBlobId: blobId });
-      },
-      (err: unknown) => err instanceof ZkCryptoError && err.code === ZkErrorCode.AUTH_TAG_MISMATCH
+    await assertStreamFailsWithVerifiedPrefix(
+      duplicated,
+      ZkErrorCode.AUTH_TAG_MISMATCH,
+      multiPt.subarray(0, 65536)
+    );
+
+    // Bit-flip in chunk 1 -> exact verified chunk 0 (65536 B) only
+    const bitFlipChunk1 = new Uint8Array(multiCt);
+    bitFlipChunk1[86 + 65552 + 123] ^= 0x01;
+    await assertStreamFailsWithVerifiedPrefix(
+      bitFlipChunk1,
+      ZkErrorCode.AUTH_TAG_MISMATCH,
+      multiPt.subarray(0, 65536)
+    );
+
+    // Bit-flip in final chunk 2 -> exact verified chunks 0..1 (131072 B) only
+    const bitFlipChunk2 = new Uint8Array(multiCt);
+    bitFlipChunk2[86 + 65552 * 2 + 42] ^= 0x80;
+    await assertStreamFailsWithVerifiedPrefix(
+      bitFlipChunk2,
+      ZkErrorCode.AUTH_TAG_MISMATCH,
+      multiPt.subarray(0, 131072)
     );
   }
 

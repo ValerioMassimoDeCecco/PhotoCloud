@@ -49,17 +49,22 @@ jobs:
           SECRET_KEY_PASS: ${{ secrets.PHOTOCLOUD_KEY_PASSWORD || secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          set +x
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$SECRET_STORE_PASS" ] && [ -n "$SECRET_KEY_ALIAS" ] && [ -n "$SECRET_KEY_PASS" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > release-signing.jks
             STORE_PASS="$SECRET_STORE_PASS"
             KEY_ALIAS="$SECRET_KEY_ALIAS"
             KEY_PASS="$SECRET_KEY_PASS"
+            echo "::add-mask::$STORE_PASS"
+            echo "::add-mask::$KEY_PASS"
+            echo "$KEYSTORE_BASE64" | base64 -d > release-signing.jks
           else
             STORE_PASS="$(openssl rand -hex 16)"
             KEY_ALIAS="photocloud-release-key"
             KEY_PASS="$STORE_PASS"
+            echo "::add-mask::$STORE_PASS"
+            echo "::add-mask::$KEY_PASS"
             rm -f release-signing.jks
-            keytool -genkeypair -v \
+            keytool -genkeypair \
               -keystore release-signing.jks \
               -alias "$KEY_ALIAS" \
               -keyalg RSA \
@@ -67,10 +72,8 @@ jobs:
               -validity 10000 \
               -storepass "$STORE_PASS" \
               -keypass "$KEY_PASS" \
-              -dname "CN=PhotoCloud, OU=Mobile, O=Valerio, L=Rome, ST=RM, C=IT"
+              -dname "CN=PhotoCloud, OU=Mobile, O=Valerio, L=Rome, ST=RM, C=IT" >/dev/null
           fi
-          echo "::add-mask::$STORE_PASS"
-          echo "::add-mask::$KEY_PASS"
           {
             echo "PHOTOCLOUD_KEYSTORE_PATH=release-signing.jks"
             echo "PHOTOCLOUD_KEYSTORE_PASSWORD=$STORE_PASS"
@@ -209,6 +212,39 @@ jobs:
                   nsc = open("release-apk-cleartext-check.txt", encoding="utf-8", errors="replace").read()
                   nsc_tail = "\n".join(nsc.splitlines()[-25:])
                   summary.write("\n### Release APK Cleartext Check (`aapt2` / `apkanalyzer`)\n\n```text\n" + nsc_tail + "\n```\n")
+          PY
+
+      - name: Verify Zero Signing Secrets Leaked in Job Logs
+        if: always()
+        working-directory: ./android-app
+        run: |
+          python3 - <<'PY'
+          import os, sys
+
+          secrets = []
+          for env_name in ("PHOTOCLOUD_KEYSTORE_PASSWORD", "PHOTOCLOUD_KEY_PASSWORD"):
+              val = (os.environ.get(env_name) or "").strip()
+              if val:
+                  secrets.append((env_name, val))
+
+          log_files = [
+              p for p in (
+                  "unit-test-execution.log",
+                  "release-build.log",
+                  "release-apk-cleartext-check.txt",
+              ) if os.path.exists(p)
+          ]
+          leaks = []
+          for path in log_files:
+              content = open(path, encoding="utf-8", errors="replace").read()
+              for name, val in secrets:
+                  if val in content:
+                      leaks.append(f"{path}: leaked {name}")
+
+          if leaks:
+              print("::error::Signing secret detected in log file(s): " + "; ".join(leaks), file=sys.stderr)
+              sys.exit(1)
+          print(f"Signing secret log audit PASS: scanned {len(log_files)} file(s) against {len(secrets)} credential value(s) (0 leaks).")
           PY
 
   interop:

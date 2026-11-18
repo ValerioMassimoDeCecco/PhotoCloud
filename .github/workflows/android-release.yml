@@ -167,6 +167,10 @@ jobs:
             const secStoreType = (process.env.SECRET_STORE_TYPE || "").trim();
 
             if (secB64 && secStorePass && secAlias && secKeyPass) {
+              console.log(`::add-mask::${secStorePass}`);
+              if (secKeyPass !== secStorePass) {
+                console.log(`::add-mask::${secKeyPass}`);
+              }
               fs.writeFileSync(KEYSTORE_FILENAME, Buffer.from(secB64, "base64"));
               execFileSync("keytool", [
                 "-list",
@@ -230,6 +234,8 @@ jobs:
                 throw new Error("Draft Vault corrotto: release-signing.jks o signing-meta.json mancante.");
               }
               const meta = JSON.parse(fs.readFileSync(META_FILENAME, "utf8"));
+              if (meta.storePassword) console.log(`::add-mask::${meta.storePassword}`);
+              if (meta.keyPassword && meta.keyPassword !== meta.storePassword) console.log(`::add-mask::${meta.keyPassword}`);
               const actualSha = exportCertSha256(KEYSTORE_FILENAME, meta.keyAlias, meta.storePassword);
               if (meta.certSha256 && actualSha !== String(meta.certSha256).toLowerCase()) {
                 throw new Error(`Verifica integrità vault fallita: atteso ${meta.certSha256}, trovato ${actualSha}`);
@@ -248,7 +254,7 @@ jobs:
 
             fs.rmSync(KEYSTORE_FILENAME, { force: true });
             execFileSync("keytool", [
-              "-genkeypair", "-v",
+              "-genkeypair",
               "-keystore", KEYSTORE_FILENAME,
               "-storetype", "PKCS12",
               "-alias", keyAlias,
@@ -258,7 +264,7 @@ jobs:
               "-storepass", storePass,
               "-keypass", keyPass,
               "-dname", "CN=PhotoCloud Persistent Release, OU=Mobile, O=ValerioMassimoDeCecco, L=Rome, ST=RM, C=IT",
-            ], { stdio: "inherit" });
+            ], { stdio: "pipe" });
 
             const certSha256 = exportCertSha256(KEYSTORE_FILENAME, keyAlias, storePass);
             const meta = {
@@ -591,5 +597,34 @@ jobs:
                   summary.write("\n### Release APK Cleartext Audit (`aapt2` / `apkanalyzer`)\n\n```text\n" + tail + "\n```\n")
               else:
                   summary.write("\n- Cleartext audit log not produced (build failed before check).\n")
+          PY
+
+      - name: Verify Zero Signing Secrets Leaked in Release Audit Files
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os, sys
+
+          secrets = []
+          for env_name in ("PHOTOCLOUD_KEYSTORE_PASSWORD", "PHOTOCLOUD_KEY_PASSWORD"):
+              val = (os.environ.get(env_name) or "").strip()
+              if val:
+                  secrets.append((env_name, val))
+
+          files = [
+              p for p in ("release-apk-cleartext-check.txt", "release/photocloud-release-build.json")
+              if os.path.exists(p)
+          ]
+          leaks = []
+          for path in files:
+              content = open(path, encoding="utf-8", errors="replace").read()
+              for name, val in secrets:
+                  if val in content:
+                      leaks.append(f"{path}: leaked {name}")
+
+          if leaks:
+              print("::error::Signing secret detected in release file(s): " + "; ".join(leaks), file=sys.stderr)
+              sys.exit(1)
+          print(f"Release secret audit PASS: scanned {len(files)} file(s) against {len(secrets)} credential value(s) (0 leaks).")
           PY
 

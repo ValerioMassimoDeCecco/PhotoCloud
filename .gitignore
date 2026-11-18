@@ -35,3 +35,4 @@ android-app/app/build/
 android-app/local.properties
 .playwright-e2e-artifacts/
 .playwright-cli/
+ci-logs/

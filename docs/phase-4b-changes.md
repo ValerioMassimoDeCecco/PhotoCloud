@@ -32,10 +32,12 @@ Tutte le funzionalità v1 esistenti nell'app Android restano intatte dietro `ZkV
 
 ---
 
-## 3. Tema `4B.3` — Test JVM (32 `@Test`), Mutazioni Isolate in `src/test`, Test Strumentati (3 `@Test`), Live Integration & CI
+## 3. Tema `4B.3` — Test JVM (33 `@Test`), Mutazioni Isolate in `src/test`, Test Strumentati (3 `@Test`), Live Integration & CI
 
 | Stato | Percorso File | Scopo Principale |
 |---|---|---|
+| **Eliminato** | `android-app/app/src/test/java/com/valerio/photocloud/zk/ZkReferenceArgon2idCrossCheck.kt` | Rimozione del cross-check in-house (bug indice `-2048` in `compressBlockFlat`, CI #29); i controlli indipendenti restano RFC 9106 §5.3 su BouncyCastle + `verify-interop.py` (`argon2-cffi`, 64 MiB). |
+| Modificato | `android-app/app/src/main/java/com/valerio/photocloud/zk/ZkCoreCrypto.kt` & `ZkCoreCryptoTest.kt` (10 `@Test`) | Rimozione `ZkReferenceArgon2idCrossCheck`, allineamento `decryptBlobStream` STREAM al comportamento TS (emissione chunk autenticati + `.zeroize()` immediato) e asserzione esatta su prefisso chunk verificato / zero byte da chunk manomesso (`chunk k > 0`). |
 | Creato | `android-app/app/src/test/java/com/valerio/photocloud/zk/VaultKeyStoreTest.kt` | 5 `@Test` JVM su `InMemoryFakeVaultKeyStore`: doppia chiave, `DeviceLockedException`, `KeyInvalidatedException`, fallback StrongBox, `deleteAllKeys`. |
 | Creato | `android-app/app/src/test/java/com/valerio/photocloud/zk/ZkNetworkSpy.kt` | `ZkNetworkSpyInterceptor`: ispeziona URL, header e body HTTP per varianti `raw`, `hex`, `base64`, `base64url` e URL-encoded. |
 | Creato | `android-app/app/src/test/java/com/valerio/photocloud/zk/PhotoCloudZkV2NetworkTest.kt` | 7 `@Test` JVM: guard `/api/v2/*` + HTTPS, isolamento `CookieJar`, handshake TOFU SPKI + hostname verifier + mismatch abort, KDF floor pre-Argon2id, errori uniformi, flusso completo `64 MiB` + rewrap + auto-lock + spy, e prove negative `-Dzk.mutation=accept_weak_kdf` / `leak_vk_header` interamente isolate in `src/test/`. |
@@ -46,6 +48,6 @@ Tutte le funzionalità v1 esistenti nell'app Android restano intatte dietro `ZkV
 | Creato | `scripts/android-integration-seed.ts` | Script Node/TS con credenziali random per run, masking `::add-mask::` in CI, output fuori dal repo (`os.tmpdir()`). |
 | Creato | `scripts/android-integration-verify-kotlin-blob.ts` | Script Node/TS che verifica il rewrap Kotlin, rifiuto vecchia passphrase, login con nuova passphrase, sync e decifratura del blob `PCZK v1` caricato da Kotlin. |
 | Modificato | `scripts/run-v2-playwright-e2e.sh` | Log server raw fuori dal repo, `::add-mask::` sul `setupToken` in CI, artifact `e2e-server.log` redatto. |
-| Modificato | `.github/workflows/android-ci.yml` | Aggiunti step dedicati per le due mutazioni negative con verifica fallimento e nomi test rossi nel `GITHUB_STEP_SUMMARY`, check `aapt2`/`apkanalyzer` zero cleartext su APK release, masking segreti e audit anti-leak sui log, tabella benchmark Argon2id emulatore e summary/artifact `if: always()` in tutti i job. |
-| Modificato | `.github/workflows/android-release.yml` | Aggiunto audit `aapt2`/`apkanalyzer` zero cleartext sull'APK release firmato, upload audit artifact e summary `if: always()`. |
-| Modificato | `docs/zk-android-plan.md`, `docs/phase-4b-changes.md` | Documentazione confini sicurezza `setUnlockedDeviceRequired`, avvertenza emulatore vs device reale + comandi ADB/Gradle low-end per Argon2id e inventario aggiornato 4B/4B-bis. |
+| Modificato | `.github/workflows/android-ci.yml` | Aggiunti step dedicati per le due mutazioni negative con verifica fallimento e nomi test rossi nel `GITHUB_STEP_SUMMARY`, check `aapt2`/`apkanalyzer` zero cleartext su APK release, masking `::add-mask::` anticipato prima di `keytool` + audit anti-leak finale su `unit-test-execution.log`, tabella benchmark Argon2id emulatore e summary/artifact `if: always()` in tutti i job. |
+| Modificato | `.github/workflows/android-release.yml` | Aggiunto audit `aapt2`/`apkanalyzer` zero cleartext sull'APK release firmato, masking `::add-mask::` anticipato prima di `keytool`, audit anti-leak finale, upload audit artifact e summary `if: always()`. |
+| Modificato | `docs/zk-android-plan.md`, `docs/phase-4b-changes.md`, `.gitignore` | Documentazione confini sicurezza `setUnlockedDeviceRequired`, deviazione rimozione `ZkReferenceArgon2idCrossCheck`, avvertenza emulatore vs device reale + comandi ADB/Gradle low-end, inventario aggiornato e `ci-logs/` in `.gitignore`. |

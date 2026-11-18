@@ -50,7 +50,7 @@ class ZkCoreCryptoTest {
     }
 
     @Test
-    fun `RFC 9106 Section 5_3 Argon2id passes with production BouncyCastle Argon2BytesGenerator and matches test-only cross-check`() {
+    fun `RFC 9106 Section 5_3 Argon2id passes with production BouncyCastle Argon2BytesGenerator`() {
         val s = vectors.getJSONObject("rfc9106SelfCheck")
         val password = ZkCoreCrypto.fromHex(s.getString("passwordHex"))
         val salt = ZkCoreCrypto.fromHex(s.getString("saltHex"))
@@ -74,19 +74,6 @@ class ZkCoreCryptoTest {
             associatedData = ad
         )
         assertEquals(s.getString("expectedTagHex"), ZkCoreCrypto.toHex(prodTag))
-
-        // Secondary cross-check against TEST-ONLY reference implementation
-        val refTag = ZkReferenceArgon2idCrossCheck.derive(
-            password = password,
-            salt = salt,
-            m = m,
-            t = t,
-            p = p,
-            tagLen = tagLen,
-            secret = secret,
-            ad = ad
-        )
-        assertArrayEquals(prodTag, refTag)
     }
 
     @Test
@@ -328,6 +315,8 @@ class ZkCoreCryptoTest {
         val singleCt = File(repoRoot, blobs.getJSONObject("singleChunk").getString("fixtureFile")).readBytes()
         val multiCt = File(repoRoot, blobs.getJSONObject("multiChunk").getString("fixtureFile")).readBytes()
 
+        val expectedMultiPt = ByteArray(150000) { i -> ((i * 31 + 17) and 0xff).toByte() }
+
         fun assertFailsWithZeroOutput(blob: ByteArray, expectedCode: ZkErrorCode) {
             val out = ByteArrayOutputStream()
             try {
@@ -341,6 +330,28 @@ class ZkCoreCryptoTest {
             } catch (e: ZkCryptoException) {
                 assertEquals(expectedCode, e.code)
                 assertEquals(0, out.size())
+            }
+        }
+
+        fun assertFailsWithVerifiedChunkPrefix(
+            blob: ByteArray,
+            expectedCode: ZkErrorCode,
+            expectedVerifiedPrefix: ByteArray
+        ) {
+            val out = ByteArrayOutputStream()
+            try {
+                ZkCoreCrypto.decryptBlobStream(
+                    ByteArrayInputStream(blob),
+                    out,
+                    fkWrapKey = fkWrapKey,
+                    expectedBlobId = blobId
+                )
+                fail("Expected ZkCryptoException($expectedCode)")
+            } catch (e: ZkCryptoException) {
+                assertEquals(expectedCode, e.code)
+                val emitted = out.toByteArray()
+                assertEquals(expectedVerifiedPrefix.size, emitted.size)
+                assertArrayEquals(expectedVerifiedPrefix, emitted)
             }
         }
 
@@ -368,10 +379,14 @@ class ZkCoreCryptoTest {
         System.arraycopy(multiCt, 86 + 65552 * 2, reordered, 86 + 65552 * 2, multiCt.size - (86 + 65552 * 2))
         assertFailsWithZeroOutput(reordered, ZkErrorCode.AUTH_TAG_MISMATCH)
 
-        // Chunk duplication (duplicate chunk 0 in place of chunk 1)
+        // Chunk duplication (duplicate chunk 0 in place of chunk 1 -> chunk 0 verifies & emits 65536B, chunk 1 fails with 0B leaked)
         val duplicated = multiCt.clone()
         System.arraycopy(multiCt, 86, duplicated, 86 + 65552, 65552)
-        assertFailsWithZeroOutput(duplicated, ZkErrorCode.AUTH_TAG_MISMATCH)
+        assertFailsWithVerifiedChunkPrefix(
+            duplicated,
+            ZkErrorCode.AUTH_TAG_MISMATCH,
+            expectedMultiPt.copyOfRange(0, 65536)
+        )
 
         // Swapped blobId (valid blob A presented as blob B)
         val outSwapped = ByteArrayOutputStream()
@@ -425,6 +440,49 @@ class ZkCoreCryptoTest {
         }
 
         assertTrue(true)
+    }
+
+    @Test
+    fun `Chunk tampering after chunk 0 throws AUTH_TAG_MISMATCH with exact verified chunk prefix and zero corrupted bytes`() {
+        val subkeys = vectors.getJSONObject("vaultKeyAndSubkeys").getJSONObject("subkeys")
+        val fkWrapKey = ZkCoreCrypto.fromHex(subkeys.getString("fkWrapKeyHex"))
+        val blobId = vectors.getJSONObject("fileKeyWrap").getString("blobId")
+        val multiCt = File(repoRoot, vectors.getJSONObject("pczkBlobs").getJSONObject("multiChunk").getString("fixtureFile")).readBytes()
+        val expectedMultiPt = ByteArray(150000) { i -> ((i * 31 + 17) and 0xff).toByte() }
+        val chunkPtSize = 65536
+        val chunkCtSize = chunkPtSize + 16 // 65552
+
+        fun assertPrefixMatchOnFailure(corrupted: ByteArray, verifiedChunks: Int) {
+            val out = ByteArrayOutputStream()
+            try {
+                ZkCoreCrypto.decryptBlobStream(
+                    ByteArrayInputStream(corrupted),
+                    out,
+                    fkWrapKey = fkWrapKey,
+                    expectedBlobId = blobId
+                )
+                fail("Expected ZkCryptoException(AUTH_TAG_MISMATCH)")
+            } catch (e: ZkCryptoException) {
+                assertEquals(ZkErrorCode.AUTH_TAG_MISMATCH, e.code)
+                val emitted = out.toByteArray()
+                val expectedPrefix = expectedMultiPt.copyOfRange(0, verifiedChunks * chunkPtSize)
+                assertEquals(expectedPrefix.size, emitted.size)
+                assertArrayEquals(expectedPrefix, emitted)
+            }
+        }
+
+        // Case 1: Duplicate chunk 0 at chunk 1 -> chunk 0 (65536 B) authenticated, chunk 1 fails with 0 B emitted
+        val duplicatedChunk1 = multiCt.clone()
+        System.arraycopy(multiCt, 86, duplicatedChunk1, 86 + chunkCtSize, chunkCtSize)
+        assertPrefixMatchOnFailure(duplicatedChunk1, verifiedChunks = 1)
+
+        // Case 2: Bit-flip inside chunk 1 -> chunk 0 (65536 B) authenticated, chunk 1 fails with 0 B emitted
+        val bitFlipChunk1 = multiCt.clone().also { it[86 + chunkCtSize + 123] = (it[86 + chunkCtSize + 123].toInt() xor 0x01).toByte() }
+        assertPrefixMatchOnFailure(bitFlipChunk1, verifiedChunks = 1)
+
+        // Case 3: Bit-flip inside final chunk 2 -> chunks 0..1 (131072 B) authenticated, chunk 2 fails with 0 B emitted
+        val bitFlipChunk2 = multiCt.clone().also { it[86 + chunkCtSize * 2 + 42] = (it[86 + chunkCtSize * 2 + 42].toInt() xor 0x80).toByte() }
+        assertPrefixMatchOnFailure(bitFlipChunk2, verifiedChunks = 2)
     }
 
     @Test
