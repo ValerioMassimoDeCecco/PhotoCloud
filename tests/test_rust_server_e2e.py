@@ -7,7 +7,8 @@ import io
 
 PORT = 8089
 BASE_URL = f"http://127.0.0.1:{PORT}"
-BINARY = os.path.abspath("rust/app/target/release/server.exe")
+BINARY_NAME = "server.exe" if sys.platform == "win32" else "server"
+BINARY = os.path.abspath(os.path.join("rust", "app", "target", "release", BINARY_NAME))
 
 print(f"Starting Rust server on port {PORT} from {BINARY}...")
 env = os.environ.copy()
