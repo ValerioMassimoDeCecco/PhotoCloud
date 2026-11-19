@@ -7,6 +7,11 @@ pub mod vault;
 pub mod vault_manager;
 pub mod template_renderer;
 pub mod state;
+pub mod sharing;
+pub mod exif;
+pub mod document_engine;
+pub mod hash_index;
+pub mod thumb_cache;
 
 use std::net::SocketAddr;
 use axum::serve::ListenerExt;

@@ -187,7 +187,14 @@ pub fn format_file_size(bytes: u64) -> String {
     let i = (bytes as f64).log(k).floor() as usize;
     let i = i.min(sizes.len() - 1);
     let val = (bytes as f64) / k.powi(i as i32);
-    format!("{:.1} {}", val, sizes[i])
+    let decimals = if i == 0 {
+        0
+    } else if i >= 3 {
+        2
+    } else {
+        1
+    };
+    format!("{val:.decimals$} {}", sizes[i])
 }
 
 pub fn compute_cloud_storage_stats(

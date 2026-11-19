@@ -482,12 +482,3 @@ pub async fn post_similar_duplicates(
 }
 
 // GET /api/shares
-pub async fn get_shares(
-    State(_state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    if crate::state::extract_session_id(&headers).is_none() {
-        return access_denied();
-    }
-    json_response(StatusCode::OK, r#"{"shares":[]}"#)
-}
