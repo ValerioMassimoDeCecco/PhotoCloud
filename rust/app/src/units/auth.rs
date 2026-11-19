@@ -35,6 +35,15 @@ pub fn generate_uuid() -> String {
     )
 }
 
+fn login_error(wants_json: bool, status: StatusCode, message: &str) -> Response {
+    if wants_json {
+        let body = serde_json::json!({ "error": message }).to_string();
+        json_response(status, body)
+    } else {
+        html_response(status, template_renderer::render_login_template(Some(message)))
+    }
+}
+
 pub async fn post_login(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -46,46 +55,109 @@ pub async fn post_login(
         .unwrap_or_default();
     let wants_json = accept_header.contains("application/json");
 
-    let bytes = match axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await {
-        Ok(b) => b,
-        Err(_) => {
-            return json_response(StatusCode::BAD_REQUEST, r#"{"error":"Richiesta non valida"}"#);
-        }
-    };
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
 
     let mut username = String::new();
     let mut api_key = String::new();
 
-    if let Ok(json_data) = serde_json::from_slice::<LoginPayload>(&bytes) {
-        if let Some(u) = json_data.username {
-            username = u.trim().to_string();
+    if content_type.starts_with("multipart/form-data") {
+        let mut multipart = match Multipart::from_request(req, &state).await {
+            Ok(m) => m,
+            Err(_) => {
+                return login_error(
+                    wants_json,
+                    StatusCode::BAD_REQUEST,
+                    "File di autenticazione non valido.",
+                );
+            }
+        };
+
+        loop {
+            let field = match multipart.next_field().await {
+                Ok(Some(field)) => field,
+                Ok(None) => break,
+                Err(_) => {
+                    return login_error(
+                        wants_json,
+                        StatusCode::BAD_REQUEST,
+                        "File di autenticazione non valido.",
+                    );
+                }
+            };
+            let name = field.name().unwrap_or_default().to_string();
+            let is_file = field.file_name().is_some();
+            let value = match field.text().await {
+                Ok(v) => v,
+                Err(_) => {
+                    return login_error(
+                        wants_json,
+                        StatusCode::BAD_REQUEST,
+                        "File di autenticazione non valido.",
+                    );
+                }
+            };
+
+            if name == "auth_file" || is_file {
+                match serde_json::from_str::<LoginPayload>(&value) {
+                    Ok(auth_data) => {
+                        if let Some(u) = auth_data.username {
+                            username = u.trim().to_string();
+                        }
+                        if let Some(k) = auth_data.api_key {
+                            api_key = k;
+                        }
+                    }
+                    Err(_) => {
+                        return login_error(
+                            wants_json,
+                            StatusCode::BAD_REQUEST,
+                            "File di autenticazione non valido.",
+                        );
+                    }
+                }
+            } else {
+                match name.as_str() {
+                    "username" => username = value.trim().to_string(),
+                    "api_key" => api_key = value,
+                    _ => {}
+                }
+            }
         }
-        if let Some(k) = json_data.api_key {
-            api_key = k;
-        }
-    } else if let Ok(form_data) = serde_urlencoded::from_bytes::<LoginPayload>(&bytes) {
-        if let Some(u) = form_data.username {
-            username = u.trim().to_string();
-        }
-        if let Some(k) = form_data.api_key {
-            api_key = k;
+    } else {
+        let bytes = match axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await {
+            Ok(b) => b,
+            Err(_) => {
+                return json_response(StatusCode::BAD_REQUEST, r#"{"error":"Richiesta non valida"}"#);
+            }
+        };
+
+        if let Ok(json_data) = serde_json::from_slice::<LoginPayload>(&bytes) {
+            if let Some(u) = json_data.username {
+                username = u.trim().to_string();
+            }
+            if let Some(k) = json_data.api_key {
+                api_key = k;
+            }
+        } else if let Ok(form_data) = serde_urlencoded::from_bytes::<LoginPayload>(&bytes) {
+            if let Some(u) = form_data.username {
+                username = u.trim().to_string();
+            }
+            if let Some(k) = form_data.api_key {
+                api_key = k;
+            }
         }
     }
 
     if username.is_empty() || api_key.is_empty() {
-        if wants_json {
-            return json_response(
-                StatusCode::BAD_REQUEST,
-                r#"{"error":"File di autenticazione non trovato."}"#,
-            );
-        } else {
-            return html_response(
-                StatusCode::BAD_REQUEST,
-                template_renderer::render_login_template(Some(
-                    "File di autenticazione non trovato.",
-                )),
-            );
-        }
+        return login_error(
+            wants_json,
+            StatusCode::BAD_REQUEST,
+            "File di autenticazione non trovato.",
+        );
     }
 
     let stored_hash = state.find_user(&username);
