@@ -1,6 +1,6 @@
 package com.valerio.photocloud.zk
 
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -36,7 +36,7 @@ import java.util.UUID
 class AndroidLiveIntegrationTest {
 
     @Test
-    fun `live Node server integration - TS seed decrypt, rewrap, Kotlin upload for TS, and Network Spy`() = runTest {
+    fun `live Node server integration - TS seed decrypt, rewrap, Kotlin upload for TS, and Network Spy`() = runBlocking {
         val configPath = System.getenv("ZK_INTEGRATION_CONFIG")
             ?: System.getProperty("zk.integration.config")
         val requireLive = System.getenv("REQUIRE_ANDROID_INTEGRATION") == "1"
@@ -49,7 +49,7 @@ class AndroidLiveIntegrationTest {
                 "PENDING: live Android-Node integration richiede ZK_INTEGRATION_CONFIG (eseguito in CI job android-integration).",
                 false
             )
-            return@runTest
+            return@runBlocking
         }
 
         System.gc()
@@ -186,20 +186,112 @@ class AndroidLiveIntegrationTest {
             File(outPath).writeText(handoff.toString(2), StandardCharsets.UTF_8)
         }
 
-        // 8. Run Network Spy across all live exchanges
-        spy.assertZeroSecretLeaks(
-            listOf(
-                TrackedSecret("accountKey", bytes = accountKeyBytes),
-                TrackedSecret("passphrase", rawString = passphrase),
-                TrackedSecret("newPassphrase", rawString = newPassphrase),
-                TrackedSecret("vaultKey", bytes = vkCopyForSpy),
-                TrackedSecret("kotlinFileKey", bytes = kotlinFileKey)
+        // 7b. Live Phase 4C/4D roundtrip: streaming upload pipeline + encrypted 320 thumb + dedup hit +
+        // Range 206 decrypt + encrypted albums (ETag/If-Match) + Zero-Knowledge share link (create & revoke)
+        val liveSpoolDir = java.nio.file.Files.createTempDirectory("zk_live_4c_spool_").toFile()
+        val liveThumbCacheDir = java.nio.file.Files.createTempDirectory("zk_live_4d_thumbs_").toFile()
+        var shareKeyBytesForSpy: ByteArray? = null
+        try {
+            session.enableBackgroundBackupKey()
+            val live4cPlaintext = ByteArray(150_000) { ((it * 19 + 5) and 0xFF).toByte() }
+            val live4cThumbPlain = "LIVE_4C_THUMB_320_SECRET_BYTES".toByteArray(StandardCharsets.UTF_8)
+            val livePipeline = ZkBlobUploadPipeline(
+                apiClient = api,
+                spoolDir = liveSpoolDir,
+                resumableStore = InMemoryResumableUploadStore(),
+                fkProtector = BackgroundKeyStoreFkProtector(fakeKeyStore),
+                thumbnailGenerator = object : ZkThumbnailGenerator {
+                    override suspend fun generate(source: ZkPlaintextSource): ZkThumbPair {
+                        return ZkThumbPair(sm320 = ZkThumbData(live4cThumbPlain.copyOf(), 320, 240))
+                    }
+                },
+                chunkSizeLog2 = 16,
+                uploadChunkBytes = 65536
             )
+            val live4cSource = ByteArrayPlaintextSource(
+                sourceKey = "live://4c-item",
+                displayName = "live_4c_secret_photo.jpg",
+                mimeType = "image/jpeg",
+                data = live4cPlaintext
+            )
+            val firstUpload = livePipeline.upload(live4cSource, subkeys2)
+            assertTrue("Expected Uploaded from live 4C pipeline, got $firstUpload", firstUpload is ZkUploadOutcome.Uploaded)
+            val uploaded4c = firstUpload as ZkUploadOutcome.Uploaded
+            assertEquals(listOf("320"), uploaded4c.uploadedThumbs)
+
+            // Dedup hit on identical plaintext via live POST /api/v2/backup/check
+            val dupUpload = livePipeline.upload(live4cSource, subkeys2)
+            assertTrue("Expected SkippedDuplicate on second live upload, got $dupUpload", dupUpload is ZkUploadOutcome.SkippedDuplicate)
+
+            val repo = ZkVaultRepository(api, session, EncryptedThumbDiskCache(liveThumbCacheDir))
+            val decThumb = repo.getDecryptedThumbnail(uploaded4c.blobId, "320")
+            assertNotNull(decThumb)
+            assertArrayEquals(live4cThumbPlain, decThumb)
+
+            // Live Range 206 streaming decryption across chunk boundary
+            repo.openStreamingRangeReader(uploaded4c.blobId).use { reader ->
+                assertEquals(live4cPlaintext.size.toLong(), reader.getTotalPlaintextSize())
+                val rangeBuf = ByteArray(8192)
+                val readCount = reader.readAt(62_000L, rangeBuf, 0, rangeBuf.size)
+                assertEquals(8192, readCount)
+                assertArrayEquals(live4cPlaintext.copyOfRange(62_000, 70_192), rangeBuf)
+            }
+
+            // Live encrypted albums PUT/GET with ETag/If-Match
+            val initialAlbums = repo.loadAlbums()
+            val updatedAlbums = repo.saveAlbums(
+                ZkAlbumsDocument(
+                    albums = listOf(
+                        ZkAlbumRecord(
+                            id = UUID.randomUUID().toString().lowercase(),
+                            name = "Album Live 4D Segreto",
+                            itemIds = listOf(uploaded4c.item.id)
+                        )
+                    )
+                ),
+                initialAlbums.revision,
+                initialAlbums.etag
+            )
+            assertEquals(initialAlbums.revision + 1, updatedAlbums.revision)
+            val reloadedAlbums = repo.loadAlbums()
+            assertEquals("Album Live 4D Segreto", reloadedAlbums.document.albums.first().name)
+
+            // Live Zero-Knowledge Share Link create & revoke (shareKey strictly in #fragment)
+            val decItem = DecryptedZkItem(
+                serverItem = uploaded4c.item,
+                meta = ZkBlobPlaintextMeta(
+                    name = "live_4c_secret_photo.jpg",
+                    mime = "image/jpeg",
+                    size = live4cPlaintext.size.toLong(),
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+            val share = repo.createZeroKnowledgeShare(listOf(decItem), title = "Live Share 4D")
+            val shareKeyB64u = share.shareUrlWithFragment.substringAfter('#')
+            shareKeyBytesForSpy = ZkCoreCrypto.fromBase64Url(shareKeyB64u)
+            api.revokeShare(share.shareId)
+        } finally {
+            liveSpoolDir.deleteRecursively()
+            liveThumbCacheDir.deleteRecursively()
+        }
+
+        // 8. Run Network Spy across all live exchanges
+        val trackedSecrets = mutableListOf(
+            TrackedSecret("accountKey", bytes = accountKeyBytes),
+            TrackedSecret("passphrase", rawString = passphrase),
+            TrackedSecret("newPassphrase", rawString = newPassphrase),
+            TrackedSecret("vaultKey", bytes = vkCopyForSpy),
+            TrackedSecret("kotlinFileKey", bytes = kotlinFileKey),
+            TrackedSecret("live4cFilename", rawString = "live_4c_secret_photo.jpg"),
+            TrackedSecret("live4dAlbumName", rawString = "Album Live 4D Segreto")
         )
+        shareKeyBytesForSpy?.let { trackedSecrets.add(TrackedSecret("liveShareKey", bytes = it)) }
+        spy.assertZeroSecretLeaks(trackedSecrets)
 
         session.logout()
         vkCopyForSpy.zeroize()
         accountKeyBytes.zeroize()
         kotlinFileKey.zeroize()
+        shareKeyBytesForSpy?.zeroize()
     }
 }

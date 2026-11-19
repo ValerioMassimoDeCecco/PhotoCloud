@@ -499,6 +499,90 @@ jobs:
           fi
           echo "Verified RED exit code ($MUT_RC) for -Dzk.mutation=leak_vk_header"
 
+      - name: Run Negative Mutation 3 (skip_dedup_check — PASSES ONLY IF TEST FAILS RED)
+        run: |
+          set +e
+          (
+            cd android-app
+            gradle testDebugUnitTest \
+              --tests "com.valerio.photocloud.zk.ZkUploadAndBackupV2Test.*skip_dedup_check*" \
+              -Dzk.mutation=skip_dedup_check \
+              --info --no-daemon --stacktrace > ../mutation-skip-dedup-check.log 2>&1
+          )
+          MUT_RC=$?
+          set -e
+          cp android-app/app/build/test-results/testDebugUnitTest/TEST-*ZkUploadAndBackupV2Test*.xml mutation-skip-dedup-check-TEST.xml || true
+          echo "MUTATION_SKIP_DEDUP_CHECK_RC=$MUT_RC" >> mutation-summary.txt
+          if [ "$MUT_RC" -eq 0 ]; then
+            echo "::error::Mutation skip_dedup_check unexpectedly PASSED (expected test failure)!"
+            cat mutation-skip-dedup-check.log
+            exit 1
+          fi
+          echo "Verified RED exit code ($MUT_RC) for -Dzk.mutation=skip_dedup_check"
+
+      - name: Run Negative Mutation 4 (leak_filename_in_header — PASSES ONLY IF TEST FAILS RED)
+        run: |
+          set +e
+          (
+            cd android-app
+            gradle testDebugUnitTest \
+              --tests "com.valerio.photocloud.zk.ZkUploadAndBackupV2Test.*leak_filename_in_header*" \
+              -Dzk.mutation=leak_filename_in_header \
+              --info --no-daemon --stacktrace > ../mutation-leak-filename-header.log 2>&1
+          )
+          MUT_RC=$?
+          set -e
+          cp android-app/app/build/test-results/testDebugUnitTest/TEST-*ZkUploadAndBackupV2Test*.xml mutation-leak-filename-header-TEST.xml || true
+          echo "MUTATION_LEAK_FILENAME_HEADER_RC=$MUT_RC" >> mutation-summary.txt
+          if [ "$MUT_RC" -eq 0 ]; then
+            echo "::error::Mutation leak_filename_in_header unexpectedly PASSED (expected test failure)!"
+            cat mutation-leak-filename-header.log
+            exit 1
+          fi
+          echo "Verified RED exit code ($MUT_RC) for -Dzk.mutation=leak_filename_in_header"
+
+      - name: Run Negative Mutation 5 (persist_plaintext_fk — PASSES ONLY IF TEST FAILS RED)
+        run: |
+          set +e
+          (
+            cd android-app
+            gradle testDebugUnitTest \
+              --tests "com.valerio.photocloud.zk.ZkUploadAndBackupV2Test.*persist_plaintext_fk*" \
+              -Dzk.mutation=persist_plaintext_fk \
+              --info --no-daemon --stacktrace > ../mutation-persist-plaintext-fk.log 2>&1
+          )
+          MUT_RC=$?
+          set -e
+          cp android-app/app/build/test-results/testDebugUnitTest/TEST-*ZkUploadAndBackupV2Test*.xml mutation-persist-plaintext-fk-TEST.xml || true
+          echo "MUTATION_PERSIST_PLAINTEXT_FK_RC=$MUT_RC" >> mutation-summary.txt
+          if [ "$MUT_RC" -eq 0 ]; then
+            echo "::error::Mutation persist_plaintext_fk unexpectedly PASSED (expected test failure)!"
+            cat mutation-persist-plaintext-fk.log
+            exit 1
+          fi
+          echo "Verified RED exit code ($MUT_RC) for -Dzk.mutation=persist_plaintext_fk"
+
+      - name: Run Negative Mutation 6 (include_gps_by_default — PASSES ONLY IF TEST FAILS RED)
+        run: |
+          set +e
+          (
+            cd android-app
+            gradle testDebugUnitTest \
+              --tests "com.valerio.photocloud.zk.ZkUploadAndBackupV2Test.*include_gps_by_default*" \
+              -Dzk.mutation=include_gps_by_default \
+              --info --no-daemon --stacktrace > ../mutation-include-gps-default.log 2>&1
+          )
+          MUT_RC=$?
+          set -e
+          cp android-app/app/build/test-results/testDebugUnitTest/TEST-*ZkUploadAndBackupV2Test*.xml mutation-include-gps-default-TEST.xml || true
+          echo "MUTATION_INCLUDE_GPS_DEFAULT_RC=$MUT_RC" >> mutation-summary.txt
+          if [ "$MUT_RC" -eq 0 ]; then
+            echo "::error::Mutation include_gps_by_default unexpectedly PASSED (expected test failure)!"
+            cat mutation-include-gps-default.log
+            exit 1
+          fi
+          echo "Verified RED exit code ($MUT_RC) for -Dzk.mutation=include_gps_by_default"
+
       - name: Stop Server & Verify Zero Test Credentials Leaked in Job Logs
         if: always()
         run: |
@@ -539,9 +623,17 @@ jobs:
             "android-int-verify-ts.log",
             "mutation-accept-weak-kdf.log",
             "mutation-leak-vk-header.log",
+            "mutation-skip-dedup-check.log",
+            "mutation-leak-filename-header.log",
+            "mutation-persist-plaintext-fk.log",
+            "mutation-include-gps-default.log",
             "live-integration-TEST.xml",
             "mutation-accept-weak-kdf-TEST.xml",
             "mutation-leak-vk-header-TEST.xml",
+            "mutation-skip-dedup-check-TEST.xml",
+            "mutation-leak-filename-header-TEST.xml",
+            "mutation-persist-plaintext-fk-TEST.xml",
+            "mutation-include-gps-default-TEST.xml",
           ].filter((f) => fs.existsSync(f));
 
           const leaks = [];
@@ -577,10 +669,18 @@ jobs:
             android-int-verify-ts.log
             mutation-accept-weak-kdf.log
             mutation-leak-vk-header.log
+            mutation-skip-dedup-check.log
+            mutation-leak-filename-header.log
+            mutation-persist-plaintext-fk.log
+            mutation-include-gps-default.log
             mutation-summary.txt
             live-integration-TEST.xml
             mutation-accept-weak-kdf-TEST.xml
             mutation-leak-vk-header-TEST.xml
+            mutation-skip-dedup-check-TEST.xml
+            mutation-leak-filename-header-TEST.xml
+            mutation-persist-plaintext-fk-TEST.xml
+            mutation-include-gps-default-TEST.xml
           if-no-files-found: warn
 
       - name: Publish Live Integration & Mutation Red-Test Summary
@@ -609,8 +709,15 @@ jobs:
               return t, p, f, e, s, red
 
           lt, lp, lf, le, ls, lred = parse_xml("live-integration-TEST.xml")
-          m1t, m1p, m1f, m1e, m1s, m1red = parse_xml("mutation-accept-weak-kdf-TEST.xml")
-          m2t, m2p, m2f, m2e, m2s, m2red = parse_xml("mutation-leak-vk-header-TEST.xml")
+          mutations = [
+              ("accept_weak_kdf", "mutation-accept-weak-kdf-TEST.xml"),
+              ("leak_vk_header", "mutation-leak-vk-header-TEST.xml"),
+              ("skip_dedup_check", "mutation-skip-dedup-check-TEST.xml"),
+              ("leak_filename_in_header", "mutation-leak-filename-header-TEST.xml"),
+              ("persist_plaintext_fk", "mutation-persist-plaintext-fk-TEST.xml"),
+              ("include_gps_by_default", "mutation-include-gps-default-TEST.xml"),
+          ]
+          parsed_muts = [(name, *parse_xml(path)) for name, path in mutations]
 
           summary_path = os.environ["GITHUB_STEP_SUMMARY"]
           with open(summary_path, "a", encoding="utf-8") as summary:
@@ -618,19 +725,19 @@ jobs:
               summary.write("| Check | Executed | Passed | Failed | Errors | Skipped |\n")
               summary.write("|---|---|---|---|---|---|\n")
               summary.write(f"| `AndroidLiveIntegrationTest` | {lt} | {lp} | {lf} | {le} | {ls} |\n")
-              summary.write(f"| Mutation `accept_weak_kdf` (must fail RED) | {m1t} | {m1p} | {m1f} | {m1e} | {m1s} |\n")
-              summary.write(f"| Mutation `leak_vk_header` (must fail RED) | {m2t} | {m2p} | {m2f} | {m2e} | {m2s} |\n\n")
+              for name, mt, mp, mf, me, ms, _ in parsed_muts:
+                  summary.write(f"| Mutation `{name}` (must fail RED) | {mt} | {mp} | {mf} | {me} | {ms} |\n")
+              summary.write("\n")
               if lred:
                   summary.write("### Failed Live Integration Tests\n\n")
                   for item in lred:
                       summary.write(f"- `{item}`\n")
               summary.write("\n### Tests Turned RED by Negative Mutations (Expected)\n\n")
-              summary.write("**Mutation 1 (`-Dzk.mutation=accept_weak_kdf`):**\n")
-              for item in (m1red or ["NONE (unexpected!)"]):
-                  summary.write(f"- `{item}`\n")
-              summary.write("\n**Mutation 2 (`-Dzk.mutation=leak_vk_header`):**\n")
-              for item in (m2red or ["NONE (unexpected!)"]):
-                  summary.write(f"- `{item}`\n")
+              for idx, (name, _, _, _, _, _, mred) in enumerate(parsed_muts, start=1):
+                  summary.write(f"**Mutation {idx} (`-Dzk.mutation={name}`):**\n")
+                  for item in (mred or ["NONE (unexpected!)"]):
+                      summary.write(f"- `{item}`\n")
+                  summary.write("\n")
           PY
 
   android-emulator-tests:

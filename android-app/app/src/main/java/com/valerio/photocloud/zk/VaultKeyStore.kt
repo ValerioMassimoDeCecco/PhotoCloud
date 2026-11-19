@@ -61,6 +61,19 @@ interface VaultKeyStore {
     fun wrapForBackground(vaultKey: ByteArray): KeyProtectionStatus
     fun unwrapForBackground(): ByteArray
 
+    /**
+     * Wraps an arbitrary secret (e.g., per-blob 32-byte File Key for resumable upload state)
+     * under the hardware-backed background KeyStore key (`photocloud_vk_bg_v2` with
+     * `setUnlockedDeviceRequired(true)`). Returns `IV(12) || CT || Tag(16)`.
+     */
+    fun wrapSecretWithBackgroundKey(secret: ByteArray, aad: ByteArray = ByteArray(0)): ByteArray
+
+    /**
+     * Unwraps a secret previously wrapped by [wrapSecretWithBackgroundKey].
+     * Throws [DeviceLockedException] if the device is locked.
+     */
+    fun unwrapSecretWithBackgroundKey(envelope: ByteArray, aad: ByteArray = ByteArray(0)): ByteArray
+
     fun hasBiometricWrappedVk(): Boolean
     fun hasBackgroundWrappedVk(): Boolean
     fun getStatus(): KeyProtectionStatus
@@ -224,6 +237,40 @@ class InMemoryFakeVaultKeyStore(
             iv,
             ct,
             "vk-bg-v2".toByteArray(Charsets.UTF_8),
+            ZkErrorCode.WRONG_KEY_OR_PASSPHRASE
+        )
+    }
+
+    override fun wrapSecretWithBackgroundKey(secret: ByteArray, aad: ByteArray): ByteArray {
+        require(secret.isNotEmpty()) { "secret must not be empty." }
+        if (!deviceUnlocked) {
+            throw VaultKeyStore.DeviceLockedException("Device is locked; cannot wrap background secret.")
+        }
+        val key = ensureBgKey()
+        val iv = cryptoProvider.randomBytes(12)
+        val effectiveAad = if (aad.isNotEmpty()) aad else "bg-secret-v2".toByteArray(Charsets.UTF_8)
+        val ct = cryptoProvider.aes256GcmEncrypt(key, iv, secret, effectiveAad)
+        return iv + ct
+    }
+
+    override fun unwrapSecretWithBackgroundKey(envelope: ByteArray, aad: ByteArray): ByteArray {
+        if (!deviceUnlocked) {
+            throw VaultKeyStore.DeviceLockedException(
+                "Device is locked (setUnlockedDeviceRequired simulation)."
+            )
+        }
+        if (envelope.size < 28) {
+            throw ZkCryptoException(ZkErrorCode.TRUNCATED_BLOB, "Corrupted background wrapped secret.")
+        }
+        val key = ensureBgKey()
+        val iv = envelope.copyOfRange(0, 12)
+        val ct = envelope.copyOfRange(12, envelope.size)
+        val effectiveAad = if (aad.isNotEmpty()) aad else "bg-secret-v2".toByteArray(Charsets.UTF_8)
+        return cryptoProvider.aes256GcmDecrypt(
+            key,
+            iv,
+            ct,
+            effectiveAad,
             ZkErrorCode.WRONG_KEY_OR_PASSPHRASE
         )
     }
@@ -555,6 +602,46 @@ class AndroidHardwareVaultKeyStore(
             val outcome = getOrCreateKey(ALIAS_BACKGROUND_VK, requireBiometricAuth = false)
             val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, outcome.key, GCMParameterSpec(128, iv))
+            cipher.doFinal(ct)
+        } catch (t: Throwable) {
+            throw checkSecurityException(t)
+        }
+    }
+
+    override fun wrapSecretWithBackgroundKey(secret: ByteArray, aad: ByteArray): ByteArray {
+        require(secret.isNotEmpty()) { "secret must not be empty." }
+        return try {
+            val outcome = getOrCreateKey(ALIAS_BACKGROUND_VK, requireBiometricAuth = false)
+            val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, outcome.key)
+            if (aad.isNotEmpty()) {
+                cipher.updateAAD(aad)
+            }
+            val iv = cipher.iv
+            val ct = cipher.doFinal(secret)
+            val envelope = ByteArray(iv.size + ct.size)
+            System.arraycopy(iv, 0, envelope, 0, iv.size)
+            System.arraycopy(ct, 0, envelope, iv.size, ct.size)
+            ct.zeroize()
+            envelope
+        } catch (t: Throwable) {
+            throw checkSecurityException(t)
+        }
+    }
+
+    override fun unwrapSecretWithBackgroundKey(envelope: ByteArray, aad: ByteArray): ByteArray {
+        if (envelope.size < 28) {
+            throw ZkCryptoException(ZkErrorCode.TRUNCATED_BLOB, "Invalid background wrapped secret.")
+        }
+        return try {
+            val iv = envelope.copyOfRange(0, 12)
+            val ct = envelope.copyOfRange(12, envelope.size)
+            val outcome = getOrCreateKey(ALIAS_BACKGROUND_VK, requireBiometricAuth = false)
+            val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, outcome.key, GCMParameterSpec(128, iv))
+            if (aad.isNotEmpty()) {
+                cipher.updateAAD(aad)
+            }
             cipher.doFinal(ct)
         } catch (t: Throwable) {
             throw checkSecurityException(t)

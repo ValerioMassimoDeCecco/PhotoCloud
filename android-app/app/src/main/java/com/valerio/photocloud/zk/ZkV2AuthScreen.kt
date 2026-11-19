@@ -56,7 +56,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -77,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.crypto.Cipher
 
 @Immutable
@@ -192,6 +195,60 @@ fun ZkV2AuthCoordinator(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val session by sessionManager.sessionState.collectAsState()
+
+    val spoolDir = remember(context) { File(context.cacheDir, "zk_upload_spool") }
+    val resumableStore = remember(context) { PrefsResumableUploadStore(context) }
+    val externalOpenHelper = remember(context) { ZkExternalOpenHelper(context.cacheDir) }
+    val thumbCache = remember(context) { EncryptedThumbDiskCache(File(context.cacheDir, "zk_thumbs_enc")) }
+
+    val vaultRepository = remember(sessionManager, thumbCache, externalOpenHelper) {
+        ZkVaultRepository(
+            apiClient = sessionManager.apiClient,
+            sessionManager = sessionManager,
+            thumbCache = thumbCache,
+            externalOpenHelper = externalOpenHelper
+        )
+    }
+
+    val uploadPipeline = remember(sessionManager, spoolDir, resumableStore) {
+        ZkBlobUploadPipeline(
+            apiClient = sessionManager.apiClient,
+            spoolDir = spoolDir,
+            resumableStore = resumableStore,
+            fkProtector = BackgroundKeyStoreFkProtector(sessionManager.vaultKeyStore),
+            thumbnailGenerator = AndroidZkThumbnailGenerator(context)
+        )
+    }
+
+    val transferManager = remember(uploadPipeline, sessionManager, scope) {
+        val savedParallelism = ZkAutoBackupPrefs.load(context).parallelism
+        ZkTransferManager(
+            pipeline = uploadPipeline,
+            subkeysProvider = { sessionManager.getSubkeysOrNull() },
+            scope = scope,
+            initialParallelism = savedParallelism
+        )
+    }
+
+    // Startup cleanup of orphaned ciphertext spool files and previous external-share temp files
+    LaunchedEffect(Unit) {
+        val activeSpools = resumableStore.listAll().map { it.spoolFileName }.toSet()
+        ZkBlobUploadPipeline.cleanupOrphanSpoolFiles(spoolDir, activeSpools)
+        externalOpenHelper.wipeAllExternalShareFiles()
+    }
+
+    // Wipe RAM thumbnail cache and external share files immediately whenever vault locks
+    LaunchedEffect(session.isUnlocked) {
+        if (!session.isUnlocked) {
+            vaultRepository.onLockOrBackground()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            vaultRepository.onLockOrBackground()
+        }
+    }
 
     var keyFileJsonInMemory by remember { mutableStateOf<String?>(null) }
     var formState by remember(serverUrl) {
@@ -382,64 +439,148 @@ fun ZkV2AuthCoordinator(
         }
     }
 
-    ZkV2AuthScreen(
-        session = session,
-        form = effectiveForm,
-        onEvent = { event ->
-            when (event) {
-                is ZkV2UiEvent.SelectAuthTab -> {
-                    formState = formState.copy(useRecoveryCodeTab = event.useRecoveryCode, errorMessage = null)
+    val handleEvent: (ZkV2UiEvent) -> Unit = { event ->
+        when (event) {
+            is ZkV2UiEvent.SelectAuthTab -> {
+                formState = formState.copy(useRecoveryCodeTab = event.useRecoveryCode, errorMessage = null)
+            }
+            ZkV2UiEvent.PickKeyFile -> {
+                safKeyFileLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+            }
+            is ZkV2UiEvent.UpdateUsername -> {
+                formState = formState.copy(usernameInput = event.value, errorMessage = null)
+            }
+            is ZkV2UiEvent.UpdateRecoveryCode -> {
+                formState = formState.copy(recoveryCodeInput = event.value, errorMessage = null)
+            }
+            is ZkV2UiEvent.UpdatePassphrase -> {
+                formState = formState.copy(passphraseInput = event.value, errorMessage = null)
+            }
+            ZkV2UiEvent.SubmitLogin -> executeLogin()
+            ZkV2UiEvent.UnlockWithBiometrics -> executeBiometricUnlock()
+            ZkV2UiEvent.ConfirmTofuCertificate -> {
+                val challenge = formState.tofuChallenge
+                if (challenge != null) {
+                    sessionManager.apiClient.confirmTofuServer(challenge)
+                    formState = formState.copy(tofuChallenge = null)
+                    executeLogin()
                 }
-                ZkV2UiEvent.PickKeyFile -> {
-                    safKeyFileLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+            }
+            ZkV2UiEvent.DismissTofuDialogs -> {
+                formState = formState.copy(tofuChallenge = null, tofuMismatch = null)
+            }
+            ZkV2UiEvent.DismissKdfWarning -> sessionManager.dismissKdfWarning()
+            ZkV2UiEvent.EnrollBiometricUnlock -> {
+                if (session.keyProtectionStatus?.biometricEnrolled == true) {
+                    sessionManager.vaultKeyStore.clearBiometricWrappedVk()
+                    sessionManager.lock("Sblocco biometrico rimosso. Riaccesso richiesto.")
+                } else {
+                    executeBiometricEnroll()
                 }
-                is ZkV2UiEvent.UpdateUsername -> {
-                    formState = formState.copy(usernameInput = event.value, errorMessage = null)
-                }
-                is ZkV2UiEvent.UpdateRecoveryCode -> {
-                    formState = formState.copy(recoveryCodeInput = event.value, errorMessage = null)
-                }
-                is ZkV2UiEvent.UpdatePassphrase -> {
-                    formState = formState.copy(passphraseInput = event.value, errorMessage = null)
-                }
-                ZkV2UiEvent.SubmitLogin -> executeLogin()
-                ZkV2UiEvent.UnlockWithBiometrics -> executeBiometricUnlock()
-                ZkV2UiEvent.ConfirmTofuCertificate -> {
-                    val challenge = formState.tofuChallenge
-                    if (challenge != null) {
-                        sessionManager.apiClient.confirmTofuServer(challenge)
-                        formState = formState.copy(tofuChallenge = null)
-                        executeLogin()
-                    }
-                }
-                ZkV2UiEvent.DismissTofuDialogs -> {
-                    formState = formState.copy(tofuChallenge = null, tofuMismatch = null)
-                }
-                ZkV2UiEvent.DismissKdfWarning -> sessionManager.dismissKdfWarning()
-                ZkV2UiEvent.EnrollBiometricUnlock -> {
-                    if (session.keyProtectionStatus?.biometricEnrolled == true) {
-                        sessionManager.vaultKeyStore.clearBiometricWrappedVk()
-                        sessionManager.lock("Sblocco biometrico rimosso. Riaccesso richiesto.")
+            }
+            is ZkV2UiEvent.ToggleBackgroundBackupKey -> {
+                try {
+                    if (event.enabled) {
+                        sessionManager.enableBackgroundBackupKey()
                     } else {
-                        executeBiometricEnroll()
+                        sessionManager.disableBackgroundBackupKey()
+                        ZkAutoBackupWorker.cancelAllWork(context)
                     }
+                } catch (t: Throwable) {
+                    Toast.makeText(context, t.message ?: "Errore KeyStore background", Toast.LENGTH_SHORT).show()
                 }
-                is ZkV2UiEvent.ToggleBackgroundBackupKey -> {
-                    try {
-                        if (event.enabled) {
-                            sessionManager.enableBackgroundBackupKey()
-                        } else {
-                            sessionManager.disableBackgroundBackupKey()
+            }
+            is ZkV2UiEvent.SetAutoLockConfig -> {
+                sessionManager.setAutoLockConfig(event.timeoutMs, event.lockOnBackground)
+            }
+            ZkV2UiEvent.LockNow -> {
+                keyFileJsonInMemory = null
+                transferManager.pauseAll()
+                vaultRepository.onLockOrBackground()
+                formState = formState.copy(
+                    passphraseInput = "",
+                    recoveryCodeInput = "",
+                    showRewrapDialog = false,
+                    rewrapOldPassphrase = "",
+                    rewrapNewPassphrase = "",
+                    rewrapConfirmPassphrase = "",
+                    rewrapRecoveryCode = ""
+                )
+                sessionManager.lock("Vault bloccato manualmente.")
+            }
+            ZkV2UiEvent.OpenRewrapDialog -> {
+                formState = formState.copy(
+                    showRewrapDialog = true,
+                    rewrapError = null,
+                    rewrapOldPassphrase = "",
+                    rewrapNewPassphrase = "",
+                    rewrapConfirmPassphrase = "",
+                    rewrapRecoveryCode = ""
+                )
+            }
+            ZkV2UiEvent.DismissRewrapDialog -> {
+                formState = formState.copy(
+                    showRewrapDialog = false,
+                    rewrapOldPassphrase = "",
+                    rewrapNewPassphrase = "",
+                    rewrapConfirmPassphrase = "",
+                    rewrapRecoveryCode = "",
+                    rewrapError = null
+                )
+            }
+            is ZkV2UiEvent.UpdateRewrapFields -> {
+                formState = formState.copy(
+                    rewrapOldPassphrase = event.oldPass,
+                    rewrapNewPassphrase = event.newPass,
+                    rewrapConfirmPassphrase = event.confirmPass,
+                    rewrapRecoveryCode = event.recoveryCode,
+                    rewrapError = null
+                )
+            }
+            ZkV2UiEvent.SubmitRewrap -> {
+                val cur = formState
+                if (cur.rewrapNewPassphrase != cur.rewrapConfirmPassphrase) {
+                    formState = cur.copy(rewrapError = "Le due nuove passphrase non corrispondono.")
+                } else {
+                    formState = cur.copy(isBusy = true, rewrapError = null)
+                    scope.launch {
+                        try {
+                            sessionManager.changePassphrase(
+                                oldPassphrase = cur.rewrapOldPassphrase,
+                                newPassphrase = cur.rewrapNewPassphrase,
+                                recoveryCodeOrNull = cur.rewrapRecoveryCode.ifBlank { null }
+                            )
+                            formState = formState.copy(
+                                isBusy = false,
+                                showRewrapDialog = false,
+                                rewrapOldPassphrase = "",
+                                rewrapNewPassphrase = "",
+                                rewrapConfirmPassphrase = "",
+                                rewrapRecoveryCode = "",
+                                rewrapError = null
+                            )
+                            Toast.makeText(
+                                context,
+                                "Passphrase ruotata (/account/rewrap) senza ricifrare i file.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        } catch (t: Throwable) {
+                            formState = formState.copy(
+                                isBusy = false,
+                                rewrapError = t.message ?: "Errore rotazione passphrase."
+                            )
                         }
-                    } catch (t: Throwable) {
-                        Toast.makeText(context, t.message ?: "Errore KeyStore background", Toast.LENGTH_SHORT).show()
                     }
                 }
-                is ZkV2UiEvent.SetAutoLockConfig -> {
-                    sessionManager.setAutoLockConfig(event.timeoutMs, event.lockOnBackground)
-                }
-                ZkV2UiEvent.LockNow -> {
+            }
+            ZkV2UiEvent.Logout -> {
+                scope.launch {
                     keyFileJsonInMemory = null
+                    transferManager.cancelAll()
+                    ZkAutoBackupWorker.cancelAllWork(context)
+                    resumableStore.clearAll()
+                    ZkBlobUploadPipeline.cleanupOrphanSpoolFiles(spoolDir)
+                    vaultRepository.onLogout()
                     formState = formState.copy(
                         passphraseInput = "",
                         recoveryCodeInput = "",
@@ -449,92 +590,27 @@ fun ZkV2AuthCoordinator(
                         rewrapConfirmPassphrase = "",
                         rewrapRecoveryCode = ""
                     )
-                    sessionManager.lock("Vault bloccato manualmente.")
+                    sessionManager.logout()
                 }
-                ZkV2UiEvent.OpenRewrapDialog -> {
-                    formState = formState.copy(
-                        showRewrapDialog = true,
-                        rewrapError = null,
-                        rewrapOldPassphrase = "",
-                        rewrapNewPassphrase = "",
-                        rewrapConfirmPassphrase = "",
-                        rewrapRecoveryCode = ""
-                    )
-                }
-                ZkV2UiEvent.DismissRewrapDialog -> {
-                    formState = formState.copy(
-                        showRewrapDialog = false,
-                        rewrapOldPassphrase = "",
-                        rewrapNewPassphrase = "",
-                        rewrapConfirmPassphrase = "",
-                        rewrapRecoveryCode = "",
-                        rewrapError = null
-                    )
-                }
-                is ZkV2UiEvent.UpdateRewrapFields -> {
-                    formState = formState.copy(
-                        rewrapOldPassphrase = event.oldPass,
-                        rewrapNewPassphrase = event.newPass,
-                        rewrapConfirmPassphrase = event.confirmPass,
-                        rewrapRecoveryCode = event.recoveryCode,
-                        rewrapError = null
-                    )
-                }
-                ZkV2UiEvent.SubmitRewrap -> {
-                    val cur = formState
-                    if (cur.rewrapNewPassphrase != cur.rewrapConfirmPassphrase) {
-                        formState = cur.copy(rewrapError = "Le due nuove passphrase non corrispondono.")
-                    } else {
-                        formState = cur.copy(isBusy = true, rewrapError = null)
-                        scope.launch {
-                            try {
-                                sessionManager.changePassphrase(
-                                    oldPassphrase = cur.rewrapOldPassphrase,
-                                    newPassphrase = cur.rewrapNewPassphrase,
-                                    recoveryCodeOrNull = cur.rewrapRecoveryCode.ifBlank { null }
-                                )
-                                formState = formState.copy(
-                                    isBusy = false,
-                                    showRewrapDialog = false,
-                                    rewrapOldPassphrase = "",
-                                    rewrapNewPassphrase = "",
-                                    rewrapConfirmPassphrase = "",
-                                    rewrapRecoveryCode = "",
-                                    rewrapError = null
-                                )
-                                Toast.makeText(
-                                    context,
-                                    "Passphrase ruotata (/account/rewrap) senza ricifrare i file.",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            } catch (t: Throwable) {
-                                formState = formState.copy(
-                                    isBusy = false,
-                                    rewrapError = t.message ?: "Errore rotazione passphrase."
-                                )
-                            }
-                        }
-                    }
-                }
-                ZkV2UiEvent.Logout -> {
-                    scope.launch {
-                        keyFileJsonInMemory = null
-                        formState = formState.copy(
-                            passphraseInput = "",
-                            recoveryCodeInput = "",
-                            showRewrapDialog = false,
-                            rewrapOldPassphrase = "",
-                            rewrapNewPassphrase = "",
-                            rewrapConfirmPassphrase = "",
-                            rewrapRecoveryCode = ""
-                        )
-                        sessionManager.logout()
-                    }
-                }
-                ZkV2UiEvent.OpenServerConfig -> onOpenServerConfig()
-                ZkV2UiEvent.ExitV2BetaToLegacy -> onExitV2Mode()
             }
+            ZkV2UiEvent.OpenServerConfig -> onOpenServerConfig()
+            ZkV2UiEvent.ExitV2BetaToLegacy -> onExitV2Mode()
         }
+    }
+
+    ZkV2AuthScreen(
+        session = session,
+        form = effectiveForm,
+        unlockedContent = {
+            ZkV2VaultScreen(
+                session = session,
+                form = effectiveForm,
+                repository = vaultRepository,
+                transferManager = transferManager,
+                onAuthEvent = handleEvent
+            )
+        },
+        onEvent = handleEvent
     )
 }
 
@@ -542,82 +618,87 @@ fun ZkV2AuthCoordinator(
 fun ZkV2AuthScreen(
     session: ZkSessionSnapshot,
     form: ZkV2LoginFormUiState,
+    unlockedContent: (@Composable () -> Unit)? = null,
     onEvent: (ZkV2UiEvent) -> Unit
 ) {
     var showPassphrase by remember { mutableStateOf(false) }
 
-    Scaffold { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(innerPadding)
-                .imePadding()
-        ) {
-            Column(
+    if (session.isUnlocked && unlockedContent != null) {
+        unlockedContent()
+    } else {
+        Scaffold { innerPadding ->
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(innerPadding)
+                    .imePadding()
             ) {
-                // Server URL Bar
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    if (!session.isUnlocked) {
-                        TextButton(onClick = { onEvent(ZkV2UiEvent.ExitV2BetaToLegacy) }) {
-                            Text("Torna a v1 (Legacy)")
-                        }
-                    } else {
-                        Spacer(Modifier.width(8.dp))
-                    }
-
-                    Surface(
-                        onClick = { onEvent(ZkV2UiEvent.OpenServerConfig) },
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh
+                    // Server URL Bar
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                        if (!session.isUnlocked) {
+                            TextButton(onClick = { onEvent(ZkV2UiEvent.ExitV2BetaToLegacy) }) {
+                                Text("Torna a v1 (Legacy)")
+                            }
+                        } else {
+                            Spacer(Modifier.width(8.dp))
+                        }
+
+                        Surface(
+                            onClick = { onEvent(ZkV2UiEvent.OpenServerConfig) },
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Dns,
-                                contentDescription = "Server v2",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = form.serverUrl.removePrefix("https://").removePrefix("http://"),
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Dns,
+                                    contentDescription = "Server v2",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = form.serverUrl.removePrefix("https://").removePrefix("http://"),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
-                }
 
-                Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(16.dp))
 
-                if (!session.isUnlocked) {
-                    ZkV2LoginCard(
-                        session = session,
-                        form = form,
-                        showPassphrase = showPassphrase,
-                        onToggleShowPassphrase = { showPassphrase = !showPassphrase },
-                        onEvent = onEvent
-                    )
-                } else {
-                    ZkV2UnlockedSessionCard(
-                        session = session,
-                        form = form,
-                        onEvent = onEvent
-                    )
+                    if (!session.isUnlocked) {
+                        ZkV2LoginCard(
+                            session = session,
+                            form = form,
+                            showPassphrase = showPassphrase,
+                            onToggleShowPassphrase = { showPassphrase = !showPassphrase },
+                            onEvent = onEvent
+                        )
+                    } else {
+                        ZkV2UnlockedSessionCard(
+                            session = session,
+                            form = form,
+                            onEvent = onEvent
+                        )
+                    }
                 }
             }
         }

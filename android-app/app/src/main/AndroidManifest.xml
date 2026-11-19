@@ -88,6 +88,10 @@
         <receiver
             android:name=".AutoBackupActionReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".zk.ZkAutoBackupActionReceiver"
+            android:exported="false" />
     </application>
 
     <queries>
