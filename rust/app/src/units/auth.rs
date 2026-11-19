@@ -1,4 +1,5 @@
-use axum::extract::{Request, State};
+use axum::extract::multipart::Multipart;
+use axum::extract::{FromRequest, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use rand::Rng;
@@ -181,33 +182,76 @@ pub async fn post_register(
     State(state): State<AppState>,
     req: Request,
 ) -> Response {
-    let bytes = match axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await {
-        Ok(b) => b,
-        Err(_) => {
-            return (StatusCode::BAD_REQUEST, "Richiesta non valida").into_response();
-        }
-    };
+    let content_type = req
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
 
     let mut username = String::new();
     let mut custom_key = None;
     let mut key_type = "generate".to_string();
 
-    if let Ok(json_data) = serde_json::from_slice::<RegisterPayload>(&bytes) {
-        if let Some(u) = json_data.username {
-            username = u.trim().to_string();
+    if content_type.starts_with("multipart/form-data") {
+        let mut multipart = match Multipart::from_request(req, &state).await {
+            Ok(m) => m,
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "Richiesta non valida").into_response();
+            }
+        };
+
+        loop {
+            let field = match multipart.next_field().await {
+                Ok(Some(field)) => field,
+                Ok(None) => break,
+                Err(_) => {
+                    return (StatusCode::BAD_REQUEST, "Richiesta non valida").into_response();
+                }
+            };
+            let name = field.name().unwrap_or_default().to_string();
+            let value = match field.text().await {
+                Ok(v) => v,
+                Err(_) => {
+                    return (StatusCode::BAD_REQUEST, "Richiesta non valida").into_response();
+                }
+            };
+            match name.as_str() {
+                "username" => username = value.trim().to_string(),
+                "key_type" => key_type = value,
+                "custom_key" => custom_key = Some(value),
+                _ => {}
+            }
         }
-        if let Some(kt) = json_data.key_type {
-            key_type = kt;
+    } else {
+        let bytes = match axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await {
+            Ok(b) => b,
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "Richiesta non valida").into_response();
+            }
+        };
+
+        if let Ok(json_data) = serde_json::from_slice::<RegisterPayload>(&bytes) {
+            if let Some(u) = json_data.username {
+                username = u.trim().to_string();
+            }
+            if let Some(kt) = json_data.key_type {
+                key_type = kt;
+            }
+            custom_key = json_data.custom_key;
+        } else if let Ok(form_data) = serde_urlencoded::from_bytes::<RegisterPayload>(&bytes) {
+            if let Some(u) = form_data.username {
+                username = u.trim().to_string();
+            }
+            if let Some(kt) = form_data.key_type {
+                key_type = kt;
+            }
+            custom_key = form_data.custom_key;
         }
-        custom_key = json_data.custom_key;
-    } else if let Ok(form_data) = serde_urlencoded::from_bytes::<RegisterPayload>(&bytes) {
-        if let Some(u) = form_data.username {
-            username = u.trim().to_string();
-        }
-        if let Some(kt) = form_data.key_type {
-            key_type = kt;
-        }
-        custom_key = form_data.custom_key;
+    }
+
+    if key_type.is_empty() {
+        key_type = "generate".to_string();
     }
 
     if username.is_empty()
