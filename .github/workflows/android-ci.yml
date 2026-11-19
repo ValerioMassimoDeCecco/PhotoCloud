@@ -82,21 +82,10 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Run Android Unit Tests (testDebugUnitTest under -Xmx128m)
-        id: unit_tests
         working-directory: ./android-app
         run: |
           set -o pipefail
           gradle testDebugUnitTest --info --no-daemon --stacktrace 2>&1 | tee unit-test-execution.log
-
-      - name: Debug failed unit tests
-        if: failure() && steps.unit_tests.outcome == 'failure'
-        working-directory: ./android-app
-        run: |
-          set +e
-          ERRORS="$(grep -nE "^(e: |.*FAILED|.*tests completed|.*Execution failed for task|.*error: )" unit-test-execution.log | tail -80 | paste -sd ' | ' -)"
-          echo "::error::FULL_ERRORS: ${ERRORS}"
-          TAIL="$(tail -n 120 unit-test-execution.log | paste -sd ' | ' -)"
-          echo "::error::LOG_TAIL: ${TAIL}"
 
       - name: Verify Release Kotlin Compilation & Release APK Build
         working-directory: ./android-app
