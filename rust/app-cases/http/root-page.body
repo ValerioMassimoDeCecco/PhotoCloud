@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>PhotoCloud | Il tuo archivio sicuro</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#1976d2">
+    <script src="/register-pwa.js" defer></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles/base.css">
+    <link rel="stylesheet" href="/static/styles/liquid-glass.css">
+    
+<link rel="stylesheet" href="/static/styles/login.css">
+
+</head>
+<body>
+    <div class="container">
+        
+<div class="auth-container">
+    <div class="auth-card">
+        <div class="auth-header">
+            <h1>PhotoCloud</h1>
+            <p>Il tuo archivio foto/video sicuro</p>
+        </div>
+        
+        <div class="auth-tabs">
+            <button id="login-tab" class="auth-tab active">Accedi</button>
+            <button id="register-tab" class="auth-tab">Registrati</button>
+        </div>
+        
+        <!-- MODIFICATO: Form di Login con upload file -->
+        <div id="login-form" class="auth-form active">
+            <form id="actual-login-form" method="POST" action="/login" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label for="auth-file-input">File di Autenticazione</label>
+                    <div class="file-upload-container">
+                        <input type="file" id="auth-file-input" name="auth_file" required accept=".json, .txt">
+                        <label for="auth-file-input" class="file-upload-label">
+                            <span class="material-icons">upload_file</span>
+                            <span id="file-upload-text">Clicca per caricare il file</span>
+                        </label>
+                    </div>
+                    <p class="form-hint">Carica il file <code>photocloud_auth_...json</code> che hai scaricato durante la registrazione.</p>
+                </div>
+                <button type="submit" class="btn primary">Accedi con File</button>
+            </form>
+        </div>
+        
+        <!-- Form di Registrazione (invariato nella struttura, ma il backend ora forza il download) -->
+        <div id="register-form" class="auth-form">
+            <form id="actual-register-form" method="POST" action="/register">
+                <div class="form-group">
+                    <label for="register-username">Scegli username</label>
+                    <div class="input-container">
+                        <span class="material-icons">person_add</span>
+                        <input type="text" id="register-username" name="username" required autocomplete="username">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Tipo di Chiave</label>
+                    <div class="radio-group">
+                        <label>
+                            <input type="radio" name="key_type" value="generate" checked>
+                            Genera una chiave sicura per me
+                        </label>
+                        <label>
+                            <input type="radio" name="key_type" value="custom">
+                            Voglio usare una chiave personalizzata
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-group" id="custom-key-group" style="display: none;">
+                    <label for="register-custom-key">La tua chiave personalizzata</label>
+                    <div class="input-container">
+                        <span class="material-icons">password</span>
+                        <input type="password" id="register-custom-key" name="custom_key" autocomplete="new-password" minlength="8">
+                        <span class="toggle-password material-icons">visibility</span>
+                    </div>
+                    <p class="form-hint">Usa una frase o una password con almeno 8 caratteri per la massima sicurezza.</p>
+                </div>
+
+                <button type="submit" class="btn primary">Registrati e Scarica Chiave</button>
+            </form>
+        </div>
+    </div>
+    
+    <div class="auth-footer">
+        <p>I tuoi file sono protetti con crittografia autenticata AES-256-GCM</p>
+    </div>
+</div>
+
+    </div>
+
+    <div id="lightbox" class="lightbox" onclick="if (event.target === this) closeLightbox()" role="dialog" aria-modal="true" aria-label="Visualizzatore Media PhotoCloud">
+        <div class="lightbox-top-bar" onclick="event.stopPropagation()">
+            <div class="lightbox-meta-group">
+                <span id="lightbox-counter" class="lightbox-counter">1 / 1</span>
+                <span id="lightbox-media-badge" class="lightbox-media-badge" style="display: none;">Foto</span>
+                <button type="button" id="lightbox-zoom-badge" class="lightbox-zoom-badge" title="Reimposta zoom (1x)" style="display: none;">1.0x</button>
+            </div>
+            <div class="lightbox-top-actions">
+                <div class="lightbox-desktop-zoom-group">
+                    <button type="button" id="lightbox-zoom-out-btn" class="lightbox-icon-btn" title="Zoom indietro (-)" aria-label="Riduci zoom">
+                        <span class="material-icons">zoom_out</span>
+                    </button>
+                    <button type="button" id="lightbox-zoom-in-btn" class="lightbox-icon-btn" title="Zoom avanti (+)" aria-label="Aumenta zoom">
+                        <span class="material-icons">zoom_in</span>
+                    </button>
+                </div>
+                <button type="button" id="lightbox-favorite-btn" class="lightbox-icon-btn" title="Preferito (S)" aria-label="Aggiungi o rimuovi dai Preferiti" style="display: none;">
+                    <span class="material-icons">star_border</span>
+                </button>
+                <button type="button" id="lightbox-share-btn" class="lightbox-icon-btn" title="Crea link pubblico temporaneo" aria-label="Condividi con link pubblico" style="display: none;">
+                    <span class="material-icons">share</span>
+                </button>
+                <button type="button" id="lightbox-exif-btn" class="lightbox-icon-btn" title="Metadati EXIF (I)" aria-label="Mostra metadati EXIF: fotocamera, apertura, ISO, data originale" style="display: none;">
+                    <span class="material-icons">info</span>
+                </button>
+                <button type="button" id="lightbox-slideshow-btn" class="lightbox-icon-btn" title="Slideshow con transizioni (P)" aria-label="Avvia o ferma slideshow">
+                    <span class="material-icons">slideshow</span>
+                </button>
+                <button type="button" id="lightbox-edit-btn" class="lightbox-action-pill" onclick="openPhotoEditorFromLightbox(event)" title="Modifica Media">
+                    <span class="material-icons">tune</span>
+                    <span id="lightbox-edit-label">Modifica</span>
+                </button>
+                <a id="lightbox-download-btn" class="lightbox-action-pill" href="#" download title="Scarica">
+                    <span class="material-icons">download</span>
+                    <span class="pill-hide-sm">Scarica</span>
+                </a>
+                <button type="button" id="lightbox-fullscreen-btn" class="lightbox-icon-btn" title="Schermo intero (F)" aria-label="Schermo intero">
+                    <span class="material-icons">fullscreen</span>
+                </button>
+                <button type="button" class="close-btn" onclick="closeLightbox(true)" title="Chiudi (Esc)" aria-label="Chiudi Lightbox">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="lightbox-content" id="lightbox-stage" onclick="event.stopPropagation()">
+            <button type="button" class="nav-btn prev-btn" onclick="navigateMedia(-1, event)" title="Precedente (Freccia sinistra)" aria-label="Media precedente">
+                <span class="material-icons">chevron_left</span>
+            </button>
+
+            <div class="media-container" id="lightbox-media-container" onclick="if (event.target === this) closeLightbox()">
+                <img id="lightbox-img" alt="Anteprima" draggable="false" style="display: none;" onclick="event.stopPropagation()">
+                <video id="lightbox-video" playsinline preload="metadata" style="display: none;" onclick="event.stopPropagation()">
+                    <source src="" type="video/mp4">
+                    Il tuo browser non supporta i video.
+                </video>
+                <button type="button" id="lightbox-video-center-play" class="lightbox-video-center-play" style="display: none;" aria-label="Riproduci o metti in pausa">
+                    <span class="material-icons">play_arrow</span>
+                </button>
+            </div>
+
+            <button type="button" class="nav-btn next-btn" onclick="navigateMedia(1, event)" title="Successivo (Freccia destra)" aria-label="Media successivo">
+                <span class="material-icons">chevron_right</span>
+            </button>
+        </div>
+
+        <!-- CUSTOM RESPONSIVE VIDEO PLAYER HUD & FILMSTRIP -->
+        <div class="lightbox-bottom-hud" id="lightbox-bottom-hud" onclick="event.stopPropagation()">
+            <div id="lightbox-video-controls" class="lightbox-video-controls" style="display: none;">
+                <div class="lb-seek-row">
+                    <span id="lb-video-current" class="lb-timecode">00:00</span>
+                    <input type="range" id="lb-video-seek" class="lb-video-seek" min="0" max="1000" value="0" step="1" aria-label="Posizione video">
+                    <span id="lb-video-duration" class="lb-timecode">00:00</span>
+                </div>
+                <div class="lb-controls-row">
+                    <div class="lb-controls-group">
+                        <button type="button" id="lb-video-play-btn" class="lb-ctrl-btn primary" title="Play / Pausa (Spazio)" aria-label="Riproduci o Pausa">
+                            <span class="material-icons">play_arrow</span>
+                        </button>
+                        <button type="button" id="lb-video-rew-btn" class="lb-ctrl-btn" title="Indietro 10 secondi" aria-label="Indietro 10 secondi">
+                            <span class="material-icons">replay_10</span>
+                        </button>
+                        <button type="button" id="lb-video-fwd-btn" class="lb-ctrl-btn" title="Avanti 10 secondi" aria-label="Avanti 10 secondi">
+                            <span class="material-icons">forward_10</span>
+                        </button>
+                    </div>
+                    <div class="lb-controls-group">
+                        <button type="button" id="lb-video-speed-btn" class="lb-ctrl-chip" title="Velocità di riproduzione">1x</button>
+                        <button type="button" id="lb-video-mute-btn" class="lb-ctrl-btn" title="Audio / Muto (M)" aria-label="Attiva o disattiva audio">
+                            <span class="material-icons">volume_up</span>
+                        </button>
+                        <button type="button" id="lb-video-loop-btn" class="lb-ctrl-btn active" title="Ripeti video in loop" aria-label="Loop video">
+                            <span class="material-icons">repeat</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div id="lightbox-filmstrip" class="lightbox-filmstrip" aria-label="Anteprima rapida media"></div>
+        </div>
+    </div>
+
+    <!-- MATERIAL YOU RESPONSIVE PHOTO & VIDEO EDITOR STUDIO MODAL -->
+    <div id="photo-editor-modal" class="photo-editor-modal" style="display: none;" role="dialog" aria-modal="true" aria-label="Editor Media PhotoCloud">
+        <header class="photo-editor-header">
+            <div class="photo-editor-title-wrap">
+                <button type="button" class="btn icon" id="editor-close-btn" title="Annulla e chiudi editor" aria-label="Chiudi Editor">
+                    <span class="material-icons">close</span>
+                </button>
+                <div class="editor-title-meta">
+                    <h2 id="editor-filename-title">Studio Media</h2>
+                    <span id="editor-resolution-badge" class="editor-sub-badge">Canvas HD Crittografato</span>
+                </div>
+            </div>
+            <div class="photo-editor-header-actions">
+                <button type="button" class="btn icon" id="editor-undo-btn" title="Annulla (Ctrl+Z)" aria-label="Annulla modifica" disabled>
+                    <span class="material-icons">undo</span>
+                </button>
+                <button type="button" class="btn icon" id="editor-redo-btn" title="Ripristina (Ctrl+Y)" aria-label="Ripristina modifica" disabled>
+                    <span class="material-icons">redo</span>
+                </button>
+                <button type="button" class="btn outlined" id="editor-compare-btn" title="Tieni premuto per confrontare con l'originale">
+                    <span class="material-icons">compare</span>
+                    <span class="btn-text">Originale</span>
+                </button>
+                <button type="button" class="btn outlined" id="editor-reset-btn" title="Ripristina tutte le modifiche">
+                    <span class="material-icons">restart_alt</span>
+                    <span class="btn-text">Reset</span>
+                </button>
+                <button type="button" class="btn outlined" id="editor-save-overwrite-btn" title="Sovrascrivi il file originale">
+                    <span class="material-icons">save</span>
+                    <span class="btn-text">Sovrascrivi</span>
+                </button>
+                <button type="button" class="btn primary" id="editor-save-copy-btn" title="Salva come nuova copia nell'archivio">
+                    <span class="material-icons">library_add</span>
+                    <span class="btn-text">Salva Copia</span>
+                </button>
+            </div>
+        </header>
+
+        <div class="photo-editor-workspace">
+            <div class="photo-editor-stage" id="photo-editor-stage">
+                <div class="photo-editor-canvas-wrapper" id="photo-editor-canvas-wrapper">
+                    <canvas id="photo-editor-canvas" data-testid="photo-editor-canvas"></canvas>
+                    <video id="photo-editor-video" data-testid="photo-editor-video" playsinline preload="metadata" style="display: none;"></video>
+                    <div id="photo-editor-crop-overlay" class="photo-editor-crop-overlay active" data-testid="photo-editor-crop-overlay" aria-label="Griglia di ritaglio manuale trascinabile">
+                        <div id="photo-editor-crop-box" class="photo-editor-crop-box" data-crop-handle="move" style="left: 0%; top: 0%; width: 100%; height: 100%;">
+                            <!-- Rule of Thirds 3x3 Grid Lines -->
+                            <div class="crop-grid-line crop-grid-h1"></div>
+                            <div class="crop-grid-line crop-grid-h2"></div>
+                            <div class="crop-grid-line crop-grid-v1"></div>
+                            <div class="crop-grid-line crop-grid-v2"></div>
+
+                            <!-- Live Cropped Pixel Dimensions Readout -->
+                            <div id="crop-box-dimensions-label" class="crop-box-dimensions-label">Ritaglio Manuale</div>
+
+                            <!-- 8 Interactive Drag Handles (4 Corners + 4 Edges) -->
+                            <div class="crop-handle crop-handle-nw" data-crop-handle="nw" title="Trascina angolo alto-sinistra"></div>
+                            <div class="crop-handle crop-handle-n" data-crop-handle="n" title="Trascina bordo superiore"></div>
+                            <div class="crop-handle crop-handle-ne" data-crop-handle="ne" title="Trascina angolo alto-destra"></div>
+                            <div class="crop-handle crop-handle-e" data-crop-handle="e" title="Trascina bordo destro"></div>
+                            <div class="crop-handle crop-handle-se" data-crop-handle="se" title="Trascina angolo basso-destra"></div>
+                            <div class="crop-handle crop-handle-s" data-crop-handle="s" title="Trascina bordo inferiore"></div>
+                            <div class="crop-handle crop-handle-sw" data-crop-handle="sw" title="Trascina angolo basso-sinistra"></div>
+                            <div class="crop-handle crop-handle-w" data-crop-handle="w" title="Trascina bordo sinistro"></div>
+                        </div>
+                    </div>
+                </div>
+                <div id="editor-export-progress-banner" class="editor-export-progress-banner" style="display: none;">
+                    <span class="doc-spinner" style="width:18px;height:18px;border-width:2px;"></span>
+                    <span id="editor-export-progress-text">Elaborazione media in corso...</span>
+                </div>
+            </div>
+
+            <section class="photo-editor-controls" id="photo-editor-controls">
+                <!-- Category Tabs (Adaptive Thumb-Zone Bar on Mobile & Inspector Tabs on Desktop) -->
+                <div class="editor-panel-tabs" role="tablist" aria-label="Strumenti di modifica">
+                    <button type="button" class="editor-panel-tab active" data-editor-tab="adjust" role="tab" aria-selected="true">
+                        <span class="material-icons">tune</span>
+                        <span>Regola</span>
+                    </button>
+                    <button type="button" class="editor-panel-tab" data-editor-tab="filters" role="tab" aria-selected="false">
+                        <span class="material-icons">auto_fix_high</span>
+                        <span>Filtri</span>
+                    </button>
+                    <button type="button" class="editor-panel-tab" data-editor-tab="crop" role="tab" aria-selected="false">
+                        <span class="material-icons">crop_rotate</span>
+                        <span>Ritaglia</span>
+                    </button>
+                    <button type="button" class="editor-panel-tab" id="editor-tab-video-btn" data-editor-tab="video" role="tab" aria-selected="false" style="display: none;">
+                        <span class="material-icons">content_cut</span>
+                        <span>Video</span>
+                    </button>
+                </div>
+
+                <!-- Tab 1: Fine Adjustments -->
+                <div class="editor-tab-pane active" data-editor-pane="adjust">
+                    <div class="editor-sliders-grid">
+                        <label class="editor-slider-item">
+                            <div class="editor-slider-label">
+                                <span><span class="material-icons">light_mode</span> Luminosità</span>
+                                <strong id="val-brightness">0</strong>
+                            </div>
+                            <input type="range" id="slider-brightness" min="-100" max="100" value="0" aria-label="Luminosità">
+                        </label>
+
+                        <label class="editor-slider-item">
+                            <div class="editor-slider-label">
+                                <span><span class="material-icons">contrast</span> Contrasto</span>
+                                <strong id="val-contrast">0</strong>
+                            </div>
+                            <input type="range" id="slider-contrast" min="-100" max="100" value="0" aria-label="Contrasto">
+                        </label>
+
+                        <label class="editor-slider-item">
+                            <div class="editor-slider-label">
+                                <span><span class="material-icons">palette</span> Saturazione</span>
+                                <strong id="val-saturation">0</strong>
+                            </div>
+                            <input type="range" id="slider-saturation" min="-100" max="100" value="0" aria-label="Saturazione">
+                        </label>
+
+                        <label class="editor-slider-item">
+                            <div class="editor-slider-label">
+                                <span><span class="material-icons">thermostat</span> Calore</span>
+                                <strong id="val-warmth">0</strong>
+                            </div>
+                            <input type="range" id="slider-warmth" min="-100" max="100" value="0" aria-label="Calore">
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Tab 2: Filter Presets -->
+                <div class="editor-tab-pane" data-editor-pane="filters">
+                    <div class="editor-presets-row" role="group" aria-label="Filtri predefiniti">
+                        <button type="button" class="editor-preset-chip active" data-preset="original">Originale</button>
+                        <button type="button" class="editor-preset-chip" data-preset="vivid">Vivido</button>
+                        <button type="button" class="editor-preset-chip" data-preset="bw">Bianco &amp; Nero</button>
+                        <button type="button" class="editor-preset-chip" data-preset="sepia">Seppia</button>
+                        <button type="button" class="editor-preset-chip" data-preset="cinema">Cinema</button>
+                        <button type="button" class="editor-preset-chip" data-preset="cool">Freddo</button>
+                        <button type="button" class="editor-preset-chip" data-preset="vintage">Vintage</button>
+                    </div>
+                </div>
+
+                <!-- Tab 3: Crop, Rotate & Flip -->
+                <div class="editor-tab-pane" data-editor-pane="crop">
+                    <div class="editor-transform-toolbar">
+                        <div class="editor-tool-group">
+                            <button type="button" class="editor-tool-btn active" id="editor-toggle-crop-grid-btn" title="Mostra/Nascondi griglia di ritaglio trascinabile">
+                                <span class="material-icons">grid_on</span>
+                                <span>Griglia Ritaglio</span>
+                            </button>
+                            <button type="button" class="editor-tool-btn" id="editor-rotate-left-btn" title="Ruota di -90°">
+                                <span class="material-icons">rotate_left</span>
+                                <span>-90°</span>
+                            </button>
+                            <button type="button" class="editor-tool-btn" id="editor-rotate-right-btn" title="Ruota di +90°">
+                                <span class="material-icons">rotate_right</span>
+                                <span>+90°</span>
+                            </button>
+                            <button type="button" class="editor-tool-btn" id="editor-flip-h-btn" title="Specchia Orizzontalmente">
+                                <span class="material-icons">flip</span>
+                                <span>Specchia Oriz.</span>
+                            </button>
+                            <button type="button" class="editor-tool-btn" id="editor-flip-v-btn" title="Specchia Verticalmente">
+                                <span class="material-icons" style="transform: rotate(90deg);">flip</span>
+                                <span>Specchia Vert.</span>
+                            </button>
+                        </div>
+
+                        <div class="editor-crop-group" role="group" aria-label="Proporzioni ritaglio">
+                            <span class="crop-label"><span class="material-icons">crop</span> Ritaglio:</span>
+                            <button type="button" class="editor-crop-chip active" data-crop="free">Libero</button>
+                            <button type="button" class="editor-crop-chip" data-crop="1:1">1:1</button>
+                            <button type="button" class="editor-crop-chip" data-crop="4:5">4:5</button>
+                            <button type="button" class="editor-crop-chip" data-crop="4:3">4:3</button>
+                            <button type="button" class="editor-crop-chip" data-crop="16:9">16:9</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 4: Video Trim, Playback & Audio Controls -->
+                <div class="editor-tab-pane" data-editor-pane="video" id="editor-video-pane">
+                    <div class="editor-video-transport-row">
+                        <button type="button" class="editor-tool-btn" id="editor-video-play-btn" title="Riproduci o metti in pausa l'anteprima clip">
+                            <span class="material-icons">play_arrow</span>
+                            <span>Anteprima</span>
+                        </button>
+                        <button type="button" class="editor-tool-btn" id="editor-video-mute-btn" title="Includi o rimuovi audio dal video esportato">
+                            <span class="material-icons">volume_up</span>
+                            <span>Audio Attivo</span>
+                        </button>
+                        <button type="button" class="editor-tool-btn" id="editor-video-speed-btn" title="Velocità video esportato">
+                            <span class="material-icons">speed</span>
+                            <span>1x</span>
+                        </button>
+                        <span id="editor-video-trim-summary" class="editor-video-trim-summary">Clip: 00:00.0 → 00:00.0 (0.0s)</span>
+                    </div>
+
+                    <div class="editor-trim-visual-wrap">
+                        <div class="editor-trim-track-bg">
+                            <div id="editor-trim-active-range" class="editor-trim-active-range" style="left: 0%; width: 100%;"></div>
+                        </div>
+                    </div>
+
+                    <div class="editor-sliders-grid">
+                        <label class="editor-slider-item">
+                            <div class="editor-slider-label">
+                                <span><span class="material-icons">first_page</span> Inizio Taglio</span>
+                                <strong id="val-trim-start">00:00.0</strong>
+                            </div>
+                            <input type="range" id="slider-trim-start" min="0" max="1000" value="0" step="1" aria-label="Inizio taglio video">
+                        </label>
+                        <label class="editor-slider-item">
+                            <div class="editor-slider-label">
+                                <span><span class="material-icons">last_page</span> Fine Taglio</span>
+                                <strong id="val-trim-end">00:00.0</strong>
+                            </div>
+                            <input type="range" id="slider-trim-end" min="0" max="1000" value="1000" step="1" aria-label="Fine taglio video">
+                        </label>
+                    </div>
+
+                    <div class="editor-video-mark-row">
+                        <button type="button" class="editor-tool-btn" id="editor-mark-in-btn">
+                            <span class="material-icons">start</span>
+                            <span>Imposta Inizio qui</span>
+                        </button>
+                        <button type="button" class="editor-tool-btn" id="editor-mark-out-btn">
+                            <span class="material-icons">keyboard_tab</span>
+                            <span>Imposta Fine qui</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- MATERIAL YOU INTEGRATED DOCUMENT & OFFICE VIEWER MODAL -->
+    <div id="document-viewer-modal" class="document-viewer-modal" style="display: none;" role="dialog" aria-modal="true" aria-label="Visualizzatore Documenti PhotoCloud">
+        <header class="document-viewer-header">
+            <div class="photo-editor-title-wrap">
+                <button type="button" class="btn icon" id="doc-viewer-close-btn" title="Chiudi documento" aria-label="Chiudi Visualizzatore">
+                    <span class="material-icons">close</span>
+                </button>
+                <div>
+                    <h2 id="doc-viewer-title">Documento</h2>
+                    <span id="doc-viewer-subtitle" class="editor-sub-badge">Lettore Integrato PhotoCloud</span>
+                </div>
+            </div>
+            <div class="photo-editor-header-actions">
+                <button type="button" class="btn outlined" id="doc-viewer-open-external-btn" title="Apri con un'altra applicazione sul dispositivo">
+                    <span class="material-icons">open_in_new</span>
+                    <span class="btn-text">Apri con...</span>
+                </button>
+                <button type="button" class="btn primary" id="doc-viewer-download-btn" title="Scarica copia sul dispositivo">
+                    <span class="material-icons">download</span>
+                    <span class="btn-text">Scarica</span>
+                </button>
+            </div>
+        </header>
+
+        <div id="document-viewer-toolbar" class="document-viewer-toolbar"></div>
+        <main id="document-viewer-stage" class="document-viewer-stage"></main>
+    </div>
+
+    <!-- DUAL-THEME SETTINGS & LIQUID GLASS CUSTOMIZATION STUDIO MODAL -->
+    <div id="lg-settings-modal-backdrop" class="lg-settings-modal-backdrop" role="dialog" aria-modal="true" aria-label="Impostazioni Sistema di Temi e Liquid Glass">
+        <div class="lg-settings-dialog">
+            <header class="lg-settings-header">
+                <div>
+                    <h2>Sistema di Design &amp; Impostazioni Tema</h2>
+                    <p style="margin:2px 0 0;font-size:12px;">Seleziona tra il Tema Originale e il sistema ottico Liquid Glass</p>
+                </div>
+                <button type="button" class="btn icon" id="lg-settings-close-btn" aria-label="Chiudi Impostazioni Tema" title="Chiudi">
+                    <span class="material-icons">close</span>
+                </button>
+            </header>
+
+            <div class="lg-settings-body">
+                <!-- 0. Cloud Total Used Storage Analytics Card -->
+                <div class="lg-section-block cloud-storage-settings-card" id="settings-cloud-storage-card">
+                    <div class="cloud-storage-settings-header">
+                        <h3><span class="material-icons">cloud_queue</span> Memoria Usata Totale del Cloud</h3>
+                        <span id="settings-storage-total-badge" class="cloud-storage-total-pill">Totale Cloud: 0 B</span>
+                    </div>
+                    <div class="cloud-storage-hero-row">
+                        <div>
+                            <span class="cloud-storage-hero-label">Spazio Attivo Utilizzato</span>
+                            <div class="cloud-storage-hero-value" id="settings-storage-active-val">0 B</div>
+                            <span class="cloud-storage-hero-sub" id="settings-storage-active-sub">0 elementi attivi • 0 B nel cestino</span>
+                        </div>
+                    </div>
+                    <div class="cloud-storage-segmented-bar" role="img" aria-label="Ripartizione percentuale memoria Cloud tra Foto/Video, File Cloud e Cestino">
+                        <div id="settings-storage-bar-media" class="storage-segment segment-media" style="width: 0%;" title="Foto e Video"></div>
+                        <div id="settings-storage-bar-files" class="storage-segment segment-files" style="width: 0%;" title="File Cloud"></div>
+                        <div id="settings-storage-bar-trash" class="storage-segment segment-trash" style="width: 0%;" title="Cestino"></div>
+                    </div>
+                    <div class="cloud-storage-categories-grid">
+                        <div class="cloud-storage-cat-card">
+                            <div class="cat-card-top">
+                                <span class="storage-dot dot-media"></span>
+                                <span class="cat-card-name">Foto e Video</span>
+                                <strong id="settings-storage-media-pct" class="cat-card-pct">0%</strong>
+                            </div>
+                            <div id="settings-storage-media-bytes" class="cat-card-bytes">0 B</div>
+                            <div id="settings-storage-media-count" class="cat-card-count">0 elementi</div>
+                        </div>
+                        <div class="cloud-storage-cat-card">
+                            <div class="cat-card-top">
+                                <span class="storage-dot dot-files"></span>
+                                <span class="cat-card-name">File Cloud</span>
+                                <strong id="settings-storage-files-pct" class="cat-card-pct">0%</strong>
+                            </div>
+                            <div id="settings-storage-files-bytes" class="cat-card-bytes">0 B</div>
+                            <div id="settings-storage-files-count" class="cat-card-count">0 file</div>
+                        </div>
+                        <div class="cloud-storage-cat-card">
+                            <div class="cat-card-top">
+                                <span class="storage-dot dot-trash"></span>
+                                <span class="cat-card-name">Cestino</span>
+                                <strong id="settings-storage-trash-pct" class="cat-card-pct">0%</strong>
+                            </div>
+                            <div id="settings-storage-trash-bytes" class="cat-card-bytes">0 B</div>
+                            <div id="settings-storage-trash-count" class="cat-card-count">0 eliminati</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 0B. Parallel Transfers & Anti-Crash Bulk Upload Engine Configuration -->
+                <div class="lg-section-block" id="settings-parallel-transfers-card">
+                    <div class="cloud-storage-settings-header">
+                        <h3><span class="material-icons">swap_vert</span> Trasferimenti &amp; Caricamenti Paralleli</h3>
+                        <span id="settings-parallel-active-badge" class="cloud-storage-total-pill">3x simultanei</span>
+                    </div>
+                    <p style="margin:0 0 10px;font-size:12px;opacity:0.82;">
+                        Configura quanti trasferimenti eseguire contemporaneamente (1–16). I file vengono suddivisi in micro-blocchi bilanciati per caricare anche oltre 250+ foto senza mai saturare la memoria.
+                    </p>
+                    <div id="settings-parallel-presets-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+                        <button type="button" class="btn outlined parallel-preset-btn" data-parallel-preset="1" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">1 • Sequenziale</button>
+                        <button type="button" class="btn outlined parallel-preset-btn" data-parallel-preset="2" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">2 • Leggero</button>
+                        <button type="button" class="btn outlined parallel-preset-btn active" data-parallel-preset="3" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">3 • Bilanciato</button>
+                        <button type="button" class="btn outlined parallel-preset-btn" data-parallel-preset="4" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">4 • Veloce</button>
+                        <button type="button" class="btn outlined parallel-preset-btn" data-parallel-preset="6" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">6 • Turbo</button>
+                        <button type="button" class="btn outlined parallel-preset-btn" data-parallel-preset="8" style="width:auto;margin:0;height:34px;padding:0 12px;font-size:12px;">8 • Massimo</button>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <label for="settings-parallel-custom-input" style="font-size:12px;font-weight:600;">Numero manuale (1–16):</label>
+                        <button type="button" class="btn outlined" id="settings-parallel-dec-btn" aria-label="Riduci trasferimenti paralleli" style="width:36px;height:36px;padding:0;margin:0;min-width:36px;">−</button>
+                        <input type="number" id="settings-parallel-custom-input" min="1" max="16" step="1" value="3" aria-label="Numero trasferimenti paralleli personalizzato" style="width:76px;height:36px;text-align:center;font-weight:700;padding:0 8px;margin:0;" />
+                        <button type="button" class="btn outlined" id="settings-parallel-inc-btn" aria-label="Aumenta trasferimenti paralleli" style="width:36px;height:36px;padding:0;margin:0;min-width:36px;">+</button>
+                        <button type="button" class="btn primary" id="settings-parallel-apply-btn" style="width:auto;height:36px;padding:0 14px;margin:0;font-size:12px;">Applica</button>
+                    </div>
+
+                    <hr style="border:none;border-top:1px solid rgba(148,163,184,0.22);margin:14px 0;" />
+
+                    <div class="cloud-storage-settings-header" style="margin-bottom:6px;">
+                        <h4 style="margin:0;font-size:13px;display:flex;align-items:center;gap:6px;">
+                            <span class="material-icons" style="font-size:17px;">inventory_2</span>
+                            Scelta all'Inizio del Trasferimento (Diretto in Memoria vs Archivio .zip)
+                        </h4>
+                    </div>
+                    <p style="margin:0 0 10px;font-size:12px;opacity:0.82;">
+                        Scegli se decidere all'inizio di ogni trasferimento oppure trasferire sempre i media direttamente nella memoria o creare un archivio .zip:
+                    </p>
+                    <div class="lg-controls-grid" style="margin-bottom:12px;">
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Modalità Caricamento (Upload)</span></span>
+                            <select id="settings-upload-packaging-select" class="btn-like-select" aria-label="Modalità caricamento upload" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="ASK_ALWAYS">Chiedi a ogni trasferimento</option>
+                                <option value="DIRECT_FILES">Direttamente in memoria (File singoli)</option>
+                                <option value="ZIP_ARCHIVE">Crea Archivio (.zip)</option>
+                            </select>
+                        </label>
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Modalità Scaricamento (Download)</span></span>
+                            <select id="settings-download-packaging-select" class="btn-like-select" aria-label="Modalità scaricamento download" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="ASK_ALWAYS">Chiedi a ogni trasferimento</option>
+                                <option value="DIRECT_FILES">Direttamente in memoria (File singoli)</option>
+                                <option value="ZIP_ARCHIVE">Crea Archivio (.zip)</option>
+                            </select>
+                        </label>
+                    </div>
+
+                    <hr style="border:none;border-top:1px solid rgba(148,163,184,0.22);margin:14px 0;" />
+
+                    <div class="cloud-storage-settings-header" style="margin-bottom:6px;">
+                        <h4 style="margin:0;font-size:13px;display:flex;align-items:center;gap:6px;">
+                            <span class="material-icons" style="font-size:17px;">folder_special</span>
+                            Modalità e Directory di Scaricamento (Foto, Video e File)
+                        </h4>
+                    </div>
+                    <p style="margin:0 0 10px;font-size:12px;opacity:0.82;">
+                        Configura la directory di destinazione per Foto, Video e File (automatica in base al tipo oppure cartella specifica):
+                    </p>
+                    <div class="lg-controls-grid" style="margin-bottom:10px;">
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Modalità Directory Globale</span></span>
+                            <select id="settings-download-dir-mode-select" class="btn-like-select" aria-label="Modalità directory di scaricamento" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="AUTO_BY_TYPE">Automatica in base al tipo (Default)</option>
+                                <option value="PICTURES">Immagini (Pictures/PhotoCloud)</option>
+                                <option value="MOVIES">Video (Movies/PhotoCloud)</option>
+                                <option value="MUSIC">Musica (Music/PhotoCloud)</option>
+                                <option value="DOCUMENTS">Documenti (Documents/PhotoCloud)</option>
+                                <option value="DOWNLOADS">Download (Download/PhotoCloud)</option>
+                                <option value="CUSTOM_FOLDER">Cartella Personalizzata</option>
+                            </select>
+                        </label>
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Sottocartella Predefinita</span></span>
+                            <input type="text" id="settings-download-subfolder-input" value="PhotoCloud" placeholder="PhotoCloud" aria-label="Nome sottocartella di scaricamento" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);" />
+                        </label>
+                    </div>
+                    <div class="lg-controls-grid" style="margin-bottom:10px;">
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Directory Foto</span></span>
+                            <select id="settings-photo-dir-select" class="btn-like-select" aria-label="Directory scaricamento foto" style="height:34px;padding:0 8px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="AUTO_BY_TYPE">Default (Pictures/PhotoCloud)</option>
+                                <option value="PICTURES">Immagini (Pictures)</option>
+                                <option value="DOCUMENTS">Documenti</option>
+                                <option value="DOWNLOADS">Download</option>
+                                <option value="CUSTOM_FOLDER">Cartella Personalizzata</option>
+                            </select>
+                        </label>
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Directory Video</span></span>
+                            <select id="settings-video-dir-select" class="btn-like-select" aria-label="Directory scaricamento video" style="height:34px;padding:0 8px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="AUTO_BY_TYPE">Default (Movies/PhotoCloud)</option>
+                                <option value="MOVIES">Video (Movies)</option>
+                                <option value="PICTURES">Immagini (Pictures)</option>
+                                <option value="DOWNLOADS">Download</option>
+                                <option value="CUSTOM_FOLDER">Cartella Personalizzata</option>
+                            </select>
+                        </label>
+                        <label class="lg-control-item">
+                            <span class="lg-control-label-row"><span>Directory File &amp; Documenti</span></span>
+                            <select id="settings-file-dir-select" class="btn-like-select" aria-label="Directory scaricamento file" style="height:34px;padding:0 8px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                <option value="AUTO_BY_TYPE">Default (Download/PhotoCloud)</option>
+                                <option value="DOWNLOADS">Download</option>
+                                <option value="DOCUMENTS">Documenti</option>
+                                <option value="CUSTOM_FOLDER">Cartella Personalizzata</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <button type="button" class="btn outlined" id="settings-pick-download-dir-btn" style="width:auto;height:36px;padding:0 14px;margin:0;font-size:12px;">
+                            <span class="material-icons" style="font-size:16px;">folder_open</span>
+                            <span id="settings-pick-download-dir-label">Scegli Directory Dispositivo...</span>
+                        </button>
+                        <span id="settings-picked-dir-status" style="font-size:12px;opacity:0.8;">Directory automatica in base al tipo attiva</span>
+                    </div>
+                </div>
+
+                <!-- 0C. Persistent Encrypted Thumbnail Cache Card -->
+                <div class="lg-section-block" id="settings-thumb-cache-card">
+                    <div class="cloud-storage-settings-header" style="gap:12px;">
+                        <h3><span class="material-icons">photo_size_select_large</span> Cache miniature</h3>
+                        <span id="settings-thumb-cache-cap" style="font-size:12px;font-weight:600;opacity:0.78;font-variant-numeric:tabular-nums;">Tetto server: —</span>
+                    </div>
+                    <p style="margin:0 0 12px;font-size:12px;opacity:0.82;">
+                        Il server genera e cifra miniature JPEG q=80 (320px per griglia e 1280px per lightbox) con la chiave del tuo account per ridurre banda e attese.
+                    </p>
+                    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:10px 0;border-top:1px solid rgba(148,163,184,0.2);border-bottom:1px solid rgba(148,163,184,0.2);margin-bottom:12px;">
+                        <div>
+                            <div style="font-size:11px;opacity:0.72;">Spazio miniature cifrate</div>
+                            <div id="settings-thumb-cache-bytes" style="font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;">—</div>
+                        </div>
+                        <div>
+                            <div style="font-size:11px;opacity:0.72;">Varianti in cache</div>
+                            <div id="settings-thumb-cache-entries" style="font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;">—</div>
+                        </div>
+                        <div>
+                            <div style="font-size:11px;opacity:0.72;">Media non convertibili</div>
+                            <div id="settings-thumb-cache-negative" style="font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;">—</div>
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+                        <span id="settings-thumb-cache-status" style="font-size:12px;opacity:0.82;">Stato cache disponibile dopo l'accesso.</span>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <button type="button" class="btn outlined" id="settings-thumb-refresh-btn" style="width:auto;height:36px;padding:0 14px;margin:0;font-size:12px;white-space:nowrap;">Aggiorna</button>
+                            <button type="button" class="btn primary" id="settings-thumb-rebuild-btn" style="width:auto;height:36px;padding:0 14px;margin:0;font-size:12px;white-space:nowrap;">Ricostruisci cache</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 1. Theme Selector -->
+                <div class="lg-section-block">
+                    <h3><span class="material-icons">palette</span> Selezione Tema Applicazione</h3>
+                    <div class="lg-theme-selector-grid">
+                        <button type="button" id="lg-select-theme-original" class="lg-theme-choice-card active">
+                            <div class="lg-theme-choice-title">
+                                <span>Tema 1 — Originale</span>
+                                <span class="material-icons">layers</span>
+                            </div>
+                            <span style="font-size:12px;opacity:0.8;">Material You 120Hz classico: superfici tonali, layout e stili originali invariati.</span>
+                        </button>
+
+                        <button type="button" id="lg-select-theme-liquid" class="lg-theme-choice-card">
+                            <div class="lg-theme-choice-title">
+                                <span>Tema 2 — Liquid Glass</span>
+                                <span class="material-icons">auto_awesome</span>
+                            </div>
+                            <span style="font-size:12px;opacity:0.8;">Sistema ottico completo ispirato a Kyant0/AndroidLiquidGlass con rifrazione, blur e riflessi speculari.</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 2. Dedicated Liquid Glass Customization Studio (Visible when Liquid Glass is active) -->
+                <div id="lg-customization-studio" style="display: none;">
+                    <!-- Real-Time Interactive Preview Stage -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">visibility</span> Anteprima in Tempo Reale</h3>
+                        <div class="lg-live-preview-stage">
+                            <div class="lg-live-preview-card">
+                                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                                    <div>
+                                        <strong style="font-size:15px;">Superficie Ottica Liquid Glass</strong>
+                                        <p style="margin:2px 0 0;font-size:12px;">Rifrazione SDF, sfocatura adattiva, saturazione e bordi speculari attivi in tempo reale.</p>
+                                    </div>
+                                    <span class="btn primary" style="pointer-events:none;height:34px;padding:0 14px;font-size:12px;">Attivo 120Hz</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Preconfigured & Custom Presets -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">style</span> Preset Grafici Preconfigurati &amp; Salvati</h3>
+                        <div id="lg-builtin-presets-grid" class="lg-presets-grid"></div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+                            <input type="text" id="lg-custom-preset-name" placeholder="Nome della tua configurazione..." aria-label="Nome configurazione personalizzata" style="flex:1;min-width:180px;height:38px;padding:0 12px;" />
+                            <button type="button" class="btn primary" id="lg-save-preset-btn" style="width:auto;margin:0;">
+                                <span class="material-icons">bookmark_add</span>
+                                <span>Salva Configurazione</span>
+                            </button>
+                            <button type="button" class="btn outlined" id="lg-reset-defaults-btn" style="width:auto;margin:0;">
+                                <span class="material-icons">restart_alt</span>
+                                <span>Ripristina Predefiniti</span>
+                            </button>
+                        </div>
+                        <div id="lg-saved-presets-grid" class="lg-presets-grid"></div>
+                    </div>
+
+                    <!-- General Appearance -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">tune</span> Aspetto Generale</h3>
+                        <div class="lg-controls-grid">
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Effetto Vetro</span><strong id="lg-val-intensity">78%</strong></span>
+                                <input type="range" id="lg-slider-intensity" min="0" max="100" value="78" aria-label="Intensità effetto vetro" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Trasparenza</span><strong id="lg-val-transparency">68%</strong></span>
+                                <input type="range" id="lg-slider-transparency" min="0" max="100" value="68" aria-label="Trasparenza" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Opacità</span><strong id="lg-val-opacity">32%</strong></span>
+                                <input type="range" id="lg-slider-opacity" min="0" max="100" value="32" aria-label="Opacità" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Sfocatura (Blur)</span><strong id="lg-val-blur">28px</strong></span>
+                                <input type="range" id="lg-slider-blur" min="0" max="60" value="28" aria-label="Intensità sfocatura blur" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Saturazione Sfondo</span><strong id="lg-val-saturation">185%</strong></span>
+                                <input type="range" id="lg-slider-saturation" min="50" max="250" value="185" aria-label="Saturazione dello sfondo" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Luminosità</span><strong id="lg-val-brightness">106%</strong></span>
+                                <input type="range" id="lg-slider-brightness" min="50" max="150" value="106" aria-label="Luminosità vetro" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Contrasto</span><strong id="lg-val-contrast">108%</strong></span>
+                                <input type="range" id="lg-slider-contrast" min="50" max="150" value="108" aria-label="Contrasto vetro" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Profondità Visiva</span><strong id="lg-val-depth">75%</strong></span>
+                                <input type="range" id="lg-slider-depth" min="0" max="100" value="75" aria-label="Profondità visiva" />
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Colors -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">color_lens</span> Colori &amp; Tonalità Vetro</h3>
+                        <label class="lg-toggle-row" style="margin-bottom:6px;">
+                            <span>Forza Colori Personalizzati anche in Modalità Chiara</span>
+                            <input type="checkbox" id="lg-toggle-custom-colors" />
+                        </label>
+                        <div class="lg-colors-grid">
+                            <label class="lg-color-picker-item">
+                                <span>Colore Principale</span>
+                                <input type="color" id="lg-color-primary" value="#38BDF8" aria-label="Colore principale del tema" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Colore Secondario</span>
+                                <input type="color" id="lg-color-secondary" value="#818CF8" aria-label="Colore secondario" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Elementi Glass</span>
+                                <input type="color" id="lg-color-glass" value="#E0F2FE" aria-label="Colore degli elementi glass" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Tonalità Superfici</span>
+                                <input type="color" id="lg-color-surface" value="#0B132B" aria-label="Tonalità delle superfici" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Colore Bordi</span>
+                                <input type="color" id="lg-color-border" value="#BAE6FD" aria-label="Colore dei bordi" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Colore Icone</span>
+                                <input type="color" id="lg-color-icon" value="#E0F2FE" aria-label="Colore delle icone" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Colore Testo</span>
+                                <input type="color" id="lg-color-text" value="#F8FAFC" aria-label="Colore del testo" />
+                            </label>
+                            <label class="lg-color-picker-item">
+                                <span>Colore Accenti</span>
+                                <input type="color" id="lg-color-accent" value="#00F5D4" aria-label="Colore degli accenti" />
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Visual Effects -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">flare</span> Effetti Visivi &amp; Rifrazione</h3>
+                        <div class="lg-toggles-grid">
+                            <label class="lg-toggle-row">
+                                <span>Riflessi Luminosi Speculari</span>
+                                <input type="checkbox" id="lg-toggle-highlights" checked />
+                            </label>
+                            <label class="lg-toggle-row">
+                                <span>Bordi Luminosi</span>
+                                <input type="checkbox" id="lg-toggle-borders" checked />
+                            </label>
+                            <label class="lg-toggle-row">
+                                <span>Gradiente delle Superfici</span>
+                                <input type="checkbox" id="lg-toggle-gradient" checked />
+                            </label>
+                            <label class="lg-toggle-row">
+                                <span>Ombre Multilivello</span>
+                                <input type="checkbox" id="lg-toggle-shadows" checked />
+                            </label>
+                            <label class="lg-toggle-row">
+                                <span>Effetto Profondità 3D</span>
+                                <input type="checkbox" id="lg-toggle-depth" checked />
+                            </label>
+                            <label class="lg-toggle-row">
+                                <span>Animazioni e Transizioni</span>
+                                <input type="checkbox" id="lg-toggle-animations" checked />
+                            </label>
+                        </div>
+                        <div class="lg-controls-grid">
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Riflessi</span><strong id="lg-val-highlight">80%</strong></span>
+                                <input type="range" id="lg-slider-highlight" min="0" max="100" value="80" aria-label="Intensità riflessi luminosi" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Bordi Luminosi</span><strong id="lg-val-border-glow">72%</strong></span>
+                                <input type="range" id="lg-slider-border-glow" min="0" max="100" value="72" aria-label="Intensità bordi luminosi" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Angolo Gradiente Superfici</span><strong id="lg-val-gradient-angle">135°</strong></span>
+                                <input type="range" id="lg-slider-gradient-angle" min="0" max="360" value="135" aria-label="Angolo gradiente superfici" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Ombre</span><strong id="lg-val-shadow">70%</strong></span>
+                                <input type="range" id="lg-slider-shadow" min="0" max="100" value="70" aria-label="Intensità ombre" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Rifrazioni Ottiche</span><strong id="lg-val-refraction">65%</strong></span>
+                                <input type="range" id="lg-slider-refraction" min="0" max="100" value="65" aria-label="Intensità rifrazioni" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Intensità Animazioni</span><strong id="lg-val-anim-intensity">80%</strong></span>
+                                <input type="range" id="lg-slider-anim-intensity" min="0" max="100" value="80" aria-label="Intensità animazioni" />
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Components Style -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">widgets</span> Componenti &amp; Geometria</h3>
+                        <div class="lg-controls-grid">
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Arrotondamento Componenti</span><strong id="lg-val-corner-radius">24px</strong></span>
+                                <input type="range" id="lg-slider-corner-radius" min="8" max="40" value="24" aria-label="Arrotondamento componenti" />
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Stile Navbar &amp; Barra Superiore</span></span>
+                                <select id="lg-select-nav-style" class="btn-like-select" aria-label="Stile Navbar e Barra Superiore" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                    <option value="capsule">Capsula Continua (Capsule)</option>
+                                    <option value="floating">Sospesa Staccata (Floating)</option>
+                                    <option value="crystal">Cristallo Speculare (Crystal)</option>
+                                </select>
+                            </label>
+                            <label class="lg-control-item">
+                                <span class="lg-control-label-row"><span>Stile Schede &amp; Card</span></span>
+                                <select id="lg-select-card-style" class="btn-like-select" aria-label="Stile Schede e Card" style="height:36px;padding:0 10px;border-radius:10px;border:1px solid rgba(148,163,184,0.3);">
+                                    <option value="elevated">Stratificato Elevato (Elevated)</option>
+                                    <option value="frosted">Vetro Satinato (Frosted)</option>
+                                    <option value="prism">Prisma Rifrattivo (Prism)</option>
+                                </select>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Export / Import JSON -->
+                    <div class="lg-section-block">
+                        <h3><span class="material-icons">import_export</span> Esporta / Importa Configurazione JSON</h3>
+                        <textarea id="lg-config-json-area" class="lg-json-area" placeholder="Clicca 'Esporta JSON' per generare la configurazione o incolla qui un JSON Liquid Glass per importarlo..." aria-label="JSON configurazione Liquid Glass"></textarea>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                            <button type="button" class="btn outlined" id="lg-export-json-btn" style="width:auto;margin:0;">
+                                <span class="material-icons">file_download</span>
+                                <span>Esporta JSON</span>
+                            </button>
+                            <button type="button" class="btn primary" id="lg-import-json-btn" style="width:auto;margin:0;">
+                                <span class="material-icons">file_upload</span>
+                                <span>Importa JSON</span>
+                            </button>
+                            <span id="lg-json-status-msg" style="font-size:12px;"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pre-Transfer Choice Modal (Direct to Storage vs .zip Archive + Download Directory Selection) -->
+    <div id="pre-transfer-modal-backdrop" class="lg-settings-backdrop" role="dialog" aria-modal="true" aria-labelledby="pre-transfer-modal-title" style="display: none; z-index: 12500;">
+        <div class="lg-settings-sheet" style="max-width: 520px; max-height: 90vh;">
+            <div class="lg-settings-header">
+                <div>
+                    <h2 id="pre-transfer-modal-title">
+                        <span class="material-icons" id="pre-transfer-modal-icon">swap_vert</span>
+                        <span id="pre-transfer-modal-title-text">Opzioni di Trasferimento</span>
+                    </h2>
+                    <span id="pre-transfer-modal-subtitle">Scegli come trasferire gli elementi selezionati</span>
+                </div>
+                <button type="button" class="btn icon" id="pre-transfer-modal-close-btn" title="Chiudi" aria-label="Chiudi opzioni trasferimento">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+            <div class="lg-settings-body" style="gap: 14px;">
+                <div class="lg-section-block" style="margin: 0;">
+                    <h3 style="margin-bottom: 8px;"><span class="material-icons">inventory_2</span> Modalità di Trasferimento</h3>
+                    <div class="lg-theme-selector-grid" style="grid-template-columns: 1fr;">
+                        <button type="button" id="pre-transfer-choice-direct" class="lg-theme-choice-card active" style="text-align: left;">
+                            <div class="lg-theme-choice-title">
+                                <span>Direttamente in memoria (File Singoli)</span>
+                                <span class="material-icons">Insert_drive_file</span>
+                            </div>
+                            <span id="pre-transfer-direct-desc" style="font-size: 12px; opacity: 0.84;">
+                                Trasferisce ogni foto, video o file direttamente nella memoria con streaming parallelo.
+                            </span>
+                        </button>
+                        <button type="button" id="pre-transfer-choice-zip" class="lg-theme-choice-card" style="text-align: left;">
+                            <div class="lg-theme-choice-title">
+                                <span>Crea Archivio (.zip)</span>
+                                <span class="material-icons">folder_zip</span>
+                            </div>
+                            <span id="pre-transfer-zip-desc" style="font-size: 12px; opacity: 0.84;">
+                                Raggruppa tutti i media selezionati in un unico pacchetto .zip.
+                            </span>
+                        </button>
+                    </div>
+                    <div id="pre-transfer-zip-name-row" style="display: none; margin-top: 10px;">
+                        <label style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600;">
+                            <span>Nome archivio .zip:</span>
+                            <input type="text" id="pre-transfer-zip-name-input" value="PhotoCloud_Archivio.zip" style="height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid rgba(148,163,184,0.35);" />
+                        </label>
+                    </div>
+                </div>
+
+                <div id="pre-transfer-download-dir-section" class="lg-section-block" style="margin: 0; display: none;">
+                    <h3 style="margin-bottom: 8px;"><span class="material-icons">folder_special</span> Directory di Scaricamento</h3>
+                    <p style="margin: 0 0 8px; font-size: 12px; opacity: 0.82;">
+                        Scegli dove salvare i file sul dispositivo (default automatico in base al tipo oppure directory specifica):
+                    </p>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <label style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600;">
+                            <span>Modalità Directory:</span>
+                            <select id="pre-transfer-dir-mode-select" class="btn-like-select" style="height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid rgba(148,163,184,0.35);">
+                                <option value="AUTO_BY_TYPE">Automatica in base al tipo (Foto→Pictures, Video→Movies, File→Download)</option>
+                                <option value="PICTURES">Immagini (Pictures/PhotoCloud)</option>
+                                <option value="MOVIES">Video (Movies/PhotoCloud)</option>
+                                <option value="MUSIC">Musica (Music/PhotoCloud)</option>
+                                <option value="DOCUMENTS">Documenti (Documents/PhotoCloud)</option>
+                                <option value="DOWNLOADS">Download (Download/PhotoCloud)</option>
+                                <option value="CUSTOM_FOLDER">Cartella Personalizzata</option>
+                            </select>
+                        </label>
+                        <label style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600;">
+                            <span>Sottocartella (es. PhotoCloud):</span>
+                            <input type="text" id="pre-transfer-subfolder-input" value="PhotoCloud" style="height: 36px; padding: 0 10px; border-radius: 10px; border: 1px solid rgba(148,163,184,0.35);" />
+                        </label>
+                        <button type="button" class="btn outlined" id="pre-transfer-pick-dir-btn" style="width: auto; height: 34px; padding: 0 12px; margin: 0; font-size: 12px;">
+                            <span class="material-icons" style="font-size: 16px;">folder_open</span>
+                            <span>Scegli Cartella Dispositivo...</span>
+                        </button>
+                    </div>
+                </div>
+
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer;">
+                    <input type="checkbox" id="pre-transfer-remember-checkbox" />
+                    <span>Ricorda questa modalità come predefinita (modificabile in Impostazioni)</span>
+                </label>
+
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
+                    <button type="button" class="btn outlined" id="pre-transfer-cancel-btn" style="width: auto; margin: 0;">Annulla</button>
+                    <button type="button" class="btn primary" id="pre-transfer-confirm-btn" style="width: auto; margin: 0;">
+                        <span class="material-icons" id="pre-transfer-confirm-icon">upload</span>
+                        <span id="pre-transfer-confirm-label">Avvia Trasferimento</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- v1.4.1 — Pannello metadati EXIF (bottom-sheet) -->
+    <div id="exif-panel" class="exif-panel" role="dialog" aria-label="Metadati EXIF della foto" hidden>
+        <div class="exif-panel-card">
+            <div class="exif-panel-header">
+                <span class="material-icons">photo_camera</span>
+                <strong id="exif-panel-title">Metadati EXIF</strong>
+                <button type="button" id="exif-panel-close" class="lightbox-icon-btn" aria-label="Chiudi pannello EXIF">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+            <div id="exif-panel-grid" class="exif-panel-grid"></div>
+            <a id="exif-panel-map-link" class="exif-panel-map-link" href="#" hidden>
+                <span class="material-icons">map</span> Vedi sulla mappa interattiva
+            </a>
+        </div>
+    </div>
+
+    <script src="/static/scripts/liquid-glass.js"></script>
+    <script src="/static/scripts/lightbox.js"></script>
+    <script src="/static/scripts/photo-editor.js"></script>
+    <script src="/static/scripts/document-viewer.js"></script>
+    <script src="/static/scripts/exif-panel.js"></script>
+    
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Gestione Tab Login/Registrazione
+    const loginTab = document.getElementById('login-tab');
+    const registerTab = document.getElementById('register-tab');
+    const loginForm = document.getElementById('login-form');
+    const registerForm = document.getElementById('register-form');
+
+    loginTab.addEventListener('click', () => {
+        loginTab.classList.add('active');
+        registerTab.classList.remove('active');
+        loginForm.classList.add('active');
+        registerForm.classList.remove('active');
+    });
+
+    registerTab.addEventListener('click', () => {
+        registerTab.classList.add('active');
+        loginTab.classList.remove('active');
+        registerForm.classList.add('active');
+        loginForm.classList.remove('active');
+    });
+    
+    // Gestione opzioni chiave personalizzata nel form di registrazione
+    const customKeyGroup = document.getElementById('custom-key-group');
+    const customKeyInput = document.getElementById('register-custom-key');
+    const keyTypeRadios = document.querySelectorAll('input[name="key_type"]');
+
+    function toggleCustomKey() {
+        const selectedValue = document.querySelector('input[name="key_type"]:checked').value;
+        if (selectedValue === 'custom') {
+            customKeyGroup.style.display = 'block';
+            customKeyInput.required = true;
+        } else {
+            customKeyGroup.style.display = 'none';
+            customKeyInput.required = false;
+        }
+    }
+    keyTypeRadios.forEach(radio => radio.addEventListener('change', toggleCustomKey));
+    toggleCustomKey();
+
+    // Gestione visibilità password
+    document.querySelectorAll('.toggle-password').forEach(icon => {
+        icon.addEventListener('click', () => {
+            const input = icon.previousElementSibling;
+            const type = input.type === 'password' ? 'text' : 'password';
+            input.type = type;
+            icon.textContent = type === 'password' ? 'visibility' : 'visibility_off';
+        });
+    });
+
+    // NUOVO: Gestione input file per login
+    const authFileInput = document.getElementById('auth-file-input');
+    const fileUploadText = document.getElementById('file-upload-text');
+
+    authFileInput.addEventListener('change', function() {
+        if (this.files && this.files.length > 0) {
+            fileUploadText.textContent = this.files[0].name;
+            fileUploadText.previousElementSibling.textContent = 'check_circle'; // cambia icona
+        } else {
+            fileUploadText.textContent = 'Clicca per caricare il file';
+            fileUploadText.previousElementSibling.textContent = 'upload_file';
+        }
+    });
+
+    // Sfondo casuale
+    const backgrounds = ['wp1.jpg', 'wp2.jpg', 'wp3.jpg'];
+    const chosen = backgrounds[Math.floor(Math.random() * backgrounds.length)];
+    document.body.style.backgroundImage = `url('/static/${chosen}')`;
+    document.body.style.backgroundSize = 'cover';
+    document.body.style.backgroundPosition = 'center';
+    document.body.style.backgroundRepeat = 'no-repeat';
+
+    // Supporto scaricamento chiave per App Android (AndroidApp bridge) e Browser
+    const actualRegisterForm = document.getElementById('actual-register-form');
+    if (actualRegisterForm) {
+        actualRegisterForm.dataset.androidRegisterHooked = 'true';
+        actualRegisterForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            try {
+                const formData = new FormData(actualRegisterForm);
+                const response = await fetch(actualRegisterForm.getAttribute('action') || '/register', {
+                    method: 'POST',
+                    body: formData
+                });
+                const text = await response.text();
+                if (!response.ok) {
+                    alert(text || 'Errore durante la registrazione.');
+                    return;
+                }
+                const disp = response.headers.get('Content-Disposition') || '';
+                const match = disp.match(/filename="?([^";]+)"?/i);
+                const rawUser = (document.getElementById('register-username')?.value || 'user').trim();
+                const safeUser = rawUser.replace(/[^a-zA-Z0-9_-]/g, '_') || 'user';
+                const filename = (match && match[1]) ? match[1] : `photocloud_auth_${safeUser}.json`;
+
+                if (window.AndroidApp && typeof window.AndroidApp.saveDownloadedFile === 'function') {
+                    window.AndroidApp.saveDownloadedFile(filename, text, 'application/json');
+                } else {
+                    const blob = new Blob([text], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }
+                actualRegisterForm.reset();
+                toggleCustomKey();
+                loginTab.click();
+            } catch (err) {
+                alert('Errore durante la registrazione: ' + err);
+            }
+        });
+    }
+});
+</script>
+
+</body>
+</html>

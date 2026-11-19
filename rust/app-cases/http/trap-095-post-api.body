@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Error</title>
+</head>
+<body>
+<pre>Cannot POST /api/albums/%E6%97%A5%E6%9C%AC%E8%AA%9E</pre>
+</body>
+</html>

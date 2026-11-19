@@ -1,5 +1,14 @@
 # Ignora tutto dentro user_media/
 user_media/
+vault_v2/
+
+# Rust build artifacts
+target/
+**/target/
+**/.rust-anything/
+*.node
+*.tmp
+**/cases.jsonl
 
 # Ignora esattamente il file users.txt
 users.txt

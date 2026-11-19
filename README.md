@@ -12,6 +12,7 @@ PhotoCloud conserva sul tuo server foto, video, documenti Office/PDF e qualsiasi
 | Componente | Descrizione | Tecnologie |
 | --- | --- | --- |
 | **Server e web app** | API, archiviazione cifrata e interfaccia web installabile come PWA. Legge anche il formato crittografico della versione Python originale. | Node.js, Express 5, TypeScript, React 19, Vite, Tailwind CSS 4 |
+| **Server nativo Rust** | Backend standalone alternativo ad alte prestazioni, 100% compatibile a livello di wire, API e cifratura vault con il server Node.js. | Rust, Axum, Tokio, AES-256-GCM, PBKDF2 |
 | **App Android** (`com.valerio.photocloud`) | Client nativo che comunica direttamente con il tuo server. Aggiunge il backup automatico della Camera Roll, la categorizzazione AI on-device facoltativa e gli aggiornamenti in-app. | Kotlin, Jetpack Compose (Material 3), OkHttp, Room, WorkManager, MediaPipe. minSdk 26, targetSdk 35 |
 
 > [!IMPORTANT]
@@ -23,6 +24,7 @@ PhotoCloud conserva sul tuo server foto, video, documenti Office/PDF e qualsiasi
 
 - [Funzionalità](#funzionalità)
 - [Avvio rapido](#avvio-rapido)
+- [Server nativo Rust](#server-nativo-rust)
 - [Configurazione](#configurazione)
 - [App Android](#app-android)
 - [Deploy dietro reverse proxy](#deploy-dietro-reverse-proxy)
@@ -172,6 +174,49 @@ Apri l’app, registra un utente e scarica il **file chiave** `photocloud_auth_<
 
 Sulla stessa rete Wi-Fi trova l’IPv4 del computer (`ipconfig` su Windows, `ipconfig getifaddr en0` su macOS, `hostname -I` su Linux) e inserisci `http://<IP>:3000` nell’app. Va bene solo in rete locale: fuori casa pubblica il server su HTTPS ([vedi sotto](#deploy-dietro-reverse-proxy)).
 
+## Server nativo Rust
+
+PhotoCloud include una completa implementazione nativa del backend in **Rust** (`rust/app/`), basata su [Axum](https://github.com/tokio-rs/axum) e [Tokio](https://tokio.rs).
+
+### Caratteristiche principali
+
+- **100% Compatibilità Wire & Vault**: Compatibilità assoluta con l'app Android (`com.valerio.photocloud`), la PWA React e i client API esistenti. Utilizza lo stesso identico formato crittografico su disco `PhotoCloud-GCM-v1\0`, le stesse chiavi derivate via PBKDF2-HMAC-SHA256 (100.000 iterazioni con cache LRU) e AES-256-GCM.
+- **Zero dipendenza da Node.js a runtime**: Il binario compilato (`rust/app/target/release/server.exe` su Windows o `server` su Linux) è completamente autonomo e include un web server HTTP ad alte prestazioni e basso consumo di memoria RAM.
+- **Servizio statico SPA integrato**: Serve direttamente i file statici compilati della web app (`dist/`, `static/`, `templates/`) tramite `tower-http`.
+- **Streaming Range & Crittografia al volo**: Supporta RFC 9110 HTTP Range (`206 Partial Content`) con decifratura e seek in streaming a blocchi, garantendo streaming fluido di video e ripresa dei download.
+- **Ricerca in linguaggio naturale e pHash**: Parser semantico IT/EN per interrogazioni temporali e categoriche, raggruppamento duplicati con perceptual hash pHash 32x32 DCT-II e union-find.
+- **Suite di test & replay 100%**:
+  - Test replay HTTP di `rust-anything`: **155/155 casi superati (100%)** con 0% fallback a Node.js.
+  - Test suite end-to-end automatica (`npm run test:rust`): **14/14 suite superate (100%)** (registrazione, login a tempo costante, sessioni, caricamenti cifrati su disco, verifica header GCM, decifratura al volo, streaming Range 206, album, preferiti, ricerca, cestino e ripristino, logout).
+
+### Compilazione ed esecuzione
+
+Per compilare la versione ottimizzata di release:
+
+```bash
+npm run build:rust
+# oppure: cargo build --release --manifest-path rust/app/Cargo.toml
+```
+
+Per avviare il server nativo:
+
+```bash
+npm run start:rust
+# oppure: ./rust/app/target/release/server
+```
+
+Configurazione della porta:
+```bash
+PORT=8080 npm run start:rust
+# In PowerShell:
+$env:PORT=8080; npm run start:rust
+```
+
+Per eseguire la suite di test end-to-end del server Rust:
+```bash
+npm run test:rust
+```
+
 ## Configurazione
 
 Il server legge la configurazione dalle **variabili d’ambiente del processo** e **non carica automaticamente un file `.env`**. Impostale nella shell, nel servizio systemd o nel container, ad esempio:
@@ -317,6 +362,9 @@ Per un backup completo copia `user_media/` e `users.txt`, preferibilmente a serv
 | `npm run dev` | Avvia il server Express con Vite in sviluppo (porta `3000`). |
 | `npm run build` | Compila il frontend per la produzione (`vite build`). |
 | `npm start` | Avvia il server in produzione. |
+| `npm run build:rust` | Compila il server nativo Rust in modalità release (`rust/app/Cargo.toml`). |
+| `npm run start:rust` | Avvia il server nativo Rust standalone compilato. |
+| `npm run test:rust` | Esegue la suite di test end-to-end (14 suite) sul server nativo Rust. |
 | `npm run lint` | Controllo dei tipi TypeScript (`tsc --noEmit`). |
 | `npm test` | Esegue i test di `src/lib/*.test.ts`: crittografia, indice hash, EXIF, pHash, ricerca in linguaggio naturale, cache miniature, `TRUST_PROXY` e funzioni del server. |
 | `npm run release:check` | Verifica la coerenza di versione e artefatti prima di una release (package.json, Gradle, nome e checksum dell’APK, `photocloud-release-build.json`). |
@@ -328,6 +376,21 @@ Per un backup completo copia `user_media/` e `users.txt`, preferibilmente a serv
 ```
 PhotoCloud/
 ├── server.ts                  # Server Express: auth, media, anteprime, editing, album, condivisioni, ZIP, upload a blocchi, API Android
+├── rust/
+│   ├── app/                   # Backend standalone nativo Rust (Axum + Tokio)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── main.rs        # Entry point, runtime Tokio, graceful shutdown
+│   │       ├── crypto.rs      # Crittografia vault GCM v1, PBKDF2-HMAC-SHA256, AES-256-GCM
+│   │       ├── vault.rs       # Gestione atomica del vault e segreti cifrati
+│   │       ├── vault_manager.rs # Album, preferiti, statistiche disco
+│   │       ├── phash.rs       # DCT-II perceptual hash e duplicati
+│   │       ├── nl_search.rs   # Ricerca in linguaggio naturale (IT/EN)
+│   │       ├── state.rs       # Store concorrente delle sessioni e utenti
+│   │       └── units/         # Handler route modulari (auth, session, media, api, push, android...)
+│   └── app-cases/             # Suite di replay e regressione HTTP rust-anything (155 casi)
+├── tests/
+│   └── test_rust_server_e2e.py # Test suite end-to-end per il server Rust (14 suite)
 ├── src/
 │   ├── App.tsx, main.tsx      # Entry point React
 │   ├── components/            # Galleria, Lightbox, Cestino, Auth, installazione PWA, Android Release Studio

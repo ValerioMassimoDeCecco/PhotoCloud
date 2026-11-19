@@ -1,0 +1,17 @@
+[request]
+method = "GET"
+path = "/login"
+
+[response]
+status = 302
+
+[response.headers]
+content-security-policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+content-type = "text/plain; charset=utf-8"
+cross-origin-opener-policy = "same-origin"
+location = "/"
+permissions-policy = "camera=(), microphone=(), geolocation=()"
+referrer-policy = "strict-origin-when-cross-origin"
+vary = "Accept"
+x-content-type-options = "nosniff"
+x-frame-options = "SAMEORIGIN"

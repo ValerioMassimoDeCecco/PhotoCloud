@@ -7,9 +7,11 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
 import { Jimp } from 'jimp';
 
 const root = process.cwd();
+const loaderUrl = pathToFileURL(path.join(root, 'node_modules/tsx/dist/loader.mjs')).href;
 
 test('v1.5.0 integration: persistent encrypted thumbs & auto-backup check + chunked streaming upload', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'photocloud-v15-'));
@@ -33,7 +35,7 @@ test('v1.5.0 integration: persistent encrypted thumbs & auto-backup check + chun
 
   const child = spawn(
     process.execPath,
-    ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')],
+    ['--import', loaderUrl, path.join(root, 'server.ts')],
     {
       cwd: dir,
       env: { ...process.env, PORT: String(port), GITHUB_TOKEN: '', MAX_UPLOAD_MB: '100' },

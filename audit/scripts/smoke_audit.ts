@@ -12,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
 import JSZip from 'jszip';
 
 interface CheckResult {
@@ -25,6 +26,7 @@ interface CheckResult {
 
 const results: CheckResult[] = [];
 const root = process.cwd();
+const loaderUrl = pathToFileURL(path.join(root, 'node_modules/tsx/dist/loader.mjs')).href;
 
 function record(
   id: string,
@@ -61,7 +63,7 @@ async function main() {
 
   const serverProc = spawn(
     process.execPath,
-    ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')],
+    ['--import', loaderUrl, path.join(root, 'server.ts')],
     {
       cwd: dir,
       env: { ...process.env, PORT: String(port), GITHUB_TOKEN: '' },
@@ -443,7 +445,7 @@ async function main() {
       process.execPath,
       [
         '--import',
-        path.join(root, 'node_modules/tsx/dist/loader.mjs'),
+        loaderUrl,
         path.join(root, 'scripts/setup-persistent-signing.ts'),
       ],
       {

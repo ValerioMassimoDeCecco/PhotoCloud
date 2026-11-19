@@ -1,0 +1,12 @@
+{
+  "schema": "rust-anything/app-cases@1",
+  "name": "server",
+  "run": [
+    "node",
+    "--import",
+    "tsx",
+    "server.ts"
+  ],
+  "timeout_secs": 30,
+  "http": {}
+}

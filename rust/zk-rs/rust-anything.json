@@ -1,0 +1,625 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "C:\\Users\\Valerio\\Documents\\PhotoCloud",
+  "unit": "src/lib/zk/",
+  "language": "ts",
+  "kind": "napi",
+  "crate_name": "zk-rs",
+  "exports": [
+    {
+      "name": "blake2b",
+      "file": "src/lib/zk/argon2id.ts",
+      "line": 41,
+      "params": [
+        {
+          "name": "input",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "outLen",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "Uint8Array",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "blake2bLong",
+      "file": "src/lib/zk/argon2id.ts",
+      "line": 173,
+      "params": [
+        {
+          "name": "input",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "outLen",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Uint8Array",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "buildChunkNonce",
+      "file": "src/lib/zk/pczkStream.ts",
+      "line": 160,
+      "params": [
+        {
+          "name": "noncePrefix",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "chunkIndex",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Uint8Array",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "buildChunkAad",
+      "file": "src/lib/zk/pczkStream.ts",
+      "line": 171,
+      "params": [
+        {
+          "name": "headerSha256",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "isLast",
+          "ts_type": "boolean",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Uint8Array",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "serializePczkHeader",
+      "file": "src/lib/zk/pczkStream.ts",
+      "line": 181,
+      "params": [
+        {
+          "name": "params",
+          "ts_type": "{\r\n  chunkSizeLog2: number;\r\n  blobIdBytes: Uint8Array;\r\n  noncePrefix: Uint8Array;\r\n  wrappedFk: Uint8Array;\r\n}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Uint8Array",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parsePczkHeader",
+      "file": "src/lib/zk/pczkStream.ts",
+      "line": 214,
+      "params": [
+        {
+          "name": "headerBytes",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "ParsedPczkHeader",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "computeBlobRangePlan",
+      "file": "src/lib/zk/pczkStream.ts",
+      "line": 673,
+      "params": [
+        {
+          "name": "params",
+          "ts_type": "{\r\n  totalCiphertextBytes: number;\r\n  chunkSizeLog2: number;\r\n  startPlaintextByte: number;\r\n  endPlaintextByteInclusive: number;\r\n}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "BlobRangePlan",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "constantTimeEqual",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 56,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "b",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "utf8Encode",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 67,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Uint8Array",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "utf8Decode",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 71,
+      "params": [
+        {
+          "name": "bytes",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "normalizePassphraseNfc",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 75,
+      "params": [
+        {
+          "name": "passphrase",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Uint8Array",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "toHex",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 79,
+      "params": [
+        {
+          "name": "bytes",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "fromHex",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 87,
+      "params": [
+        {
+          "name": "hexStr",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Uint8Array",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "toBase64Url",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 98,
+      "params": [
+        {
+          "name": "bytes",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "fromBase64Url",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 109,
+      "params": [
+        {
+          "name": "b64u",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Uint8Array",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "uuidToBytes",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 127,
+      "params": [
+        {
+          "name": "uuid",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Uint8Array",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "bytesToUuid",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 134,
+      "params": [
+        {
+          "name": "bytes",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "concatBytes",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 142,
+      "params": [
+        {
+          "name": "arrays",
+          "ts_type": "Uint8Array[]",
+          "optional": true,
+          "rest": true
+        }
+      ],
+      "returns": "Uint8Array",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [
+    {
+      "name": "IncrementalSha256",
+      "file": "src/lib/zk/provider.ts",
+      "line": 79,
+      "constructor": [],
+      "methods": [
+        {
+          "name": "update",
+          "file": "src/lib/zk/provider.ts",
+          "line": 90,
+          "params": [
+            {
+              "name": "chunk",
+              "ts_type": "Uint8Array",
+              "optional": false,
+              "rest": false
+            }
+          ],
+          "returns": "void",
+          "is_async": false,
+          "is_generator": false,
+          "type_params": [],
+          "uses_instanceof": false
+        },
+        {
+          "name": "digest",
+          "file": "src/lib/zk/provider.ts",
+          "line": 119,
+          "params": [],
+          "returns": "Uint8Array",
+          "is_async": false,
+          "is_generator": false,
+          "type_params": [],
+          "uses_instanceof": false
+        }
+      ],
+      "blocker": null
+    },
+    {
+      "name": "IncrementalHmacSha256",
+      "file": "src/lib/zk/provider.ts",
+      "line": 199,
+      "constructor": [
+        {
+          "name": "key",
+          "ts_type": "Uint8Array",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "methods": [
+        {
+          "name": "update",
+          "file": "src/lib/zk/provider.ts",
+          "line": 225,
+          "params": [
+            {
+              "name": "chunk",
+              "ts_type": "Uint8Array",
+              "optional": false,
+              "rest": false
+            }
+          ],
+          "returns": "void",
+          "is_async": false,
+          "is_generator": false,
+          "type_params": [],
+          "uses_instanceof": false
+        },
+        {
+          "name": "digest",
+          "file": "src/lib/zk/provider.ts",
+          "line": 232,
+          "params": [],
+          "returns": "Uint8Array",
+          "is_async": false,
+          "is_generator": false,
+          "type_params": [],
+          "uses_instanceof": false
+        }
+      ],
+      "blocker": null
+    }
+  ],
+  "js_only": [
+    {
+      "name": "Rfc9106Argon2idProvider",
+      "file": "src/lib/zk/argon2id.ts",
+      "line": 373,
+      "reason": "class: async or generator method `derive`"
+    },
+    {
+      "name": "ZkCryptoError",
+      "file": "src/lib/zk/errors.ts",
+      "line": 18,
+      "reason": "class: extends another class, public field `code`"
+    },
+    {
+      "name": "deriveRoot",
+      "file": "src/lib/zk/kdf.ts",
+      "line": 52,
+      "reason": "uses `DeriveRootOptions`, which has function members"
+    },
+    {
+      "name": "deriveKekAndAuthSecret",
+      "file": "src/lib/zk/kdf.ts",
+      "line": 114,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "wrapVaultKey",
+      "file": "src/lib/zk/kdf.ts",
+      "line": 148,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "unwrapVaultKey",
+      "file": "src/lib/zk/kdf.ts",
+      "line": 178,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "deriveSubkeys",
+      "file": "src/lib/zk/kdf.ts",
+      "line": 212,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "wrapFileKey",
+      "file": "src/lib/zk/kdf.ts",
+      "line": 242,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "unwrapFileKey",
+      "file": "src/lib/zk/kdf.ts",
+      "line": 271,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "wrapFileKeyForShare",
+      "file": "src/lib/zk/kdf.ts",
+      "line": 303,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "unwrapFileKeyForShare",
+      "file": "src/lib/zk/kdf.ts",
+      "line": 339,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "computeDedupTag",
+      "file": "src/lib/zk/metaAndDedup.ts",
+      "line": 109,
+      "reason": "uses `AsyncIterable`, a lazy iterator"
+    },
+    {
+      "name": "encryptMeta",
+      "file": "src/lib/zk/metaAndDedup.ts",
+      "line": 137,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "decryptMeta",
+      "file": "src/lib/zk/metaAndDedup.ts",
+      "line": 175,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "encryptThumbnail",
+      "file": "src/lib/zk/metaAndDedup.ts",
+      "line": 226,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "decryptThumbnail",
+      "file": "src/lib/zk/metaAndDedup.ts",
+      "line": 261,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "encryptAlbums",
+      "file": "src/lib/zk/metaAndDedup.ts",
+      "line": 307,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "decryptAlbums",
+      "file": "src/lib/zk/metaAndDedup.ts",
+      "line": 349,
+      "reason": "uses `ZkCryptoProvider`, which has function members"
+    },
+    {
+      "name": "encryptBlobStream",
+      "file": "src/lib/zk/pczkStream.ts",
+      "line": 276,
+      "reason": "generator: returns a lazy iterator"
+    },
+    {
+      "name": "encryptBlobToBytes",
+      "file": "src/lib/zk/pczkStream.ts",
+      "line": 419,
+      "reason": "uses `AsyncIterable`, a lazy iterator"
+    },
+    {
+      "name": "decryptBlobStream",
+      "file": "src/lib/zk/pczkStream.ts",
+      "line": 448,
+      "reason": "generator: returns a lazy iterator"
+    },
+    {
+      "name": "decryptBlobToBytes",
+      "file": "src/lib/zk/pczkStream.ts",
+      "line": 650,
+      "reason": "uses `AsyncIterable`, a lazy iterator"
+    },
+    {
+      "name": "decryptBlobRange",
+      "file": "src/lib/zk/pczkStream.ts",
+      "line": 794,
+      "reason": "uses `DecryptBlobRangeOptions`, which has function members"
+    },
+    {
+      "name": "WebCryptoProvider",
+      "file": "src/lib/zk/provider.ts",
+      "line": 251,
+      "reason": "class: async or generator method `sha256`, async or generator method `hmacSha256`, async or generator method `hkdfSha256`, async or generator method `aes256GcmEncrypt`, async or generator method `aes256GcmDecrypt`"
+    },
+    {
+      "name": "ZkWorkerClient",
+      "file": "src/lib/zk/worker.ts",
+      "line": 236,
+      "reason": "class: async or generator method `deriveArgon2id`, async or generator method `deriveRootAndKeys`, async or generator method `encryptBlob`"
+    },
+    {
+      "name": "handleZkWorkerRequest",
+      "file": "src/lib/zk/worker.ts",
+      "line": 96,
+      "reason": "checks `instanceof`: class identity does not survive the bridge"
+    },
+    {
+      "name": "createInProcessZkWorker",
+      "file": "src/lib/zk/worker.ts",
+      "line": 222,
+      "reason": "uses `ZkWorkerLike`, which has function members"
+    },
+    {
+      "name": "zeroize",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 28,
+      "reason": "checks `instanceof`: class identity does not survive the bridge"
+    },
+    {
+      "name": "withZeroizedBuffer",
+      "file": "src/lib/zk/zeroize.ts",
+      "line": 41,
+      "reason": "takes or returns a function"
+    }
+  ]
+}

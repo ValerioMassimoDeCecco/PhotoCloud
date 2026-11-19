@@ -1,0 +1,15 @@
+[request]
+method = "GET"
+path = "/api/h%C3%A9llo%20w%C3%B6rld/update-manifest"
+
+[response]
+status = 404
+
+[response.headers]
+content-security-policy = "default-src 'none'"
+content-type = "text/html; charset=utf-8"
+cross-origin-opener-policy = "same-origin"
+permissions-policy = "camera=(), microphone=(), geolocation=()"
+referrer-policy = "strict-origin-when-cross-origin"
+x-content-type-options = "nosniff"
+x-frame-options = "SAMEORIGIN"

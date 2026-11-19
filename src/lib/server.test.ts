@@ -6,8 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
 
 const root = process.cwd();
+const loaderUrl = pathToFileURL(path.join(root, 'node_modules/tsx/dist/loader.mjs')).href;
 
 test('server protects vaults, preserves collisions, and handles real media flows', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'photocloud-test-'));
@@ -19,7 +21,7 @@ test('server protects vaults, preserves collisions, and handles real media flows
   }
   const socket = net.createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening');
   const port = (socket.address() as net.AddressInfo).port; await new Promise<void>(resolve => socket.close(() => resolve()));
-  const child = spawn(process.execPath, ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')], {
+  const child = spawn(process.execPath, ['--import', loaderUrl, path.join(root, 'server.ts')], {
     cwd: dir, env: { ...process.env, PORT: String(port), GITHUB_TOKEN: '' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   const base = `http://127.0.0.1:${port}`;
@@ -427,7 +429,7 @@ test('server protects vaults, preserves collisions, and handles real media flows
     await new Promise<void>((resolve) => proxySock.close(() => resolve()));
     const proxyChild = spawn(
       process.execPath,
-      ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')],
+      ['--import', loaderUrl, path.join(root, 'server.ts')],
       {
         cwd: dir,
         env: { ...process.env, PORT: String(proxyPort), GITHUB_TOKEN: '', TRUST_PROXY: '1' },
@@ -525,7 +527,7 @@ test('server protects vaults, preserves collisions, and handles real media flows
       await new Promise<void>((resolve) => rlSock.close(() => resolve()));
       const rlChild = spawn(
         process.execPath,
-        ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')],
+        ['--import', loaderUrl, path.join(root, 'server.ts')],
         {
           cwd: dir,
           env: {
@@ -583,7 +585,7 @@ test('server protects vaults, preserves collisions, and handles real media flows
       let trueOutput = '';
       const trueChild = spawn(
         process.execPath,
-        ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')],
+        ['--import', loaderUrl, path.join(root, 'server.ts')],
         {
           cwd: dir,
           env: { ...process.env, PORT: String(truePort), GITHUB_TOKEN: '', TRUST_PROXY: 'true' },
@@ -643,7 +645,7 @@ test('server protects vaults, preserves collisions, and handles real media flows
       await new Promise<void>((resolve) => subnetSock.close(() => resolve()));
       const subnetChild = spawn(
         process.execPath,
-        ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')],
+        ['--import', loaderUrl, path.join(root, 'server.ts')],
         {
           cwd: dir,
           env: { ...process.env, PORT: String(subnetPort), GITHUB_TOKEN: '', TRUST_PROXY: '127.0.0.0/8, 10.0.0.0/8' },
@@ -684,15 +686,22 @@ test('server protects vaults, preserves collisions, and handles real media flows
           'TRUST_PROXY con lista di subnet (127.0.0.0/8, 10.0.0.0/8) deve accettare X-Forwarded-* dal proxy fidato'
         );
       } finally {
-        subnetChild.kill();
-        await once(subnetChild, 'exit').catch(() => {});
+        if (subnetChild.exitCode === null) {
+          subnetChild.kill();
+          await once(subnetChild, 'exit').catch(() => {});
+        }
       }
     } finally {
-      proxyChild.kill();
-      await once(proxyChild, 'exit').catch(() => {});
+      if (proxyChild.exitCode === null) {
+        proxyChild.kill();
+        await once(proxyChild, 'exit').catch(() => {});
+      }
     }
   } finally {
-    child.kill(); await once(child, 'exit').catch(() => {});
+    if (child.exitCode === null) {
+      child.kill();
+      await once(child, 'exit').catch(() => {});
+    }
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

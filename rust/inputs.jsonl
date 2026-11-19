@@ -1,0 +1,17 @@
+{"name": "root_page", "method": "GET", "path": "/"}
+{"name": "login_page", "method": "GET", "path": "/login"}
+{"name": "trash_page", "method": "GET", "path": "/trash"}
+{"name": "map_page", "method": "GET", "path": "/map"}
+{"name": "session_status", "method": "GET", "path": "/api/session"}
+{"name": "list_albums", "method": "GET", "path": "/api/albums"}
+{"name": "list_favorites", "method": "GET", "path": "/api/favorites"}
+{"name": "list_memories", "method": "GET", "path": "/api/memories"}
+{"name": "search_empty", "method": "GET", "path": "/api/search"}
+{"name": "search_query", "method": "GET", "path": "/api/search?q=photo"}
+{"name": "push_vapid_key", "method": "GET", "path": "/api/push/vapid-key"}
+{"name": "list_shares", "method": "GET", "path": "/api/shares"}
+{"name": "similar_duplicates", "method": "POST", "path": "/api/similar_duplicates", "headers": {"Content-Type": "application/json"}, "body": "{}"}
+{"name": "albums_create_empty", "method": "POST", "path": "/api/albums/create", "headers": {"Content-Type": "application/json"}, "body": "{}"}
+{"name": "favorites_toggle_missing", "method": "POST", "path": "/api/favorites/toggle", "headers": {"Content-Type": "application/json"}, "body": "{}"}
+{"name": "not_found", "method": "GET", "path": "/api/nonexistent_route_404"}
+{"name": "trap_unicode_path", "method": "GET", "path": "/api/search?q=%F0%9F%93%B8%20vacanze%20estive%202026"}

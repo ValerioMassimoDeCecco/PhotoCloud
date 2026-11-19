@@ -1256,7 +1256,7 @@ test('Persistent APK Signing Engine: Draft Release Vault + Secrets + Continuity 
     });
     assert.equal(secondRes.source, 'user-protected-file');
     assert.equal(secondRes.config?.certSha256, firstRes.config?.certSha256);
-    assert.equal(secondEnv.PHOTOCLOUD_KEYSTORE_PATH, firstRes.config?.storeFile);
+    assert.equal(path.resolve(secondEnv.PHOTOCLOUD_KEYSTORE_PATH!), path.resolve(firstRes.config!.storeFile));
     assert.equal(secondEnv.PHOTOCLOUD_KEYSTORE_PASSWORD, firstRes.config?.storePassword);
     assert.equal(secondEnv.PHOTOCLOUD_KEY_ALIAS, firstRes.config?.keyAlias);
     assert.equal(secondEnv.PHOTOCLOUD_KEY_PASSWORD, firstRes.config?.keyPassword);

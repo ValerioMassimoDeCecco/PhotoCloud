@@ -6,9 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
 import { Jimp } from 'jimp';
 
 const root = process.cwd();
+const loaderUrl = pathToFileURL(path.join(root, 'node_modules/tsx/dist/loader.mjs')).href;
 
 async function makePng(seedVariant: 'split' | 'stripes' | 'dots'): Promise<Buffer> {
   const img = new Jimp({ width: 48, height: 48, color: 0x336699ff });
@@ -39,7 +41,7 @@ test('v1.4.0: preferiti, ricordi, ricerca NL, condivisioni pubbliche, album mult
   await new Promise<void>((resolve) => socket.close(() => resolve()));
   const child = spawn(
     process.execPath,
-    ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'server.ts')],
+    ['--import', loaderUrl, path.join(root, 'server.ts')],
     { cwd: dir, env: { ...process.env, PORT: String(port), GITHUB_TOKEN: '' }, stdio: ['ignore', 'pipe', 'pipe'] }
   );
   const base = `http://127.0.0.1:${port}`;

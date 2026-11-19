@@ -1,0 +1,3047 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "C:\\Users\\Valerio\\Documents\\PhotoCloud",
+  "unit": "src/lib/",
+  "language": "ts",
+  "kind": "napi",
+  "crate_name": "lib-rs",
+  "exports": [
+    {
+      "name": "validateAndroidConfig",
+      "file": "src/lib/androidBuilder.ts",
+      "line": 21,
+      "params": [
+        {
+          "name": "config",
+          "ts_type": "AndroidBuildConfig",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "generateAndroidManifestXml",
+      "file": "src/lib/androidBuilder.ts",
+      "line": 46,
+      "params": [
+        {
+          "name": "config",
+          "ts_type": "AndroidBuildConfig",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "generateAppBuildGradleKts",
+      "file": "src/lib/androidBuilder.ts",
+      "line": 88,
+      "params": [
+        {
+          "name": "config",
+          "ts_type": "AndroidBuildConfig",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "generateMainActivityKt",
+      "file": "src/lib/androidBuilder.ts",
+      "line": 217,
+      "params": [
+        {
+          "name": "config",
+          "ts_type": "AndroidBuildConfig",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "generateApiKey",
+      "file": "src/lib/crypto.ts",
+      "line": 14,
+      "params": [
+        {
+          "name": "length",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "hashKey",
+      "file": "src/lib/crypto.ts",
+      "line": 33,
+      "params": [
+        {
+          "name": "key",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "verifyKey",
+      "file": "src/lib/crypto.ts",
+      "line": 40,
+      "params": [
+        {
+          "name": "key",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "storedHash",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "deriveKey",
+      "file": "src/lib/crypto.ts",
+      "line": 77,
+      "params": [
+        {
+          "name": "key",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "salt",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Buffer",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "deriveKeyAsync",
+      "file": "src/lib/crypto.ts",
+      "line": 92,
+      "params": [
+        {
+          "name": "key",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "salt",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<Buffer>",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "encryptedPlaintextSize",
+      "file": "src/lib/crypto.ts",
+      "line": 116,
+      "params": [
+        {
+          "name": "data",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "encryptFile",
+      "file": "src/lib/crypto.ts",
+      "line": 120,
+      "params": [
+        {
+          "name": "fileData",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "key",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Buffer",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "encryptFileAsync",
+      "file": "src/lib/crypto.ts",
+      "line": 128,
+      "params": [
+        {
+          "name": "fileData",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "key",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<Buffer>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "encryptFileStream",
+      "file": "src/lib/crypto.ts",
+      "line": 141,
+      "params": [
+        {
+          "name": "inputPath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "outputPath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "key",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<{ sha256: string; plaintextSize: number }>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "decryptFile",
+      "file": "src/lib/crypto.ts",
+      "line": 227,
+      "params": [
+        {
+          "name": "encryptedData",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "key",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Buffer",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "decryptFileAsync",
+      "file": "src/lib/crypto.ts",
+      "line": 245,
+      "params": [
+        {
+          "name": "encryptedData",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "key",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<Buffer>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "decryptFileSha256Stream",
+      "file": "src/lib/crypto.ts",
+      "line": 269,
+      "params": [
+        {
+          "name": "encryptedPath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "key",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<{ sha256: string; plaintextSize: number }>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "calculateBufferHash",
+      "file": "src/lib/crypto.ts",
+      "line": 342,
+      "params": [
+        {
+          "name": "data",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "findDuplicateGroups",
+      "file": "src/lib/crypto.ts",
+      "line": 349,
+      "params": [
+        {
+          "name": "items",
+          "ts_type": "Array<{ filename: string; hash: string | null }>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string[][]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "resolveFileViewerSpec",
+      "file": "src/lib/documentEngine.ts",
+      "line": 180,
+      "params": [
+        {
+          "name": "filename",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "FileViewerSpec",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseDelimitedTextToSheet",
+      "file": "src/lib/documentEngine.ts",
+      "line": 510,
+      "params": [
+        {
+          "name": "text",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "delimiter",
+          "ts_type": "string",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "sheetName",
+          "ts_type": "string",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "SpreadsheetSheet",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseDocumentBuffer",
+      "file": "src/lib/documentEngine.ts",
+      "line": 602,
+      "params": [
+        {
+          "name": "arg1",
+          "ts_type": "string | Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "arg2",
+          "ts_type": "Buffer | string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "fromTrash",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<ParsedDocumentPreview>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "emptyExifMetadata",
+      "file": "src/lib/exif.ts",
+      "line": 37,
+      "params": [],
+      "returns": "ExifMetadata",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isExifParseableFilename",
+      "file": "src/lib/exif.ts",
+      "line": 57,
+      "params": [
+        {
+          "name": "filename",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseExifDateTimeMs",
+      "file": "src/lib/exif.ts",
+      "line": 203,
+      "params": [
+        {
+          "name": "raw",
+          "ts_type": "string | null",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseExifFromJpeg",
+      "file": "src/lib/exif.ts",
+      "line": 229,
+      "params": [
+        {
+          "name": "buffer",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "ExifMetadata",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "readCurrentAndroidReleaseVersion",
+      "file": "src/lib/githubReleasePublisher.ts",
+      "line": 44,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "{\r\n  versionName: string;\r\n  versionCode: number;\r\n  tagName: string;\r\n  apkFilename: string;\r\n}",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "collectFilesToSync",
+      "file": "src/lib/githubReleasePublisher.ts",
+      "line": 168,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "extractApkSigningCertSha256",
+      "file": "src/lib/githubReleasePublisher.ts",
+      "line": 221,
+      "params": [
+        {
+          "name": "apkBuffer",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<string>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "compileSignedAndroidApk",
+      "file": "src/lib/githubReleasePublisher.ts",
+      "line": 246,
+      "params": [
+        {
+          "name": "outputDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<{\r\n  apkPath: string; apkBuffer: Buffer; sha256: string; metadataPath: string; signingCertSha256: string;\r\n}>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "triggerGitHubActionsBuild",
+      "file": "src/lib/githubReleasePublisher.ts",
+      "line": 315,
+      "params": [
+        {
+          "name": "options",
+          "ts_type": "{\r\n  githubToken?: string;\r\n  branch?: string;\r\n  releaseTag?: string;\r\n}",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<GitHubActionsRunStatus>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "publishApkToGitHubRelease",
+      "file": "src/lib/githubReleasePublisher.ts",
+      "line": 457,
+      "params": [
+        {
+          "name": "options",
+          "ts_type": "{\r\n  githubToken?: string;\r\n  tagName?: string;\r\n  releaseName?: string;\r\n  body?: string;\r\n  apkPath: string;\r\n  sha256: string;\r\n}",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<GitHubReleaseStatus>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "groupMediaItems",
+      "file": "src/lib/grouping.ts",
+      "line": 7,
+      "params": [
+        {
+          "name": "items",
+          "ts_type": "MediaItem[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "level",
+          "ts_type": "'none' | 'day' | 'month' | 'year'",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "GroupedMedia[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isVideoFilename",
+      "file": "src/lib/grouping.ts",
+      "line": 48,
+      "params": [
+        {
+          "name": "filename",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "normalizeSha256Hex",
+      "file": "src/lib/hashIndex.ts",
+      "line": 52,
+      "params": [
+        {
+          "name": "raw",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "cleanupOrphanTempFiles",
+      "file": "src/lib/hashIndex.ts",
+      "line": 70,
+      "params": [
+        {
+          "name": "tempUploadDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "options",
+          "ts_type": "OrphanTempCleanupOptions",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "sanitizeHexColor",
+      "file": "src/lib/liquidGlassEngine.ts",
+      "line": 259,
+      "params": [
+        {
+          "name": "val",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "fallback",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "hexToRgbTuple",
+      "file": "src/lib/liquidGlassEngine.ts",
+      "line": 274,
+      "params": [
+        {
+          "name": "hex",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "[number, number, number]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "sanitizeLiquidGlassConfig",
+      "file": "src/lib/liquidGlassEngine.ts",
+      "line": 282,
+      "params": [
+        {
+          "name": "raw",
+          "ts_type": "Partial<LiquidGlassConfig> | null | undefined",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "LiquidGlassConfig",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "computeLiquidGlassCssVariables",
+      "file": "src/lib/liquidGlassEngine.ts",
+      "line": 345,
+      "params": [
+        {
+          "name": "rawConfig",
+          "ts_type": "Partial<LiquidGlassConfig>",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "isDarkMode",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "Record<string, string>",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "exportLiquidGlassConfigJson",
+      "file": "src/lib/liquidGlassEngine.ts",
+      "line": 402,
+      "params": [
+        {
+          "name": "config",
+          "ts_type": "Partial<LiquidGlassConfig>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "importLiquidGlassConfigJson",
+      "file": "src/lib/liquidGlassEngine.ts",
+      "line": 415,
+      "params": [
+        {
+          "name": "jsonText",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "LiquidGlassConfig | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "renderMapPage",
+      "file": "src/lib/mapPage.ts",
+      "line": 13,
+      "params": [
+        {
+          "name": "username",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseNaturalQuery",
+      "file": "src/lib/nlSearch.ts",
+      "line": 67,
+      "params": [
+        {
+          "name": "rawQuery",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "now",
+          "ts_type": "Date",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "NaturalQuery",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "mediaItemMatchesQuery",
+      "file": "src/lib/nlSearch.ts",
+      "line": 213,
+      "params": [
+        {
+          "name": "item",
+          "ts_type": "SearchableMediaItem",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "q",
+          "ts_type": "NaturalQuery",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "favorites",
+          "ts_type": "ReadonlySet<string>",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "searchMediaItems",
+      "file": "src/lib/nlSearch.ts",
+      "line": 257,
+      "params": [
+        {
+          "name": "items",
+          "ts_type": "SearchableMediaItem[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "rawQuery",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "favorites",
+          "ts_type": "ReadonlySet<string>",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "now",
+          "ts_type": "Date",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "{ query: NaturalQuery; results: SearchableMediaItem[] }",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "getProtectedSigningDir",
+      "file": "src/lib/persistentSigning.ts",
+      "line": 19,
+      "params": [
+        {
+          "name": "homeDir",
+          "ts_type": "unknown",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "getProtectedSigningPropertiesPath",
+      "file": "src/lib/persistentSigning.ts",
+      "line": 23,
+      "params": [
+        {
+          "name": "env",
+          "ts_type": "NodeJS.ProcessEnv",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "homeDir",
+          "ts_type": "unknown",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseSigningProperties",
+      "file": "src/lib/persistentSigning.ts",
+      "line": 34,
+      "params": [
+        {
+          "name": "content",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Record<string, string>",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "serializeSigningProperties",
+      "file": "src/lib/persistentSigning.ts",
+      "line": 61,
+      "params": [
+        {
+          "name": "cfg",
+          "ts_type": "PersistentSigningConfig",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "enforceProtectedPermissions",
+      "file": "src/lib/persistentSigning.ts",
+      "line": 80,
+      "params": [
+        {
+          "name": "targetPath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "isDirectory",
+          "ts_type": "boolean",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "readSigningPropertiesFile",
+      "file": "src/lib/persistentSigning.ts",
+      "line": 89,
+      "params": [
+        {
+          "name": "filePath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Partial<PersistentSigningConfig> | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeProtectedSigningProperties",
+      "file": "src/lib/persistentSigning.ts",
+      "line": 116,
+      "params": [
+        {
+          "name": "filePath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "cfg",
+          "ts_type": "PersistentSigningConfig",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "computePkcs12CertSha256WithOpenSsl",
+      "file": "src/lib/persistentSigning.ts",
+      "line": 136,
+      "params": [
+        {
+          "name": "p12Path",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "password",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "createPersistentPkcs12Keystore",
+      "file": "src/lib/persistentSigning.ts",
+      "line": 150,
+      "params": [
+        {
+          "name": "targetPath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "password",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "alias",
+          "ts_type": "unknown",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "PersistentSigningConfig",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "applySigningEnvFromProtectedConfig",
+      "file": "src/lib/persistentSigning.ts",
+      "line": 277,
+      "params": [
+        {
+          "name": "options",
+          "ts_type": "{\r\n  env?: NodeJS.ProcessEnv;\r\n  homeDir?: string;\r\n  projectDir?: string;\r\n  persistEnvToProtectedFile?: boolean;\r\n}",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "SigningEnvResolution",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "ensurePersistentLocalSigning",
+      "file": "src/lib/persistentSigning.ts",
+      "line": 383,
+      "params": [
+        {
+          "name": "options",
+          "ts_type": "{\r\n  env?: NodeJS.ProcessEnv;\r\n  homeDir?: string;\r\n  projectDir?: string;\r\n  autoCreateIfMissing?: boolean;\r\n}",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "SigningEnvResolution",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isPHashSupportedFilename",
+      "file": "src/lib/phash.ts",
+      "line": 23,
+      "params": [
+        {
+          "name": "filename",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "dctPHashFromGrayPixels",
+      "file": "src/lib/phash.ts",
+      "line": 52,
+      "params": [
+        {
+          "name": "gray",
+          "ts_type": "ArrayLike<number>",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "size",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "lowFreq",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "bigint",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "pHashToHex",
+      "file": "src/lib/phash.ts",
+      "line": 115,
+      "params": [
+        {
+          "name": "hash",
+          "ts_type": "bigint",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "hexToPHash",
+      "file": "src/lib/phash.ts",
+      "line": 119,
+      "params": [
+        {
+          "name": "hex",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "bigint",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "hammingDistanceHex",
+      "file": "src/lib/phash.ts",
+      "line": 126,
+      "params": [
+        {
+          "name": "a",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "b",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "computePHashHex",
+      "file": "src/lib/phash.ts",
+      "line": 141,
+      "params": [
+        {
+          "name": "buffer",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<string>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "groupSimilarByHash",
+      "file": "src/lib/phash.ts",
+      "line": 159,
+      "params": [
+        {
+          "name": "entries",
+          "ts_type": "Array<{ filename: string; phash: string }>",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "maxDistance",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "Array<Array<{ filename: string; phash: string }>>",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "applyPresetToEditState",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 131,
+      "params": [
+        {
+          "name": "current",
+          "ts_type": "PhotoEditState",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "presetId",
+          "ts_type": "(| 'original'\r\n  | 'vivid'\r\n  | 'bw'\r\n  | 'sepia'\r\n  | 'cinema'\r\n  | 'cool'\r\n  | 'vintage')",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "PhotoEditState",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "normalizeRotation",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 146,
+      "params": [
+        {
+          "name": "deg",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "clampNormalizedCropBox",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 152,
+      "params": [
+        {
+          "name": "box",
+          "ts_type": "NormalizedCropBox",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "minSpan",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "NormalizedCropBox",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "fitAspectNormalizedCropBox",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 174,
+      "params": [
+        {
+          "name": "srcWidth",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "srcHeight",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "aspect",
+          "ts_type": "('free' | '1:1' | '4:3' | '4:5' | '16:9')",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "NormalizedCropBox",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "dragNormalizedCropHandle",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 190,
+      "params": [
+        {
+          "name": "startBox",
+          "ts_type": "NormalizedCropBox",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "handle",
+          "ts_type": "(| 'nw'\r\n  | 'n'\r\n  | 'ne'\r\n  | 'e'\r\n  | 'se'\r\n  | 's'\r\n  | 'sw'\r\n  | 'w'\r\n  | 'move')",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "dxNorm",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "dyNorm",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "aspect",
+          "ts_type": "('free' | '1:1' | '4:3' | '4:5' | '16:9')",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "srcWidth",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "srcHeight",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "minSpan",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "NormalizedCropBox",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "normalizedBoxToPixelRect",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 286,
+      "params": [
+        {
+          "name": "srcWidth",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "srcHeight",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "box",
+          "ts_type": "NormalizedCropBox",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "CropRect",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "computeCropRect",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 301,
+      "params": [
+        {
+          "name": "srcWidth",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "srcHeight",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "aspect",
+          "ts_type": "('free' | '1:1' | '4:3' | '4:5' | '16:9')",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "CropRect",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "clampByte",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 336,
+      "params": [
+        {
+          "name": "val",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "transformRgbPixel",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 340,
+      "params": [
+        {
+          "name": "r",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "g",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "b",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "state",
+          "ts_type": "Pick<PhotoEditState, 'brightness' | 'contrast' | 'saturation' | 'warmth'>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "[number, number, number]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "clampTrimRange",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 399,
+      "params": [
+        {
+          "name": "startSec",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "endSec",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "durationSec",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "minClipSec",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "VideoTrimRange",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "formatMediaDuration",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 427,
+      "params": [
+        {
+          "name": "seconds",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "withTenths",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "buildCssFilterString",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 444,
+      "params": [
+        {
+          "name": "state",
+          "ts_type": "Pick<PhotoEditState, 'brightness' | 'contrast' | 'saturation' | 'warmth'>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "computeFittedMediaSize",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 484,
+      "params": [
+        {
+          "name": "viewportWidth",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "viewportHeight",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "mediaWidth",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "mediaHeight",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "MediaDimensions",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "clampZoomPan",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 511,
+      "params": [
+        {
+          "name": "scale",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "panX",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "panY",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "viewportWidth",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "viewportHeight",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "minScale",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "maxScale",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "mediaWidth",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "mediaHeight",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "ZoomPanState",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "computePinchZoomPan",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 564,
+      "params": [
+        {
+          "name": "input",
+          "ts_type": "PinchZoomStepInput",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "ZoomPanState",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "getVapidPublicKey",
+      "file": "src/lib/pushService.ts",
+      "line": 37,
+      "params": [],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "initPushService",
+      "file": "src/lib/pushService.ts",
+      "line": 44,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<{ publicKey: string } | null>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "getUserPushPath",
+      "file": "src/lib/pushService.ts",
+      "line": 86,
+      "params": [
+        {
+          "name": "userFolder",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "loadUserSubscriptions",
+      "file": "src/lib/pushService.ts",
+      "line": 90,
+      "params": [
+        {
+          "name": "userFolder",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "PushSubscriptionRecord[]",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "saveUserSubscriptions",
+      "file": "src/lib/pushService.ts",
+      "line": 107,
+      "params": [
+        {
+          "name": "userFolder",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "subscriptions",
+          "ts_type": "PushSubscriptionRecord[]",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "addUserSubscription",
+      "file": "src/lib/pushService.ts",
+      "line": 111,
+      "params": [
+        {
+          "name": "userFolder",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "sub",
+          "ts_type": "PushSubscriptionRecord",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "removeUserSubscription",
+      "file": "src/lib/pushService.ts",
+      "line": 120,
+      "params": [
+        {
+          "name": "userFolder",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "endpoint",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "sendPushToUser",
+      "file": "src/lib/pushService.ts",
+      "line": 131,
+      "params": [
+        {
+          "name": "userFolder",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "payload",
+          "ts_type": "{ title: string; body: string; icon?: string; url?: string; tag?: string }",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<{ sent: number; removed: number }>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "renderSharePage",
+      "file": "src/lib/sharePage.ts",
+      "line": 183,
+      "params": [
+        {
+          "name": "model",
+          "ts_type": "SharePageModel",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "renderSharePasswordPage",
+      "file": "src/lib/sharePage.ts",
+      "line": 264,
+      "params": [
+        {
+          "name": "token",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "error",
+          "ts_type": "string",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "renderShareErrorPage",
+      "file": "src/lib/sharePage.ts",
+      "line": 288,
+      "params": [
+        {
+          "name": "state",
+          "ts_type": "Exclude<('ok' | 'locked' | 'expired' | 'exhausted' | 'invalid'), 'ok' | 'locked'>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "getSharesFilePath",
+      "file": "src/lib/sharing.ts",
+      "line": 57,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "getAlbumSharesFilePath",
+      "file": "src/lib/sharing.ts",
+      "line": 61,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "loadPublicShares",
+      "file": "src/lib/sharing.ts",
+      "line": 115,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Record<string, PublicShareRecord>",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "savePublicShares",
+      "file": "src/lib/sharing.ts",
+      "line": 126,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "shares",
+          "ts_type": "Record<string, PublicShareRecord>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "loadAlbumShares",
+      "file": "src/lib/sharing.ts",
+      "line": 130,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Record<string, AlbumShareRecord>",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "saveAlbumShares",
+      "file": "src/lib/sharing.ts",
+      "line": 141,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "shares",
+          "ts_type": "Record<string, AlbumShareRecord>",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "createPublicShare",
+      "file": "src/lib/sharing.ts",
+      "line": 159,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "serverSecret",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "input",
+          "ts_type": "CreatePublicShareInput",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "verifySharePassword",
+      "file": "src/lib/sharing.ts",
+      "line": 184,
+      "params": [
+        {
+          "name": "record",
+          "ts_type": "PublicShareRecord",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "password",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "resolveShareByToken",
+      "file": "src/lib/sharing.ts",
+      "line": 196,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "token",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "| { id: string; record: PublicShareRecord }\r\n  | { error: 'invalid' | 'expired' }\r\n  | { error: 'exhausted'; id: string; record: PublicShareRecord }",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "incrementShareDownloadCount",
+      "file": "src/lib/sharing.ts",
+      "line": 215,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "id",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "upsertAlbumShare",
+      "file": "src/lib/sharing.ts",
+      "line": 229,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "serverSecret",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "owner",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "album",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "ownerApiKey",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "username",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "role",
+          "ts_type": "'viewer' | 'contributor'",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "AlbumShareRecord",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "deleteAlbumSharesForAlbum",
+      "file": "src/lib/sharing.ts",
+      "line": 257,
+      "params": [
+        {
+          "name": "rootDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "owner",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "album",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "escapeHtml",
+      "file": "src/lib/templateRenderer.ts",
+      "line": 23,
+      "params": [
+        {
+          "name": "str",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "formatFileSize",
+      "file": "src/lib/templateRenderer.ts",
+      "line": 59,
+      "params": [
+        {
+          "name": "bytes",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "computeCloudStorageStats",
+      "file": "src/lib/templateRenderer.ts",
+      "line": 66,
+      "params": [
+        {
+          "name": "activeFiles",
+          "ts_type": "MediaItem[]",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "trashedFiles",
+          "ts_type": "MediaItem[]",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "thumbCacheBytes",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "CloudStorageStats",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "renderLoginTemplate",
+      "file": "src/lib/templateRenderer.ts",
+      "line": 155,
+      "params": [
+        {
+          "name": "errorMessage",
+          "ts_type": "string",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "renderGalleryTemplate",
+      "file": "src/lib/templateRenderer.ts",
+      "line": 180,
+      "params": [
+        {
+          "name": "allFiles",
+          "ts_type": "MediaItem[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "albums",
+          "ts_type": "string[]",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "trashedFiles",
+          "ts_type": "MediaItem[]",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "favorites",
+          "ts_type": "string[]",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "renderTrashTemplate",
+      "file": "src/lib/templateRenderer.ts",
+      "line": 850,
+      "params": [
+        {
+          "name": "trashedFiles",
+          "ts_type": "MediaItem[]",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "activeFiles",
+          "ts_type": "MediaItem[]",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "resolveThumbCacheMaxBytes",
+      "file": "src/lib/thumbCache.ts",
+      "line": 85,
+      "params": [
+        {
+          "name": "overrideMaxBytes",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "number",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parsePreviewVariant",
+      "file": "src/lib/thumbCache.ts",
+      "line": 94,
+      "params": [
+        {
+          "name": "rawQuery",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "isExplicitDownload",
+          "ts_type": "boolean",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "('thumb' | 'large') | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isJpegMagicBytes",
+      "file": "src/lib/thumbCache.ts",
+      "line": 102,
+      "params": [
+        {
+          "name": "buf",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeJsonAtomic",
+      "file": "src/lib/vaultStorage.ts",
+      "line": 24,
+      "params": [
+        {
+          "name": "filePath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "data",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "getOrCreateServerSecret",
+      "file": "src/lib/vaultStorage.ts",
+      "line": 46,
+      "params": [
+        {
+          "name": "storageDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Buffer",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "wrapSecret",
+      "file": "src/lib/vaultStorage.ts",
+      "line": 84,
+      "params": [
+        {
+          "name": "serverSecret",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "plaintext",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "WrappedSecret",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "unwrapSecret",
+      "file": "src/lib/vaultStorage.ts",
+      "line": 100,
+      "params": [
+        {
+          "name": "serverSecret",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "wrapped",
+          "ts_type": "WrappedSecret",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "hashLookupToken",
+      "file": "src/lib/vaultStorage.ts",
+      "line": 117,
+      "params": [
+        {
+          "name": "token",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isValidUuidV4",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 167,
+      "params": [
+        {
+          "name": "value",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "value is string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "decodeBase64UrlStrict",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 171,
+      "params": [
+        {
+          "name": "input",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "expectedByteLength",
+          "ts_type": "number",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "Buffer | null",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "computeScryptVerifierAsync",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 190,
+      "params": [
+        {
+          "name": "authSecretBytes",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "serverSalt",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<Buffer>",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "verifyScryptConstantTime",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 210,
+      "params": [
+        {
+          "name": "authSecretBytes",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "serverSalt",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "expectedVerifier",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<boolean>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "deriveFakeSaltForUsername",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 222,
+      "params": [
+        {
+          "name": "serverSecret",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "username",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "string",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "computeFileSha256Hex",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 230,
+      "params": [
+        {
+          "name": "filePath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "Promise<string>",
+      "is_async": true,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "timingSafeHexEqual",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 240,
+      "params": [
+        {
+          "name": "hexA",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "hexB",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "fsyncDirBestEffort",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 254,
+      "params": [
+        {
+          "name": "dirPath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "writeBufferAtomicSync",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 267,
+      "params": [
+        {
+          "name": "tempDir",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "targetPath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "data",
+          "ts_type": "Buffer",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "moveTempFileAtomicSync",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 286,
+      "params": [
+        {
+          "name": "tempFilePath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "targetPath",
+          "ts_type": "string",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "void",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseHttpRangeHeader",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 308,
+      "params": [
+        {
+          "name": "rangeHeader",
+          "ts_type": "string | undefined",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "totalSize",
+          "ts_type": "number",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "(| { kind: 'none' }\r\n  | { kind: 'satisfiable'; start: number; end: number }\r\n  | { kind: 'unsatisfiable' })",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "verifyInviteTokenConstantTime",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 844,
+      "params": [
+        {
+          "name": "expectedToken",
+          "ts_type": "string | undefined",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "providedToken",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "isSecureOrLocalhostRequest",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 858,
+      "params": [
+        {
+          "name": "req",
+          "ts_type": "Request",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "boolean",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "VaultHashIndex",
+      "file": "src/lib/hashIndex.ts",
+      "line": 125,
+      "reason": "class: async or generator method `recordFileHash`, async or generator method `removeFileHash`, async or generator method `removeManyFileHashes`, async or generator method `resolveAllActiveHashes`, async or generator method `checkBackupItems`"
+    },
+    {
+      "name": "createEditHistory",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 604,
+      "reason": "generic over `T`: values of any shape, functions included"
+    },
+    {
+      "name": "pushEditSnapshot",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 608,
+      "reason": "generic over `T`: values of any shape, functions included"
+    },
+    {
+      "name": "undoEditSnapshot",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 624,
+      "reason": "generic over `T`: values of any shape, functions included"
+    },
+    {
+      "name": "redoEditSnapshot",
+      "file": "src/lib/photoEditorMath.ts",
+      "line": 634,
+      "reason": "generic over `T`: values of any shape, functions included"
+    },
+    {
+      "name": "ThumbCacheManager",
+      "file": "src/lib/thumbCache.ts",
+      "line": 180,
+      "reason": "class: async or generator method `getOrCreateThumbnail`, async or generator method `putClientThumbnail`"
+    },
+    {
+      "name": "parseTrustProxyConfig",
+      "file": "src/lib/trustProxy.ts",
+      "line": 20,
+      "reason": "takes or returns a function"
+    },
+    {
+      "name": "safeJsonParse",
+      "file": "src/lib/vaultStorage.ts",
+      "line": 14,
+      "reason": "generic over `T`: values of any shape, functions included"
+    },
+    {
+      "name": "readJsonFile",
+      "file": "src/lib/vaultStorage.ts",
+      "line": 32,
+      "reason": "generic over `T`: values of any shape, functions included"
+    },
+    {
+      "name": "sanitizePlainObject",
+      "file": "src/lib/vaultStorage.ts",
+      "line": 121,
+      "reason": "generic over `T`: values of any shape, functions included"
+    },
+    {
+      "name": "SqliteIndexStore",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 440,
+      "reason": "class: `prepare`: uses `IndexStatement`, which has function members"
+    },
+    {
+      "name": "ZkVaultStoreV2",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 465,
+      "reason": "class: public field `indexStore`, public field `db`, public field `vaultV2Dir`, public field `tempUploadDir`"
+    },
+    {
+      "name": "redactLogData",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 103,
+      "reason": "checks `instanceof`: class identity does not survive the bridge"
+    },
+    {
+      "name": "createRedactingLogger",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 143,
+      "reason": "takes or returns a function"
+    },
+    {
+      "name": "createZkV2Router",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 997,
+      "reason": "takes or returns a function"
+    },
+    {
+      "name": "createZkV2App",
+      "file": "src/lib/zkServerV2.ts",
+      "line": 3148,
+      "reason": "uses `ZkV2ServerOptions`, which has function members"
+    }
+  ]
+}
