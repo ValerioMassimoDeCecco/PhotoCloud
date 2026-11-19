@@ -570,39 +570,40 @@ class ZkBlobUploadPipeline(
             spoolDir.mkdirs()
         }
 
-        var existingState = resumableStore.get(source.sourceKey)
-        var spoolFile: File? = existingState?.let { File(spoolDir, it.spoolFileName) }
+        var loadedState: ZkResumableUploadState? = resumableStore.get(source.sourceKey)
+        var spoolFile: File? = loadedState?.let { File(spoolDir, it.spoolFileName) }
         var thumbPair: ZkThumbPair? = null
 
         try {
             // Validate existing checkpoint integrity; discard if spool disappeared or truncated
-            if (existingState != null) {
+            val candidateExisting = loadedState
+            if (candidateExisting != null) {
                 val f = spoolFile
-                if (f == null || !f.exists() || f.length() != existingState.totalCiphertextBytes) {
+                if (f == null || !f.exists() || f.length() != candidateExisting.totalCiphertextBytes) {
                     f?.delete()
                     resumableStore.remove(source.sourceKey)
-                    existingState = null
+                    loadedState = null
                     spoolFile = null
                 }
             }
 
             // 1. Streaming 64 KiB dedupTag computation + opaque server check (only when starting fresh)
-            var dedupTagHex: String
-            if (existingState == null) {
+            val validatedExisting: ZkResumableUploadState? = loadedState
+            var state: ZkResumableUploadState = if (validatedExisting == null) {
                 if (!control.checkOrWait(returnImmediatelyOnPause)) {
                     return@withContext ZkUploadOutcome.Cancelled
                 }
                 val dedupBytes = source.openInputStream().use { input ->
                     ZkCoreCrypto.computeDedupTag(subkeys.dedupKey, input)
                 }
-                dedupTagHex = ZkCoreCrypto.toHex(dedupBytes)
+                val computedDedupTagHex = ZkCoreCrypto.toHex(dedupBytes)
                 dedupBytes.zeroize()
 
                 if (checkDedupBeforeUpload) {
-                    val match = dedupCheckPolicy.findExistingOnServer(apiClient, dedupTagHex)
+                    val match = dedupCheckPolicy.findExistingOnServer(apiClient, computedDedupTagHex)
                     if (match != null) {
                         return@withContext ZkUploadOutcome.SkippedDuplicate(
-                            dedupTagHex = dedupTagHex,
+                            dedupTagHex = computedDedupTagHex,
                             existingItemId = match.itemId,
                             existingBlobId = match.blobId
                         )
@@ -661,7 +662,7 @@ class ZkBlobUploadPipeline(
                         durationSec = source.durationSec,
                         rawExif = source.rawExif,
                         includeGps = includeGps,
-                        dedupTag = dedupTagHex,
+                        dedupTag = computedDedupTagHex,
                         thumbs = thumbPair?.toThumbsMeta()
                     )
                 )
@@ -686,10 +687,10 @@ class ZkBlobUploadPipeline(
                     totalChunks = totalUploadChunks,
                     expectedSha256Hex = encResult.ciphertextSha256Hex,
                     encMetaB64u = encMetaB64u,
-                    dedupTag = dedupTagHex
+                    dedupTag = computedDedupTagHex
                 )
 
-                existingState = ZkResumableUploadState(
+                val createdState = ZkResumableUploadState(
                     sourceKey = source.sourceKey,
                     uploadId = initResp.uploadId,
                     blobId = blobId,
@@ -700,16 +701,16 @@ class ZkBlobUploadPipeline(
                     nextChunkIndex = initResp.receivedChunks,
                     expectedSha256Hex = encResult.ciphertextSha256Hex,
                     encMetaB64u = encMetaB64u,
-                    dedupTag = dedupTagHex,
+                    dedupTag = computedDedupTagHex,
                     noncePrefixB64u = ZkCoreCrypto.toBase64Url(noncePrefix),
                     wrappedFkKeystoreB64u = wrappedFkForCheckpoint,
                     spoolFileName = targetSpool.name,
                     updatedAtMs = System.currentTimeMillis()
                 )
                 noncePrefix.zeroize()
-                resumableStore.save(existingState)
+                resumableStore.save(createdState)
+                createdState
             } else {
-                dedupTagHex = existingState.dedupTag.orEmpty()
                 if (thumbPair == null) {
                     thumbPair = try {
                         thumbnailGenerator.generate(source)
@@ -717,10 +718,12 @@ class ZkBlobUploadPipeline(
                         null
                     }
                 }
+                validatedExisting
             }
 
-            var state = existingState
-            val activeSpool = spoolFile!!
+            val dedupTagHex: String = state.dedupTag.orEmpty()
+            val activeSpool: File = spoolFile ?: File(spoolDir, state.spoolFileName)
+            spoolFile = activeSpool
 
             // 5. Sequential streaming chunk upload with resume, 409 resync, and 404 re-init
             var chunkIndex = state.nextChunkIndex
