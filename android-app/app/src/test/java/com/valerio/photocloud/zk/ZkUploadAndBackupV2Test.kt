@@ -784,7 +784,7 @@ class ZkUploadAndBackupV2Test {
             )
 
             // 1. DeviceLockedException -> notification + retryRecommended = true
-            keyStore.simulateDeviceLocked(true)
+            keyStore.deviceUnlocked = false
             val lockedSummary = engine.runOnce(cfg)
             assertEquals(1, lockedNotified)
             assertTrue(lockedSummary.retryRecommended)
@@ -792,7 +792,7 @@ class ZkUploadAndBackupV2Test {
             assertEquals(1, lockedSummary.eligibleCount) // Downloads video filtered out by AutoBackupLogic
 
             // 2. Unlock device -> 413 QUOTA_EXCEEDED -> notifyQuotaExceeded + retryRecommended = false
-            keyStore.simulateDeviceLocked(false)
+            keyStore.deviceUnlocked = true
             statusCodeToReturn.set(413)
             val quotaSummary = engine.runOnce(cfg)
             assertEquals(1, quotaNotified)
@@ -825,7 +825,7 @@ class ZkUploadAndBackupV2Test {
     }
 
     @Test
-    fun `ZkTransferManager clamps parallelism 1..16, detects non-HTTPS warning, and supports pause resume cancel`() = runBlocking {
+    fun `ZkTransferManager clamps parallelism 1 to 16, detects non-HTTPS warning, and supports pause resume cancel`() = runBlocking {
         assertEquals(1, ZkTransferManager.clampParallelism(0))
         assertEquals(1, ZkTransferManager.clampParallelism(-5))
         assertEquals(8, ZkTransferManager.clampParallelism(8))
