@@ -1,6 +1,7 @@
 package com.valerio.photocloud.zk
 
 import com.sun.net.httpserver.HttpExchange
+import com.sun.net.httpserver.HttpHandler
 import com.sun.net.httpserver.HttpServer
 import com.valerio.photocloud.BackupLibraryMode
 import com.valerio.photocloud.BackupMediaScope
@@ -119,101 +120,107 @@ class ZkUploadAndBackupV2Test {
         val serverExecutor = Executors.newSingleThreadExecutor()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.executor = serverExecutor
-        server.createContext("/api/v2/backup/check") { ex: HttpExchange ->
-            ex.requestBody.use { it.readBytes() }
-            val resp = """{"existingTags":[],"existingItems":{}}""".toByteArray(StandardCharsets.UTF_8)
-            ex.responseHeaders.add("Content-Type", "application/json")
-            ex.sendResponseHeaders(200, resp.size.toLong())
-            ex.responseBody.use { it.write(resp) }
-        }
-        server.createContext("/api/v2/blobs/upload/init") { ex: HttpExchange ->
-            val requestBytes = ex.requestBody.use { stream: InputStream -> stream.readBytes() }
-            val body = String(requestBytes, StandardCharsets.UTF_8)
-            val json = JSONObject(body)
-            expectedBlobId = json.getString("blobId")
-            expectedTotalSize = json.getLong("totalSize")
-            expectedChunks = json.getInt("totalChunks")
-            expectedSha = json.getString("expectedSha256")
-            val resp = JSONObject()
-                .put("uploadId", uploadId)
-                .put("blobId", expectedBlobId)
-                .put("receivedChunks", 0)
-                .put("expiresAt", System.currentTimeMillis() + 3600_000L)
-                .toString()
-                .toByteArray(StandardCharsets.UTF_8)
-            ex.responseHeaders.add("Content-Type", "application/json")
-            ex.sendResponseHeaders(201, resp.size.toLong())
-            ex.responseBody.use { it.write(resp) }
-        }
-        server.createContext("/api/v2/blobs/upload/$uploadId/") { ex: HttpExchange ->
-            val path = ex.requestURI.path
-            if (path.endsWith("/complete")) {
+        server.createContext("/api/v2/backup/check", object : HttpHandler {
+            override fun handle(ex: HttpExchange) {
                 ex.requestBody.use { it.readBytes() }
-                val actualSha = ZkCoreCrypto.toHex(serverSha.digest())
-                val status = if (actualSha.equals(expectedSha, ignoreCase = true) && receivedBytes == expectedTotalSize) 201 else 422
-                val resp = if (status == 201) {
-                    JSONObject().put(
-                        "item",
-                        JSONObject()
-                            .put("id", "item-305")
-                            .put("blobId", expectedBlobId)
-                            .put("version", 1)
-                            .put("size", receivedBytes)
-                            .put("sha256", actualSha)
-                            .put("createdAt", System.currentTimeMillis())
-                            .put("updatedAt", System.currentTimeMillis())
-                            .put("state", "active")
-                            .put("trashedAt", JSONObject.NULL)
-                            .put("encMeta", "AAAA")
-                            .put("dedupTag", JSONObject.NULL)
-                            .put("thumbs", JSONArray())
-                    ).toString()
-                } else {
-                    """{"error":"CIPHERTEXT_INTEGRITY_MISMATCH"}"""
-                }.toByteArray(StandardCharsets.UTF_8)
-                ex.responseHeaders.add("Content-Type", "application/json")
-                ex.sendResponseHeaders(status, resp.size.toLong())
-                ex.responseBody.use { it.write(resp) }
-            } else {
-                val idx = path.substringAfterLast('/').toInt()
-                val buf = ByteArray(65536)
-                var firstChunkBytesRead = 0
-                val headerSample = ByteArray(22)
-                ex.requestBody.use { stream ->
-                    while (true) {
-                        val r = stream.read(buf)
-                        if (r <= 0) break
-                        if (idx == 0 && firstChunkBytesRead < headerSample.size) {
-                            val take = min(r, headerSample.size - firstChunkBytesRead)
-                            System.arraycopy(buf, 0, headerSample, firstChunkBytesRead, take)
-                        }
-                        firstChunkBytesRead += r
-                        serverSha.update(buf, 0, r)
-                        receivedBytes += r
-                    }
-                }
-                if (idx == 0) {
-                    val magicOk = headerSample[0] == 0x50.toByte() &&
-                        headerSample[1] == 0x43.toByte() &&
-                        headerSample[2] == 0x5A.toByte() &&
-                        headerSample[3] == 0x4B.toByte() &&
-                        headerSample[4] == 0x01.toByte()
-                    val blobIdOk = ZkCoreCrypto.bytesToUuid(headerSample.copyOfRange(6, 22)) == expectedBlobId
-                    chunk0HeaderMagicOk = magicOk && blobIdOk
-                }
-                receivedChunks++
-                val resp = JSONObject()
-                    .put("uploadId", uploadId)
-                    .put("chunkIndex", idx)
-                    .put("receivedChunks", receivedChunks)
-                    .put("receivedBytes", receivedBytes)
-                    .toString()
-                    .toByteArray(StandardCharsets.UTF_8)
+                val resp = """{"existingTags":[],"existingItems":{}}""".toByteArray(StandardCharsets.UTF_8)
                 ex.responseHeaders.add("Content-Type", "application/json")
                 ex.sendResponseHeaders(200, resp.size.toLong())
                 ex.responseBody.use { it.write(resp) }
             }
-        }
+        })
+        server.createContext("/api/v2/blobs/upload/init", object : HttpHandler {
+            override fun handle(ex: HttpExchange) {
+                val requestBytes = ex.requestBody.use { stream: InputStream -> stream.readBytes() }
+                val body = String(requestBytes, StandardCharsets.UTF_8)
+                val json = JSONObject(body)
+                expectedBlobId = json.getString("blobId")
+                expectedTotalSize = json.getLong("totalSize")
+                expectedChunks = json.getInt("totalChunks")
+                expectedSha = json.getString("expectedSha256")
+                val resp = JSONObject()
+                    .put("uploadId", uploadId)
+                    .put("blobId", expectedBlobId)
+                    .put("receivedChunks", 0)
+                    .put("expiresAt", System.currentTimeMillis() + 3600_000L)
+                    .toString()
+                    .toByteArray(StandardCharsets.UTF_8)
+                ex.responseHeaders.add("Content-Type", "application/json")
+                ex.sendResponseHeaders(201, resp.size.toLong())
+                ex.responseBody.use { it.write(resp) }
+            }
+        })
+        server.createContext("/api/v2/blobs/upload/$uploadId/", object : HttpHandler {
+            override fun handle(ex: HttpExchange) {
+                val path = ex.requestURI.path
+                if (path.endsWith("/complete")) {
+                    ex.requestBody.use { it.readBytes() }
+                    val actualSha = ZkCoreCrypto.toHex(serverSha.digest())
+                    val status = if (actualSha.equals(expectedSha, ignoreCase = true) && receivedBytes == expectedTotalSize) 201 else 422
+                    val resp = if (status == 201) {
+                        JSONObject().put(
+                            "item",
+                            JSONObject()
+                                .put("id", "item-305")
+                                .put("blobId", expectedBlobId)
+                                .put("version", 1)
+                                .put("size", receivedBytes)
+                                .put("sha256", actualSha)
+                                .put("createdAt", System.currentTimeMillis())
+                                .put("updatedAt", System.currentTimeMillis())
+                                .put("state", "active")
+                                .put("trashedAt", JSONObject.NULL)
+                                .put("encMeta", "AAAA")
+                                .put("dedupTag", JSONObject.NULL)
+                                .put("thumbs", JSONArray())
+                        ).toString()
+                    } else {
+                        """{"error":"CIPHERTEXT_INTEGRITY_MISMATCH"}"""
+                    }.toByteArray(StandardCharsets.UTF_8)
+                    ex.responseHeaders.add("Content-Type", "application/json")
+                    ex.sendResponseHeaders(status, resp.size.toLong())
+                    ex.responseBody.use { it.write(resp) }
+                } else {
+                    val idx = path.substringAfterLast('/').toInt()
+                    val buf = ByteArray(65536)
+                    var firstChunkBytesRead = 0
+                    val headerSample = ByteArray(22)
+                    ex.requestBody.use { stream ->
+                        while (true) {
+                            val r = stream.read(buf)
+                            if (r <= 0) break
+                            if (idx == 0 && firstChunkBytesRead < headerSample.size) {
+                                val take = min(r, headerSample.size - firstChunkBytesRead)
+                                System.arraycopy(buf, 0, headerSample, firstChunkBytesRead, take)
+                            }
+                            firstChunkBytesRead += r
+                            serverSha.update(buf, 0, r)
+                            receivedBytes += r
+                        }
+                    }
+                    if (idx == 0) {
+                        val magicOk = headerSample[0] == 0x50.toByte() &&
+                            headerSample[1] == 0x43.toByte() &&
+                            headerSample[2] == 0x5A.toByte() &&
+                            headerSample[3] == 0x4B.toByte() &&
+                            headerSample[4] == 0x01.toByte()
+                        val blobIdOk = ZkCoreCrypto.bytesToUuid(headerSample.copyOfRange(6, 22)) == expectedBlobId
+                        chunk0HeaderMagicOk = magicOk && blobIdOk
+                    }
+                    receivedChunks++
+                    val resp = JSONObject()
+                        .put("uploadId", uploadId)
+                        .put("chunkIndex", idx)
+                        .put("receivedChunks", receivedChunks)
+                        .put("receivedBytes", receivedBytes)
+                        .toString()
+                        .toByteArray(StandardCharsets.UTF_8)
+                    ex.responseHeaders.add("Content-Type", "application/json")
+                    ex.sendResponseHeaders(200, resp.size.toLong())
+                    ex.responseBody.use { it.write(resp) }
+                }
+            }
+        })
         server.start()
 
         try {

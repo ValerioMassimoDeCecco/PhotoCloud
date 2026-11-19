@@ -93,10 +93,10 @@ jobs:
         working-directory: ./android-app
         run: |
           set +e
-          grep -nE "^(e: |.*FAILED|.*tests completed|.*Execution failed for task|.*error: )" unit-test-execution.log | tail -40 |
-            while IFS= read -r line; do echo "::error::$line"; done
-          tail -n 60 unit-test-execution.log |
-            while IFS= read -r line; do echo "::error::$line"; done
+          ERRORS="$(grep -nE "^(e: |.*FAILED|.*tests completed|.*Execution failed for task|.*error: )" unit-test-execution.log | tail -80 | paste -sd ' | ' -)"
+          echo "::error::FULL_ERRORS: ${ERRORS}"
+          TAIL="$(tail -n 120 unit-test-execution.log | paste -sd ' | ' -)"
+          echo "::error::LOG_TAIL: ${TAIL}"
 
       - name: Verify Release Kotlin Compilation & Release APK Build
         working-directory: ./android-app
