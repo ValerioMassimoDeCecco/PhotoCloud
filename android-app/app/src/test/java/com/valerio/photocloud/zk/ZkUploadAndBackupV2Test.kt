@@ -98,7 +98,7 @@ class ZkUploadAndBackupV2Test {
     }
 
     @Test
-    fun `streaming 305 MiB upload runs in constant RAM under -Xmx128m, verifies ciphertext SHA-256, and cleans spool`() = runBlocking {
+    fun `streaming 305 MiB upload runs in constant RAM under -Xmx128m, verifies ciphertext SHA-256, and cleans spool`(): Unit = runBlocking {
         val size305MiB = 305L * 1024L * 1024L
         val (vk, subkeys) = testSubkeys()
         val spoolDir = Files.createTempDirectory("zk_305mb_spool_").toFile()
@@ -247,11 +247,12 @@ class ZkUploadAndBackupV2Test {
             spoolDir.deleteRecursively()
             vk.zeroize()
             subkeys.zeroizeAll()
+            System.gc()
         }
     }
 
     @Test
-    fun `resumable upload recovers from drop and 409 CHUNK_OUT_OF_ORDER, never persists plaintext FK, and cleans orphans`() = runBlocking {
+    fun `resumable upload recovers from drop and 409 CHUNK_OUT_OF_ORDER, never persists plaintext FK, and cleans orphans`(): Unit = runBlocking {
         val (vk, subkeys) = testSubkeys()
         val spoolDir = Files.createTempDirectory("zk_resume_spool_").toFile()
         val keyStore = InMemoryFakeVaultKeyStore().apply { wrapForBackground(vk) }
@@ -497,7 +498,7 @@ class ZkUploadAndBackupV2Test {
     }
 
     @Test
-    fun `dedup skips upload on server hit, thumbs 320 and 1280 upload encrypted, EncryptedThumbDiskCache is ciphertext-only, and Network Spy sees zero leaks`() = runBlocking {
+    fun `dedup skips upload on server hit, thumbs 320 and 1280 upload encrypted, EncryptedThumbDiskCache is ciphertext-only, and Network Spy sees zero leaks`(): Unit = runBlocking {
         val (vk, subkeys) = testSubkeys()
         val spoolDir = Files.createTempDirectory("zk_dedup_spool_").toFile()
         val thumbCacheDir = Files.createTempDirectory("zk_thumb_cache_").toFile()
@@ -662,7 +663,7 @@ class ZkUploadAndBackupV2Test {
     }
 
     @Test
-    fun `ZkAutoBackupEngine handles DeviceLockedException, 413 quota, 401 unauth, 422 integrity, AutoBackupLogic filters, and zeroizes VK`() = runBlocking {
+    fun `ZkAutoBackupEngine handles DeviceLockedException, 413 quota, 401 unauth, 422 integrity, AutoBackupLogic filters, and zeroizes VK`(): Unit = runBlocking {
         val (vk, _) = testSubkeys()
         val spoolDir = Files.createTempDirectory("zk_autobackup_spool_").toFile()
 
@@ -825,7 +826,7 @@ class ZkUploadAndBackupV2Test {
     }
 
     @Test
-    fun `ZkTransferManager clamps parallelism 1 to 16, detects non-HTTPS warning, and supports pause resume cancel`() = runBlocking {
+    fun `ZkTransferManager clamps parallelism 1 to 16, detects non-HTTPS warning, and supports pause resume cancel`(): Unit = runBlocking {
         assertEquals(1, ZkTransferManager.clampParallelism(0))
         assertEquals(1, ZkTransferManager.clampParallelism(-5))
         assertEquals(8, ZkTransferManager.clampParallelism(8))
@@ -888,7 +889,7 @@ class ZkUploadAndBackupV2Test {
     }
 
     @Test
-    fun `ZkChunkedRangeReader Range 206 streaming, ZkExternalOpenHelper zero-wipe, encrypted albums If-Match, and Zero-Knowledge share fragment`() = runBlocking {
+    fun `ZkChunkedRangeReader Range 206 streaming, ZkExternalOpenHelper zero-wipe, encrypted albums If-Match, and Zero-Knowledge share fragment`(): Unit = runBlocking {
         val (vk, subkeys) = testSubkeys()
         val userId = UUID.randomUUID().toString().lowercase()
         val blobId = UUID.randomUUID().toString().lowercase()
@@ -1052,7 +1053,7 @@ class ZkUploadAndBackupV2Test {
     // =========================================================================
 
     @Test
-    fun `documented mutation skip_dedup_check must turn dedup enforcement test RED`() = runBlocking {
+    fun `documented mutation skip_dedup_check must turn dedup enforcement test RED`(): Unit = runBlocking {
         val mutation = System.getProperty("zk.mutation", "")
         val (vk, subkeys) = testSubkeys()
         val spoolDir = Files.createTempDirectory("zk_mut_dedup_").toFile()
@@ -1120,7 +1121,7 @@ class ZkUploadAndBackupV2Test {
     }
 
     @Test
-    fun `documented mutation leak_filename_in_header must turn Network Spy test RED`() = runBlocking {
+    fun `documented mutation leak_filename_in_header must turn Network Spy test RED`(): Unit = runBlocking {
         val mutation = System.getProperty("zk.mutation", "")
         val (vk, subkeys) = testSubkeys()
         val spoolDir = Files.createTempDirectory("zk_mut_hdr_").toFile()
@@ -1185,7 +1186,7 @@ class ZkUploadAndBackupV2Test {
     }
 
     @Test
-    fun `documented mutation persist_plaintext_fk must turn resumable checkpoint secrecy test RED`() = runBlocking {
+    fun `documented mutation persist_plaintext_fk must turn resumable checkpoint secrecy test RED`(): Unit = runBlocking {
         val mutation = System.getProperty("zk.mutation", "")
         val (vk, subkeys) = testSubkeys()
         val spoolDir = Files.createTempDirectory("zk_mut_fk_").toFile()

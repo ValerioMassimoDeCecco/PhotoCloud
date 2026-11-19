@@ -36,7 +36,7 @@ import java.util.UUID
 class AndroidLiveIntegrationTest {
 
     @Test
-    fun `live Node server integration - TS seed decrypt, rewrap, Kotlin upload for TS, and Network Spy`() = runBlocking {
+    fun `live Node server integration - TS seed decrypt, rewrap, Kotlin upload for TS, and Network Spy`(): Unit = runBlocking {
         val configPath = System.getenv("ZK_INTEGRATION_CONFIG")
             ?: System.getProperty("zk.integration.config")
         val requireLive = System.getenv("REQUIRE_ANDROID_INTEGRATION") == "1"
@@ -293,5 +293,6 @@ class AndroidLiveIntegrationTest {
         accountKeyBytes.zeroize()
         kotlinFileKey.zeroize()
         shareKeyBytesForSpy?.zeroize()
+        Unit
     }
 }
