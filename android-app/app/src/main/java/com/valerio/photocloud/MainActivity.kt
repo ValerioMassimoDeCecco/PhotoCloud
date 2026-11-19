@@ -1656,7 +1656,7 @@ fun NativeAuthScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text("Modalità Zero-Knowledge v2 (Beta)")
+                            Text("Modalità Zero-Knowledge v2 (E2EE)")
                         }
                     }
                 }

@@ -228,8 +228,14 @@ export function initZkWebApp(): void {
     header.appendChild(brandGroup);
 
     const actions = el('div', 'header-actions');
+    const backV1Link = el('a', 'btn btn-ghost', 'PhotoCloud Classico');
+    backV1Link.id = 'btn-back-v1';
+    backV1Link.href = '/';
+    backV1Link.title = 'Torna a PhotoCloud Classico (v1)';
+    actions.appendChild(backV1Link);
+
     if (client.isUnlocked()) {
-      const userLabel = el('span', 'media-card-meta', `Utente: ${client.getUsername() ?? ''}`);
+      const userLabel = el('span', 'media-card-meta user-chip', `Utente: ${client.getUsername() ?? ''}`);
       actions.appendChild(userLabel);
 
       if (lastGeneratedKeyFile) {
@@ -292,6 +298,17 @@ export function initZkWebApp(): void {
 
   function renderAuthView(container: HTMLElement): void {
     const box = el('main', 'auth-container');
+
+    const authHero = el('div', 'auth-hero');
+    authHero.appendChild(el('h1', 'auth-hero-title', 'Vault Zero-Knowledge'));
+    authHero.appendChild(
+      el(
+        'p',
+        'auth-hero-sub',
+        'Cifratura client-side Argon2id + AES-256-GCM. Le tue chiavi non lasciano mai il dispositivo.'
+      )
+    );
+    box.appendChild(authHero);
 
     if (bannerMessage) {
       const alert = el('div', `alert-banner alert-${bannerMessage.type}`, bannerMessage.text);
@@ -1097,6 +1114,18 @@ function renderPublicShareApp(rootEl: HTMLElement, client: ZkVaultClient, shareI
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }
   rootEl.textContent = '';
+  const header = el('header', 'app-header');
+  const brandGroup = el('div', 'brand-group');
+  brandGroup.appendChild(el('span', 'brand-title', 'PhotoCloud v2'));
+  brandGroup.appendChild(el('span', 'e2ee-badge', 'Condivisione E2EE'));
+  header.appendChild(brandGroup);
+  const actions = el('div', 'header-actions');
+  const homeLink = el('a', 'btn btn-ghost', 'Apri PhotoCloud');
+  homeLink.href = '/v2';
+  actions.appendChild(homeLink);
+  header.appendChild(actions);
+  rootEl.appendChild(header);
+
   const box = el('main', 'auth-container');
   box.appendChild(el('h1', 'brand-title', 'Condivisione Pubblica Zero-Knowledge'));
   const statusEl = el('div', 'media-card-meta', 'Decifratura shareManifest in corso...');

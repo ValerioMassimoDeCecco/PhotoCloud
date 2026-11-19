@@ -27,9 +27,10 @@
 
 .header-content {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
+    gap: 10px 14px;
     max-width: 1400px;
     margin: 0 auto;
     width: 100%;
@@ -37,8 +38,10 @@
 
 .header-title-group {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 10px;
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .header-title-group h1 {
@@ -47,6 +50,7 @@
     letter-spacing: -0.025em;
     color: var(--on-surface);
     margin: 0;
+    white-space: nowrap;
 }
 
 .header-title-group p,
@@ -55,12 +59,17 @@
     font-weight: 500;
     color: var(--on-surface-variant);
     margin: 0;
+    white-space: nowrap;
 }
 
 .header-top-controls {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
+    justify-content: flex-end;
     gap: 8px;
+    min-width: 0;
+    flex: 1 1 auto;
 }
 
 /* --- Material You Tonal Chip Select (Grouping) --- */
@@ -918,6 +927,8 @@
     .header-top-controls {
         width: 100%;
         max-width: 100%;
+        flex-wrap: nowrap;
+        justify-content: flex-start;
         overflow-x: auto;
         scrollbar-width: none;
         -webkit-overflow-scrolling: touch;
