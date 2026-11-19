@@ -1,8 +1,5 @@
 package com.valerio.photocloud.zk
 
-import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpHandler
-import com.sun.net.httpserver.HttpServer
 import com.valerio.photocloud.BackupLibraryMode
 import com.valerio.photocloud.BackupMediaScope
 import com.valerio.photocloud.MediaBackupCandidate
@@ -28,13 +25,11 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
-import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
@@ -117,77 +112,68 @@ class ZkUploadAndBackupV2Test {
         val serverSha = MessageDigest.getInstance("SHA-256")
         var chunk0HeaderMagicOk = false
 
-        val serverExecutor = Executors.newSingleThreadExecutor()
-        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        server.executor = serverExecutor
-        server.createContext("/api/v2/backup/check", object : HttpHandler {
-            override fun handle(ex: HttpExchange) {
-                ex.requestBody.use { it.readBytes() }
-                val resp = """{"existingTags":[],"existingItems":{}}""".toByteArray(StandardCharsets.UTF_8)
-                ex.responseHeaders.add("Content-Type", "application/json")
-                ex.sendResponseHeaders(200, resp.size.toLong())
-                ex.responseBody.use { it.write(resp) }
-            }
-        })
-        server.createContext("/api/v2/blobs/upload/init", object : HttpHandler {
-            override fun handle(ex: HttpExchange) {
-                val requestBytes = ex.requestBody.use { stream: InputStream -> stream.readBytes() }
-                val body = String(requestBytes, StandardCharsets.UTF_8)
-                val json = JSONObject(body)
-                expectedBlobId = json.getString("blobId")
-                expectedTotalSize = json.getLong("totalSize")
-                expectedChunks = json.getInt("totalChunks")
-                expectedSha = json.getString("expectedSha256")
-                val resp = JSONObject()
-                    .put("uploadId", uploadId)
-                    .put("blobId", expectedBlobId)
-                    .put("receivedChunks", 0)
-                    .put("expiresAt", System.currentTimeMillis() + 3600_000L)
-                    .toString()
-                    .toByteArray(StandardCharsets.UTF_8)
-                ex.responseHeaders.add("Content-Type", "application/json")
-                ex.sendResponseHeaders(201, resp.size.toLong())
-                ex.responseBody.use { it.write(resp) }
-            }
-        })
-        server.createContext("/api/v2/blobs/upload/$uploadId/", object : HttpHandler {
-            override fun handle(ex: HttpExchange) {
-                val path = ex.requestURI.path
-                if (path.endsWith("/complete")) {
-                    ex.requestBody.use { it.readBytes() }
-                    val actualSha = ZkCoreCrypto.toHex(serverSha.digest())
-                    val status = if (actualSha.equals(expectedSha, ignoreCase = true) && receivedBytes == expectedTotalSize) 201 else 422
-                    val resp = if (status == 201) {
-                        JSONObject().put(
-                            "item",
+        val server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.path.orEmpty()
+                return when {
+                    path == "/api/v2/backup/check" -> {
+                        request.body.readByteArray()
+                        MockResponse().setResponseCode(200)
+                            .setBody("""{"existingTags":[],"existingItems":{}}""")
+                    }
+                    path == "/api/v2/blobs/upload/init" -> {
+                        val json = JSONObject(request.body.readUtf8())
+                        expectedBlobId = json.getString("blobId")
+                        expectedTotalSize = json.getLong("totalSize")
+                        expectedChunks = json.getInt("totalChunks")
+                        expectedSha = json.getString("expectedSha256")
+                        MockResponse().setResponseCode(201).setBody(
                             JSONObject()
-                                .put("id", "item-305")
+                                .put("uploadId", uploadId)
                                 .put("blobId", expectedBlobId)
-                                .put("version", 1)
-                                .put("size", receivedBytes)
-                                .put("sha256", actualSha)
-                                .put("createdAt", System.currentTimeMillis())
-                                .put("updatedAt", System.currentTimeMillis())
-                                .put("state", "active")
-                                .put("trashedAt", JSONObject.NULL)
-                                .put("encMeta", "AAAA")
-                                .put("dedupTag", JSONObject.NULL)
-                                .put("thumbs", JSONArray())
-                        ).toString()
-                    } else {
-                        """{"error":"CIPHERTEXT_INTEGRITY_MISMATCH"}"""
-                    }.toByteArray(StandardCharsets.UTF_8)
-                    ex.responseHeaders.add("Content-Type", "application/json")
-                    ex.sendResponseHeaders(status, resp.size.toLong())
-                    ex.responseBody.use { it.write(resp) }
-                } else {
-                    val idx = path.substringAfterLast('/').toInt()
-                    val buf = ByteArray(65536)
-                    var firstChunkBytesRead = 0
-                    val headerSample = ByteArray(22)
-                    ex.requestBody.use { stream ->
-                        while (true) {
-                            val r = stream.read(buf)
+                                .put("receivedChunks", 0)
+                                .put("expiresAt", System.currentTimeMillis() + 3600_000L)
+                                .toString()
+                        )
+                    }
+                    path == "/api/v2/blobs/upload/$uploadId/complete" -> {
+                        request.body.readByteArray()
+                        val actualSha = ZkCoreCrypto.toHex(serverSha.digest())
+                        val status = if (
+                            actualSha.equals(expectedSha, ignoreCase = true) &&
+                            receivedBytes == expectedTotalSize
+                        ) 201 else 422
+                        val resp = if (status == 201) {
+                            JSONObject().put(
+                                "item",
+                                JSONObject()
+                                    .put("id", "item-305")
+                                    .put("blobId", expectedBlobId)
+                                    .put("version", 1)
+                                    .put("size", receivedBytes)
+                                    .put("sha256", actualSha)
+                                    .put("createdAt", System.currentTimeMillis())
+                                    .put("updatedAt", System.currentTimeMillis())
+                                    .put("state", "active")
+                                    .put("trashedAt", JSONObject.NULL)
+                                    .put("encMeta", "AAAA")
+                                    .put("dedupTag", JSONObject.NULL)
+                                    .put("thumbs", JSONArray())
+                            ).toString()
+                        } else {
+                            """{"error":"CIPHERTEXT_INTEGRITY_MISMATCH"}"""
+                        }
+                        MockResponse().setResponseCode(status).setBody(resp)
+                    }
+                    path.startsWith("/api/v2/blobs/upload/$uploadId/") -> {
+                        val idx = path.substringAfterLast('/').toInt()
+                        val buf = ByteArray(65536)
+                        var firstChunkBytesRead = 0
+                        val headerSample = ByteArray(22)
+                        val body = request.body
+                        while (!body.exhausted()) {
+                            val r = body.read(buf)
                             if (r <= 0) break
                             if (idx == 0 && firstChunkBytesRead < headerSample.size) {
                                 val take = min(r, headerSample.size - firstChunkBytesRead)
@@ -197,34 +183,34 @@ class ZkUploadAndBackupV2Test {
                             serverSha.update(buf, 0, r)
                             receivedBytes += r
                         }
+                        if (idx == 0) {
+                            val magicOk = headerSample[0] == 0x50.toByte() &&
+                                headerSample[1] == 0x43.toByte() &&
+                                headerSample[2] == 0x5A.toByte() &&
+                                headerSample[3] == 0x4B.toByte() &&
+                                headerSample[4] == 0x01.toByte()
+                            val blobIdOk =
+                                ZkCoreCrypto.bytesToUuid(headerSample.copyOfRange(6, 22)) == expectedBlobId
+                            chunk0HeaderMagicOk = magicOk && blobIdOk
+                        }
+                        receivedChunks++
+                        MockResponse().setResponseCode(200).setBody(
+                            JSONObject()
+                                .put("uploadId", uploadId)
+                                .put("chunkIndex", idx)
+                                .put("receivedChunks", receivedChunks)
+                                .put("receivedBytes", receivedBytes)
+                                .toString()
+                        )
                     }
-                    if (idx == 0) {
-                        val magicOk = headerSample[0] == 0x50.toByte() &&
-                            headerSample[1] == 0x43.toByte() &&
-                            headerSample[2] == 0x5A.toByte() &&
-                            headerSample[3] == 0x4B.toByte() &&
-                            headerSample[4] == 0x01.toByte()
-                        val blobIdOk = ZkCoreCrypto.bytesToUuid(headerSample.copyOfRange(6, 22)) == expectedBlobId
-                        chunk0HeaderMagicOk = magicOk && blobIdOk
-                    }
-                    receivedChunks++
-                    val resp = JSONObject()
-                        .put("uploadId", uploadId)
-                        .put("chunkIndex", idx)
-                        .put("receivedChunks", receivedChunks)
-                        .put("receivedBytes", receivedBytes)
-                        .toString()
-                        .toByteArray(StandardCharsets.UTF_8)
-                    ex.responseHeaders.add("Content-Type", "application/json")
-                    ex.sendResponseHeaders(200, resp.size.toLong())
-                    ex.responseBody.use { it.write(resp) }
+                    else -> MockResponse().setResponseCode(404)
                 }
             }
-        })
+        }
         server.start()
 
         try {
-            val baseUrl = "http://127.0.0.1:${server.address.port}"
+            val baseUrl = server.url("/").toString()
             val api = PhotoCloudZkApiClientV2(initialBaseUrl = baseUrl, allowLocalhostHttpForTests = true)
             val pipeline = ZkBlobUploadPipeline(
                 apiClient = api,
@@ -251,8 +237,7 @@ class ZkUploadAndBackupV2Test {
             assertTrue("Spool directory must be empty after completion", spoolDir.listFiles().isNullOrEmpty())
             assertTrue("Resumable store must be cleared after completion", resumableStore.listAll().isEmpty())
         } finally {
-            server.stop(0)
-            serverExecutor.shutdownNow()
+            server.shutdown()
             spoolDir.deleteRecursively()
             vk.zeroize()
             subkeys.zeroizeAll()
