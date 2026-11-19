@@ -1,5 +1,6 @@
 package com.valerio.photocloud.zk
 
+import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import com.valerio.photocloud.BackupLibraryMode
 import com.valerio.photocloud.BackupMediaScope
@@ -118,15 +119,16 @@ class ZkUploadAndBackupV2Test {
         val serverExecutor = Executors.newSingleThreadExecutor()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.executor = serverExecutor
-        server.createContext("/api/v2/backup/check") { ex ->
+        server.createContext("/api/v2/backup/check") { ex: HttpExchange ->
             ex.requestBody.use { it.readBytes() }
             val resp = """{"existingTags":[],"existingItems":{}}""".toByteArray(StandardCharsets.UTF_8)
             ex.responseHeaders.add("Content-Type", "application/json")
             ex.sendResponseHeaders(200, resp.size.toLong())
             ex.responseBody.use { it.write(resp) }
         }
-        server.createContext("/api/v2/blobs/upload/init") { ex ->
-            val body = String(ex.requestBody.use { it.readBytes() }, StandardCharsets.UTF_8)
+        server.createContext("/api/v2/blobs/upload/init") { ex: HttpExchange ->
+            val requestBytes = ex.requestBody.use { stream: InputStream -> stream.readBytes() }
+            val body = String(requestBytes, StandardCharsets.UTF_8)
             val json = JSONObject(body)
             expectedBlobId = json.getString("blobId")
             expectedTotalSize = json.getLong("totalSize")
@@ -143,7 +145,7 @@ class ZkUploadAndBackupV2Test {
             ex.sendResponseHeaders(201, resp.size.toLong())
             ex.responseBody.use { it.write(resp) }
         }
-        server.createContext("/api/v2/blobs/upload/$uploadId/") { ex ->
+        server.createContext("/api/v2/blobs/upload/$uploadId/") { ex: HttpExchange ->
             val path = ex.requestURI.path
             if (path.endsWith("/complete")) {
                 ex.requestBody.use { it.readBytes() }
