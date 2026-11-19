@@ -1,167 +1,388 @@
-import subprocess
-import time
-import requests
-import sys
+import hashlib
+import http.cookiejar
+import json
 import os
-import io
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+import uuid
 
-PORT = 8089
+PORT = int(os.environ.get("RUST_E2E_PORT", "8089"))
 BASE_URL = f"http://127.0.0.1:{PORT}"
+REPO_ROOT = os.path.abspath(os.getcwd())
 BINARY_NAME = "server.exe" if sys.platform == "win32" else "server"
-BINARY = os.path.abspath(os.path.join("rust", "app", "target", "release", BINARY_NAME))
+BINARY = os.path.abspath(os.path.join(REPO_ROOT, "rust", "app", "target", "release", BINARY_NAME))
 
-print(f"Starting Rust server on port {PORT} from {BINARY}...")
-env = os.environ.copy()
-env["PORT"] = str(PORT)
 
-server_proc = subprocess.Popen([BINARY], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+class SimpleResponse:
+    def __init__(self, status: int, headers: dict, body: bytes):
+        self.status_code = status
+        self.headers = {k.lower(): v for k, v in headers.items()}
+        self.content = body
 
-time.sleep(1.0)
+    @property
+    def text(self) -> str:
+        return self.content.decode("utf-8", errors="replace")
 
-try:
-    # 1. Unauthenticated root
-    print("[1] Testing GET / (unauthenticated)...")
-    r = requests.get(f"{BASE_URL}/")
-    assert r.status_code == 200
-    assert "Accedi al tuo Cloud" in r.text or "PhotoCloud" in r.text
-    print("    OK")
+    def json(self):
+        return json.loads(self.text)
 
-    # 2. Unauthenticated session
-    print("[2] Testing GET /api/session (unauthenticated)...")
-    r = requests.get(f"{BASE_URL}/api/session")
-    assert r.status_code == 200
-    assert r.json() == {"authenticated": False}
-    print("    OK")
 
-    # 3. Register a test user
-    test_user = f"testuser_{int(time.time())}"
-    print(f"[3] Testing POST /register for user {test_user}...")
-    r = requests.post(f"{BASE_URL}/register", json={"username": test_user, "key_type": "generate"})
-    assert r.status_code == 200, f"Register failed: {r.status_code} {r.text}"
-    auth_data = r.json()
-    assert auth_data["username"] == test_user
-    api_key = auth_data["api_key"]
-    assert len(api_key) == 32
-    print(f"    OK (generated API key: {api_key[:6]}...)")
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
-    # 4. Login with JSON
-    print(f"[4] Testing POST /login with API key...")
-    session = requests.Session()
-    r = session.post(
-        f"{BASE_URL}/login",
-        json={"username": test_user, "api_key": api_key},
-        headers={"Accept": "application/json"}
+
+class HttpSession:
+    def __init__(self):
+        self.cookie_jar = http.cookiejar.CookieJar()
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self.cookie_jar),
+            NoRedirectHandler(),
+        )
+
+    def cookies_dict(self) -> dict:
+        return {c.name: c.value for c in self.cookie_jar}
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        json_body=None,
+        data: bytes | None = None,
+        headers: dict | None = None,
+    ) -> SimpleResponse:
+        req_headers = dict(headers or {})
+        body_bytes = data
+        if json_body is not None:
+            body_bytes = json.dumps(json_body).encode("utf-8")
+            req_headers.setdefault("Content-Type", "application/json")
+        req = urllib.request.Request(url, data=body_bytes, headers=req_headers, method=method)
+        try:
+            with self.opener.open(req, timeout=15) as resp:
+                return SimpleResponse(resp.status, dict(resp.headers.items()), resp.read())
+        except urllib.error.HTTPError as err:
+            return SimpleResponse(err.code, dict(err.headers.items()), err.read())
+
+    def get(self, url: str, headers: dict | None = None) -> SimpleResponse:
+        return self.request("GET", url, headers=headers)
+
+    def post(self, url: str, json_body=None, data: bytes | None = None, headers: dict | None = None) -> SimpleResponse:
+        return self.request("POST", url, json_body=json_body, data=data, headers=headers)
+
+
+def encode_multipart(fields: list[tuple[str, str]], files: list[tuple[str, str, bytes, str]]) -> tuple[bytes, str]:
+    boundary = f"----PhotoCloudRustE2E{uuid.uuid4().hex}"
+    chunks: list[bytes] = []
+    for name, val in fields:
+        chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+        chunks.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        chunks.append(val.encode("utf-8"))
+        chunks.append(b"\r\n")
+    for field_name, filename, content, content_type in files:
+        chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+        chunks.append(
+            f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'.encode("utf-8")
+        )
+        chunks.append(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+        chunks.append(content)
+        chunks.append(b"\r\n")
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def main():
+    if not os.path.exists(BINARY):
+        raise SystemExit(f"Rust release binary not found at {BINARY}. Run `npm run build:rust` first.")
+
+    tmp_dir = tempfile.mkdtemp(prefix="photocloud-rust-e2e-")
+    for asset_dir in ("public", "static", "templates", "dist", "release", "android-app"):
+        src = os.path.join(REPO_ROOT, asset_dir)
+        dst = os.path.join(tmp_dir, asset_dir)
+        if os.path.exists(src):
+            try:
+                os.symlink(src, dst, target_is_directory=True)
+            except OSError:
+                shutil.copytree(src, dst)
+
+    print(f"Starting Rust server on port {PORT} from {BINARY} (isolated cwd={tmp_dir})...")
+    env = os.environ.copy()
+    env["PORT"] = str(PORT)
+
+    server_proc = subprocess.Popen(
+        [BINARY],
+        cwd=tmp_dir,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
     )
-    assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
-    assert r.json().get("success") is True
-    assert "photocloud_sid" in session.cookies
-    print("    OK (session cookie received)")
 
-    # 5. Authenticated session
-    print("[5] Testing GET /api/session (authenticated)...")
-    r = session.get(f"{BASE_URL}/api/session")
-    assert r.status_code == 200
-    sess_info = r.json()
-    assert sess_info.get("authenticated") is True
-    assert sess_info.get("username") == test_user
-    assert isinstance(sess_info.get("media"), list)
-    assert isinstance(sess_info.get("albums"), list)
-    assert isinstance(sess_info.get("storageStats"), dict)
-    print("    OK (session active and stats returned)")
+    setup_token = None
+    deadline = time.time() + 15.0
+    startup_lines: list[str] = []
+    while time.time() < deadline:
+        if server_proc.poll() is not None:
+            rest = server_proc.stdout.read() if server_proc.stdout else ""
+            raise RuntimeError(f"Rust server exited prematurely ({server_proc.returncode}): {''.join(startup_lines)}{rest}")
+        line = server_proc.stdout.readline() if server_proc.stdout else ""
+        if line:
+            startup_lines.append(line)
+            m = re.search(r"First-registration single-use setup token \(printed once\): ([A-Za-z0-9_-]+)", line)
+            if m:
+                setup_token = m.group(1)
+            if "listening on" in line or f":{PORT}" in line:
+                break
+        else:
+            time.sleep(0.05)
 
-    # 6. Create album
-    print("[6] Testing POST /api/albums/create...")
-    r = session.post(f"{BASE_URL}/api/albums/create", json={"name": "Vacanze 2026"})
-    assert r.status_code == 200
-    albums = r.json().get("albums", [])
-    assert "Vacanze 2026" in albums
-    print("    OK (album created)")
-
-    # 7. File upload with encryption
-    print("[7] Testing POST /upload (encrypted file storage)...")
-    payload = b"Hello PhotoCloud Native Rust Server! Test payload 12345."
-    files = {"file[]": ("test_doc.txt", io.BytesIO(payload), "text/plain")}
-    data = {"album": "Vacanze 2026"}
-    r = session.post(f"{BASE_URL}/upload", files=files, data=data)
-    assert r.status_code == 200, f"Upload failed: {r.status_code} {r.text}"
-    upload_resp = r.json()
-    assert upload_resp.get("success") is True
-    uploaded_files = upload_resp.get("files", [])
-    assert len(uploaded_files) == 1
-    uploaded_filename = uploaded_files[0]
-    print(f"    OK (uploaded and encrypted as: {uploaded_filename})")
-
-    # 8. Check that file on disk is encrypted with PhotoCloud GCM v1 format
-    user_media_path = os.path.join("user_media", test_user, uploaded_filename)
-    assert os.path.exists(user_media_path)
-    with open(user_media_path, "rb") as fp:
-        raw_on_disk = fp.read()
-    assert raw_on_disk.startswith(b"PhotoCloud-GCM-v1\x00")
-    assert payload not in raw_on_disk  # Ciphertext cannot contain plaintext
-    print(f"    OK (verified GCM v1 header and encryption on disk: {len(raw_on_disk)} bytes)")
-
-    # 9. Download and decrypt file
-    print(f"[9] Testing GET /media/{uploaded_filename} (decryption on the fly)...")
-    r = session.get(f"{BASE_URL}/media/{uploaded_filename}")
-    assert r.status_code == 200
-    assert r.content == payload
-    assert r.headers.get("Content-Type") == "text/plain; charset=utf-8"
-    print("    OK (decrypted payload matches original exactly)")
-
-    # 10. HTTP Range request decryption
-    print(f"[10] Testing HTTP Range request on /media/{uploaded_filename}...")
-    r = session.get(f"{BASE_URL}/media/{uploaded_filename}", headers={"Range": "bytes=6-15"})
-    assert r.status_code == 206
-    assert r.content == payload[6:16]
-    assert r.headers.get("Content-Range") == f"bytes 6-15/{len(payload)}"
-    print(f"    OK (range slice matched: {r.content})")
-
-    # 11. Toggle favorite
-    print(f"[11] Testing POST /api/favorites/toggle...")
-    r = session.post(f"{BASE_URL}/api/favorites/toggle", json={"filename": uploaded_filename})
-    assert r.status_code == 200
-    assert r.json().get("isFavorite") is True
-    assert uploaded_filename in r.json().get("favorites", [])
-    print("    OK (favorited)")
-
-    # 12. Search natural language query
-    print(f"[12] Testing GET /api/search?q=test...")
-    r = session.get(f"{BASE_URL}/api/search?q=test")
-    assert r.status_code == 200
-    results = r.json().get("results", [])
-    assert len(results) >= 1
-    assert any(item["filename"] == uploaded_filename for item in results)
-    print("    OK (natural language search returned matches)")
-
-    # 13. Move to trash and restore
-    print(f"[13] Testing POST /trash/{uploaded_filename} and restore...")
-    r = session.post(f"{BASE_URL}/trash/{uploaded_filename}")
-    assert r.status_code == 200
-    assert not os.path.exists(user_media_path)
-    trash_path = os.path.join("user_media", test_user, "trash", uploaded_filename)
-    assert os.path.exists(trash_path)
-
-    r = session.post(f"{BASE_URL}/restore/{uploaded_filename}")
-    assert r.status_code == 200
-    assert os.path.exists(user_media_path)
-    assert not os.path.exists(trash_path)
-    print("    OK (trash and restore working perfectly)")
-
-    # 14. Logout
-    print("[14] Testing POST /logout...")
-    r = session.post(f"{BASE_URL}/logout", headers={"Accept": "application/json"})
-    assert r.status_code == 200
-    assert r.json().get("success") is True
-
-    r = session.get(f"{BASE_URL}/api/session")
-    assert r.json() == {"authenticated": False}
-    print("    OK (logged out and session invalidated)")
-
-    print("\nALL 14 END-TO-END RUST SERVER TEST SUITES PASSED WITH ZERO ERRORS!")
-
-finally:
-    server_proc.terminate()
     try:
-        server_proc.wait(timeout=3)
-    except:
-        server_proc.kill()
+        anon = HttpSession()
+
+        # 1. Unauthenticated root
+        print("[1] Testing GET / (unauthenticated)...")
+        r = anon.get(f"{BASE_URL}/")
+        assert r.status_code == 200, f"GET / status={r.status_code}"
+        assert "Accedi al tuo Cloud" in r.text or "PhotoCloud" in r.text
+        print("    OK")
+
+        # 2. Unauthenticated session
+        print("[2] Testing GET /api/session (unauthenticated)...")
+        r = anon.get(f"{BASE_URL}/api/session")
+        assert r.status_code == 200
+        assert r.json() == {"authenticated": False}
+        print("    OK")
+
+        # 3. Register a test user
+        test_user = f"testuser_{int(time.time())}"
+        print(f"[3] Testing POST /register for user {test_user}...")
+        r = anon.post(f"{BASE_URL}/register", json_body={"username": test_user, "key_type": "generate"})
+        assert r.status_code == 200, f"Register failed: {r.status_code} {r.text}"
+        auth_data = r.json()
+        assert auth_data["username"] == test_user
+        api_key = auth_data["api_key"]
+        assert len(api_key) == 32
+        print(f"    OK (generated API key: {api_key[:6]}...)")
+
+        # 4. Login with JSON
+        print("[4] Testing POST /login with API key...")
+        session = HttpSession()
+        r = session.post(
+            f"{BASE_URL}/login",
+            json_body={"username": test_user, "api_key": api_key},
+            headers={"Accept": "application/json"},
+        )
+        assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+        assert r.json().get("success") is True
+        assert "photocloud_sid" in session.cookies_dict()
+        print("    OK (session cookie received)")
+
+        # 5. Authenticated session
+        print("[5] Testing GET /api/session (authenticated)...")
+        r = session.get(f"{BASE_URL}/api/session")
+        assert r.status_code == 200
+        sess_info = r.json()
+        assert sess_info.get("authenticated") is True
+        assert sess_info.get("username") == test_user
+        assert isinstance(sess_info.get("media"), list)
+        assert isinstance(sess_info.get("albums"), list)
+        assert isinstance(sess_info.get("storageStats"), dict)
+        print("    OK (session active and stats returned)")
+
+        # 6. Create album
+        print("[6] Testing POST /api/albums/create...")
+        r = session.post(f"{BASE_URL}/api/albums/create", json_body={"name": "Vacanze 2026"})
+        assert r.status_code == 200
+        assert "Vacanze 2026" in r.json().get("albums", [])
+        print("    OK (album created)")
+
+        # 7. File upload with encryption + SHA-256 verification + ?skipList=1
+        print("[7] Testing POST /upload (encryption + SHA-256 check + ?skipList=1)...")
+        payload = b"Hello PhotoCloud Native Rust Server! Test payload 12345."
+        payload_sha = hashlib.sha256(payload).hexdigest()
+
+        # 7a. Invalid SHA-256 must fail with 400 and leave no file behind
+        bad_body, bad_ct = encode_multipart(
+            [("album", "Vacanze 2026"), ("sha256", "0" * 64)],
+            [("file[]", "corrupt_doc.txt", payload, "text/plain")],
+        )
+        r_bad = session.post(f"{BASE_URL}/upload", data=bad_body, headers={"Content-Type": bad_ct})
+        assert r_bad.status_code == 400, f"Expected 400 for bad sha256, got {r_bad.status_code}: {r_bad.text}"
+
+        # 7b. Valid SHA-256 with ?skipList=1
+        body, ct = encode_multipart(
+            [("album", "Vacanze 2026"), ("sha256", payload_sha)],
+            [("file[]", "test_doc.txt", payload, "text/plain")],
+        )
+        r = session.post(f"{BASE_URL}/upload?skipList=1", data=body, headers={"Content-Type": ct})
+        assert r.status_code == 200, f"Upload failed: {r.status_code} {r.text}"
+        upload_resp = r.json()
+        assert upload_resp.get("success") is True
+        assert upload_resp.get("uploadedCount") == 1
+        uploaded_files = upload_resp.get("files") or upload_resp.get("uploaded") or []
+        assert len(uploaded_files) == 1
+        uploaded_filename = uploaded_files[0]
+        print(f"    OK (uploaded with verified SHA-256 & skipList=1 as: {uploaded_filename})")
+
+        # 7c. /api/backup/check recognizes the uploaded hash
+        r_chk = session.post(f"{BASE_URL}/api/backup/check", json_body={"items": [payload_sha, "f" * 64]})
+        assert r_chk.status_code == 200, f"backup/check failed: {r_chk.status_code} {r_chk.text}"
+        chk_json = r_chk.json()
+        assert payload_sha in chk_json.get("existingSha256", [])
+        assert ("f" * 64) not in chk_json.get("existingSha256", [])
+        print("    OK (/api/backup/check deduplication verified)")
+
+        # 8. Check file on disk is encrypted with PhotoCloud GCM v1 format
+        user_media_path = os.path.join(tmp_dir, "user_media", test_user, uploaded_filename)
+        assert os.path.exists(user_media_path)
+        with open(user_media_path, "rb") as fp:
+            raw_on_disk = fp.read()
+        assert raw_on_disk.startswith(b"PhotoCloud-GCM-v1\x00")
+        assert payload not in raw_on_disk
+        print(f"    OK (verified GCM v1 header and encryption on disk: {len(raw_on_disk)} bytes)")
+
+        # 9. Download and decrypt file
+        print(f"[9] Testing GET /media/{uploaded_filename} (decryption on the fly)...")
+        r = session.get(f"{BASE_URL}/media/{uploaded_filename}")
+        assert r.status_code == 200
+        assert r.content == payload
+        assert r.headers.get("content-type") == "text/plain; charset=utf-8"
+        print("    OK (decrypted payload matches original exactly)")
+
+        # 10. HTTP Range request decryption (206 + 416)
+        print(f"[10] Testing HTTP Range 206 & 416 on /media/{uploaded_filename}...")
+        r = session.get(f"{BASE_URL}/media/{uploaded_filename}", headers={"Range": "bytes=6-15"})
+        assert r.status_code == 206
+        assert r.content == payload[6:16]
+        assert r.headers.get("content-range") == f"bytes 6-15/{len(payload)}"
+        r_416 = session.get(f"{BASE_URL}/media/{uploaded_filename}", headers={"Range": "bytes=9999-10000"})
+        assert r_416.status_code == 416, f"Expected 416, got {r_416.status_code}"
+        assert r_416.headers.get("content-range") == f"bytes */{len(payload)}"
+        print("    OK (206 slice & 416 unsatisfiable range verified)")
+
+        # 11. Toggle favorite
+        print("[11] Testing POST /api/favorites/toggle...")
+        r = session.post(f"{BASE_URL}/api/favorites/toggle", json_body={"filename": uploaded_filename})
+        assert r.status_code == 200
+        assert r.json().get("isFavorite") is True
+        assert uploaded_filename in r.json().get("favorites", [])
+        print("    OK (favorited)")
+
+        # 12. Search natural language query
+        print("[12] Testing GET /api/search?q=test...")
+        r = session.get(f"{BASE_URL}/api/search?q=test")
+        assert r.status_code == 200
+        results = r.json().get("results", [])
+        assert any(item["filename"] == uploaded_filename for item in results)
+        print("    OK (natural language search returned matches)")
+
+        # 13. Public share inline maxDownloads quota + Range 416
+        print("[13] Testing public share inline quota enforcement & Range 416...")
+        r_sh = session.post(
+            f"{BASE_URL}/api/shares/create",
+            json_body={"filenames": [uploaded_filename], "maxDownloads": 1},
+        )
+        assert r_sh.status_code == 200, f"Create share failed: {r_sh.status_code} {r_sh.text}"
+        share_token = r_sh.json()["url"].split("/share/")[1]
+        pub = HttpSession()
+        # First inline fetch succeeds (consumes 1/1 quota)
+        r_s1 = pub.get(f"{BASE_URL}/share/{share_token}/media/{uploaded_filename}")
+        assert r_s1.status_code == 200 and r_s1.content == payload
+        # Second inline fetch must return 410 Gone (quota exceeded)
+        r_s2 = pub.get(f"{BASE_URL}/share/{share_token}/media/{uploaded_filename}")
+        assert r_s2.status_code == 410, f"Expected 410 on quota exceeded, got {r_s2.status_code}"
+        # Create unlimited share and verify 416 on invalid Range
+        r_sh2 = session.post(
+            f"{BASE_URL}/api/shares/create",
+            json_body={"filenames": [uploaded_filename]},
+        )
+        tok2 = r_sh2.json()["url"].split("/share/")[1]
+        r_s416 = pub.get(
+            f"{BASE_URL}/share/{tok2}/media/{uploaded_filename}",
+            headers={"Range": "bytes=9999-10000"},
+        )
+        assert r_s416.status_code == 416, f"Expected 416 on public share invalid range, got {r_s416.status_code}"
+        print("    OK (share quota 200->410 and Range 416 verified)")
+
+        # 14. Move to trash and restore
+        print(f"[14] Testing POST /trash/{uploaded_filename} and restore...")
+        r = session.post(f"{BASE_URL}/trash/{uploaded_filename}")
+        assert r.status_code == 200
+        assert not os.path.exists(user_media_path)
+        trash_path = os.path.join(tmp_dir, "user_media", test_user, "trash", uploaded_filename)
+        assert os.path.exists(trash_path)
+        r = session.post(f"{BASE_URL}/restore/{uploaded_filename}")
+        assert r.status_code == 200
+        assert os.path.exists(user_media_path)
+        assert not os.path.exists(trash_path)
+        print("    OK (trash and restore working perfectly)")
+
+        # 15. /map CSP + Android dynamic update-manifest + AI TFLite Range + Android releases
+        print("[15] Testing /map CSP, Android manifest, AI TFLite Range, and Android releases...")
+        r_map = session.get(f"{BASE_URL}/map")
+        assert r_map.status_code == 200
+        assert "tile.openstreetmap.org" in r_map.headers.get("content-security-policy", "")
+        r_and = anon.get(f"{BASE_URL}/api/android/update-manifest")
+        assert r_and.status_code in (200, 404), f"Unexpected manifest status: {r_and.status_code}"
+        manifest = r_and.json()
+        assert manifest.get("versionCode", 0) >= 1 and manifest.get("versionName")
+        r_rel = session.get(f"{BASE_URL}/api/android/releases")
+        assert r_rel.status_code == 200 and isinstance(r_rel.json().get("releases"), list)
+        tflite_path = os.path.join(REPO_ROOT, "release", "efficientnet_lite4.tflite")
+        if os.path.exists(tflite_path):
+            r_ai206 = anon.get(
+                f"{BASE_URL}/api/ai-model/efficientnet_lite4.tflite",
+                headers={"Range": "bytes=0-15"},
+            )
+            assert r_ai206.status_code == 206 and len(r_ai206.content) == 16
+            r_ai416 = anon.get(
+                f"{BASE_URL}/api/ai-model/efficientnet_lite4.tflite",
+                headers={"Range": "bytes=999999999-999999999"},
+            )
+            assert r_ai416.status_code == 416
+        print(f"    OK (manifest v{manifest['versionName']} code {manifest['versionCode']}, /map CSP & TFLite verified)")
+
+        # 16. Zero-Knowledge V2 Web Shell & API smoke + CSRF check
+        print("[16] Testing Zero-Knowledge V2 Web Shell (/v2) & API (/api/v2)...")
+        r_v2 = anon.get(f"{BASE_URL}/v2")
+        assert r_v2.status_code == 200
+        assert "script-src 'self' 'wasm-unsafe-eval'" in r_v2.headers.get("content-security-policy", "")
+        assert setup_token, "Expected setup_token printed on stdout"
+        r_sw = anon.get(f"{BASE_URL}/v2/sw-stream.js")
+        assert r_sw.status_code == 200
+        assert r_sw.headers.get("service-worker-allowed") == "/v2"
+        # CSRF cross-site rejection
+        r_csrf = anon.post(
+            f"{BASE_URL}/api/v2/login",
+            json_body={"username": "nobody", "authSecret": "x" * 43},
+            headers={"Sec-Fetch-Site": "cross-site"},
+        )
+        assert r_csrf.status_code == 403
+        print("    OK (/v2 shell, SW headers, setup token & CSRF protection verified)")
+
+        # 17. Logout
+        print("[17] Testing POST /logout...")
+        r = session.post(f"{BASE_URL}/logout", headers={"Accept": "application/json"})
+        assert r.status_code == 200
+        assert r.json().get("success") is True
+        r = session.get(f"{BASE_URL}/api/session")
+        assert r.json() == {"authenticated": False}
+        print("    OK (logged out and session invalidated)")
+
+        print("\nALL 17 END-TO-END RUST SERVER TEST SUITES PASSED WITH ZERO ERRORS!")
+    finally:
+        server_proc.terminate()
+        try:
+            server_proc.wait(timeout=3)
+        except Exception:
+            server_proc.kill()
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    main()

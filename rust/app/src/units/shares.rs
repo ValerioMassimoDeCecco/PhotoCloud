@@ -269,6 +269,12 @@ fn serve_bytes(
                 .insert("x-content-type-options", "nosniff".parse().unwrap());
             return resp;
         }
+        let mut resp = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+        resp.headers_mut().insert(
+            header::CONTENT_RANGE,
+            format!("bytes */{total_len}").parse().unwrap(),
+        );
+        return resp;
     }
 
     let mut resp = (
@@ -854,17 +860,123 @@ pub async fn get_public_share_media_query(
     };
 
     let preview = query.get("preview").map(|v| v.as_str()).unwrap_or("");
-    let download = matches!(query.get("download").map(|v| v.as_str()), Some("1") | Some("true"));
-    if download {
-        sharing::increment_share_download_count(&state.upload_dir, &id);
+    let download = matches!(
+        query.get("download").map(|v| v.as_str()),
+        Some("1") | Some("true")
+    );
+    let is_preview = !download
+        && matches!(
+            preview.trim().to_lowercase().as_str(),
+            "1" | "true" | "thumb" | "large"
+        );
+    if is_preview {
+        if media_kind(&filename) != "image" {
+            return (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "image/svg+xml")],
+                placeholder_svg(&filename),
+            )
+                .into_response();
+        }
+        return serve_bytes(plain, &filename, &headers, false);
     }
-    if !download && !preview.is_empty() && media_kind(&filename) != "image" {
-        return (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "image/svg+xml")],
-            placeholder_svg(&filename),
-        )
-            .into_response();
+
+    // Validate Range before consuming quota
+    let total_len = plain.len();
+    let range_hdr = headers.get(header::RANGE).and_then(|h| h.to_str().ok());
+    let parsed_range = if let Some(rh) = range_hdr {
+        match parse_range_header(rh, total_len) {
+            Some(r) => Some(r),
+            None => {
+                let mut resp = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+                resp.headers_mut().insert(
+                    header::CONTENT_RANGE,
+                    format!("bytes */{total_len}").parse().unwrap(),
+                );
+                return resp;
+            }
+        }
+    } else {
+        None
+    };
+
+    // Enforce download quota for both explicit downloads and full inline fetches
+    let mime = guess_mime(&filename);
+    let is_av = mime.starts_with("video/") || mime.starts_with("audio/");
+    let response_bytes = parsed_range
+        .as_ref()
+        .map(|r| r.end - r.start + 1)
+        .unwrap_or(total_len);
+    let max_grant_bytes = ((total_len as f64) * 2.5).floor().max(1.0) as usize;
+    let now_ms = crate::state::now_ms();
+    let window_ms: u64 = 2 * 60 * 60 * 1000;
+
+    let visitor_token = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| {
+            c.split(';').find_map(|p| {
+                let (k, v) = p.trim().split_once('=')?;
+                if k.trim() == "pc_pb" {
+                    let t = v.trim();
+                    if t.len() == 32 && t.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        return Some(t.to_string());
+                    }
+                }
+                None
+            })
+        });
+
+    let mut should_count_download = true;
+    if is_av && !download && parsed_range.is_some() {
+        if let Some(ref vt) = visitor_token {
+            let grant_key = format!("{id}:{vt}:{filename}");
+            if let Ok(mut grants) = state.share_playback_grants.write() {
+                grants.retain(|_, g| now_ms.saturating_sub(g.granted_at) <= window_ms);
+                if let Some(g) = grants.get_mut(&grant_key) {
+                    if g.bytes_used + response_bytes <= g.max_bytes {
+                        g.bytes_used += response_bytes;
+                        should_count_download = false;
+                    }
+                }
+            }
+        }
     }
-    serve_bytes(plain, &filename, &headers, download)
+
+    let mut newly_issued_pb: Option<String> = None;
+    if should_count_download {
+        if !sharing::increment_share_download_count(&state.upload_dir, &id) {
+            return (StatusCode::GONE, "Limite download raggiunto").into_response();
+        }
+        if is_av && !download && response_bytes <= max_grant_bytes {
+            let vt = visitor_token.clone().unwrap_or_else(|| {
+                let mut rng = rand::thread_rng();
+                let mut buf = [0u8; 16];
+                rng.fill(&mut buf[..]);
+                hex::encode(buf)
+            });
+            if let Ok(mut grants) = state.share_playback_grants.write() {
+                grants.insert(
+                    format!("{id}:{vt}:{filename}"),
+                    crate::state::SharePlaybackGrant {
+                        granted_at: now_ms,
+                        bytes_used: response_bytes,
+                        max_bytes: max_grant_bytes,
+                    },
+                );
+            }
+            if visitor_token.is_none() {
+                newly_issued_pb = Some(vt);
+            }
+        }
+    }
+
+    let mut resp = serve_bytes(plain, &filename, &headers, download);
+    if let Some(vt) = newly_issued_pb {
+        let cookie = format!("pc_pb={vt}; Path=/share/{token}; HttpOnly; SameSite=Lax; Max-Age=7200");
+        if let Ok(val) = cookie.parse() {
+            resp.headers_mut().append(header::SET_COOKIE, val);
+        }
+    }
+    resp
 }

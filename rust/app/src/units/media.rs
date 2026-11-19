@@ -65,32 +65,29 @@ pub struct ByteRange {
 }
 
 pub fn parse_range_header(header: &str, total_len: usize) -> Option<ByteRange> {
-    if total_len == 0 {
-        return None;
+    match crate::zk_v2_store::parse_http_range_header(Some(header), total_len as u64) {
+        crate::zk_v2_store::ParsedHttpRange::Satisfiable { start, end } => Some(ByteRange {
+            start: start as usize,
+            end: end as usize,
+        }),
+        _ => None,
     }
-    let trimmed = header.trim();
-    if !trimmed.starts_with("bytes=") {
-        return None;
+}
+
+fn normalize_sha256_hex(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().to_lowercase();
+    if trimmed.len() == 64 && trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Some(trimmed)
+    } else {
+        None
     }
-    let spec = &trimmed[6..];
-    if let Some((start_str, end_str)) = spec.split_once('-') {
-        let start = start_str.trim().parse::<usize>().ok()?;
-        let end = if end_str.trim().is_empty() {
-            total_len - 1
-        } else {
-            end_str.trim().parse::<usize>().ok()?.min(total_len - 1)
-        };
-        if start <= end && start < total_len {
-            return Some(ByteRange { start, end });
-        }
-    }
-    None
 }
 
 // POST /upload
 pub async fn post_upload(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
     mut multipart: Multipart,
 ) -> Response {
     let sess = match state.get_session(&headers) {
@@ -104,7 +101,12 @@ pub async fn post_upload(
     let mut uploaded_filenames = Vec::new();
     let mut target_album: Option<String> = None;
     let mut timestamps: Vec<u64> = Vec::new();
-    let mut skip_list = false;
+    let mut expected_checksums: Vec<String> = Vec::new();
+    let mut pending_files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut skip_list = matches!(
+        query.get("skipList").map(|v| v.as_str()),
+        Some("1") | Some("true")
+    );
 
     while let Ok(Some(field)) = multipart.next_field().await {
         let name = field.name().unwrap_or_default().to_string();
@@ -119,7 +121,7 @@ pub async fn post_upload(
         }
         if name == "skipList" {
             if let Ok(val) = field.text().await {
-                skip_list = matches!(val.trim(), "1" | "true");
+                skip_list = skip_list || matches!(val.trim(), "1" | "true");
             }
             continue;
         }
@@ -131,16 +133,72 @@ pub async fn post_upload(
             }
             continue;
         }
+        if name == "sha256[]" || name == "sha256" {
+            if let Ok(val) = field.text().await {
+                expected_checksums.push(val);
+            }
+            continue;
+        }
 
         let file_orig_name = field
             .file_name()
             .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("file_{}", std::time::SystemTime::now().duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_millis()));
+            .unwrap_or_else(|| {
+                format!(
+                    "file_{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis()
+                )
+            });
 
         let data = match field.bytes().await {
-            Ok(b) => b,
+            Ok(b) => b.to_vec(),
             Err(_) => continue,
         };
+        pending_files.push((file_orig_name, data));
+    }
+
+    if pending_files.is_empty() {
+        return json_response(StatusCode::BAD_REQUEST, r#"{"error":"Nessun file"}"#);
+    }
+
+    let rollback = |uploaded: &[String]| {
+        for prev in uploaded {
+            let _ = fs::remove_file(user_folder.join(prev));
+            crate::hash_index::remove_file_hash(&user_folder, prev);
+            thumb_cache::invalidate_file(&user_folder, prev);
+        }
+    };
+
+    for (idx, (file_orig_name, data)) in pending_files.into_iter().enumerate() {
+        let raw_expected = expected_checksums.get(idx).map(|s| s.trim()).unwrap_or("");
+        let expected_sha = if !raw_expected.is_empty() {
+            match normalize_sha256_hex(raw_expected) {
+                Some(h) => Some(h),
+                None => {
+                    rollback(&uploaded_filenames);
+                    return json_response(
+                        StatusCode::BAD_REQUEST,
+                        r#"{"error":"Checksum SHA-256 non valido (attesi 64 caratteri esadecimali)"}"#,
+                    );
+                }
+            }
+        } else {
+            None
+        };
+
+        let actual_sha = crate::hash_index::sha256_hex(&data);
+        if let Some(exp) = expected_sha {
+            if actual_sha != exp {
+                rollback(&uploaded_filenames);
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    r#"{"error":"Checksum SHA-256 non corrispondente"}"#,
+                );
+            }
+        }
 
         let unique_name = allocate_unique_vault_filename(&user_folder, &file_orig_name);
         let out_path = user_folder.join(&unique_name);
@@ -148,8 +206,7 @@ pub async fn post_upload(
         match crypto::encrypt_file(&data, &sess.api_key) {
             Ok(encrypted) => {
                 if fs::write(&out_path, encrypted).is_ok() {
-                    let ts_index = uploaded_filenames.len();
-                    if let Some(ts_ms) = timestamps.get(ts_index) {
+                    if let Some(ts_ms) = timestamps.get(idx) {
                         let seconds = *ts_ms / 1000;
                         let nanos = ((*ts_ms % 1000) * 1_000_000) as u32;
                         if let Some(time) = std::time::SystemTime::UNIX_EPOCH
@@ -160,6 +217,12 @@ pub async fn post_upload(
                             }
                         }
                     }
+                    let _ = crate::hash_index::record_file_hash(
+                        &user_folder,
+                        &unique_name,
+                        &actual_sha,
+                        data.len() as u64,
+                    );
                     uploaded_filenames.push(unique_name);
                 }
             }
@@ -199,12 +262,18 @@ pub async fn post_upload(
             &state.upload_dir,
             Some(&sess.username),
         );
-        Some(crate::vault_manager::compute_cloud_storage_stats(&active, &trashed))
+        Some(crate::vault_manager::compute_cloud_storage_stats(
+            &active, &trashed,
+        ))
     };
+    let count = uploaded_filenames.len();
     let resp = serde_json::json!({
         "success": true,
         "files": uploaded_filenames,
-        "uploaded": uploaded_filenames.len(),
+        "uploaded": count,
+        "uploadedFilenames": uploaded_filenames,
+        "uploadedCount": count,
+        "message": format!("{count} file caricati."),
         "mediaFiles": media_files,
         "storageStats": storage_stats,
     });

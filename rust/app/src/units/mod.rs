@@ -9,15 +9,24 @@ pub mod media;
 pub mod shares;
 pub mod extras;
 pub mod android;
+pub mod zk_v2;
 pub mod fallback;
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, get_service, post, put};
 use axum::Router;
 use tower_http::services::{ServeDir, ServeFile};
 use crate::state::AppState;
 
+const UPLOAD_BODY_LIMIT: usize = 512 * 1024 * 1024; // 512 MiB
+
 pub fn router(state: AppState) -> Router {
+    let zk_api = zk_v2::v2_api_router(state.clone());
+    let zk_web = zk_v2::v2_web_router();
+
     Router::new()
+        .nest("/api/v2", zk_api)
+        .nest("/v2", zk_web)
         .route("/", get(root::get_root))
         .route("/login", get(navigation::redirect_to_root).post(auth::post_login))
         .route("/logout", post(auth::post_logout))
@@ -29,6 +38,19 @@ pub fn router(state: AppState) -> Router {
         .route("/api/push/subscribe", post(push::post_subscribe))
         .route("/api/push/unsubscribe", post(push::post_unsubscribe))
         .route("/api/android/update-manifest", get(android::android_update_manifest))
+        .route(
+            "/api/ai-model/efficientnet_lite4.tflite",
+            get(android::get_ai_model_tflite),
+        )
+        .route("/api/android/releases", get(android::get_android_releases))
+        .route(
+            "/api/android/build-release",
+            post(android::post_android_build_release),
+        )
+        .route(
+            "/api/android/download/{buildId}/{type}",
+            get(android::get_android_download),
+        )
         .route("/api/albums", get(api::get_albums))
         .route("/api/albums/create", post(api::post_albums_create))
         .route("/api/albums/assign", post(api::post_albums_assign))
@@ -43,7 +65,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/shared-albums/{shareId}/upload",
-            post(shares::post_shared_album_upload),
+            post(shares::post_shared_album_upload).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
         )
         .route("/api/favorites", get(api::get_favorites))
         .route("/api/favorites/toggle", post(api::post_favorites_toggle))
@@ -69,20 +91,26 @@ pub fn router(state: AppState) -> Router {
         .route("/api/upload/chunked/init", post(extras::post_chunked_init))
         .route(
             "/api/upload/chunked/{uploadId}/{chunkIndex}",
-            put(extras::put_chunked_part),
+            put(extras::put_chunked_part).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
         )
         .route(
             "/api/upload/chunked/{uploadId}/complete",
             post(extras::post_chunked_complete),
         )
         .route("/api/document-preview/{filename}", get(extras::get_document_preview))
-        .route("/api/media/edit", post(extras::post_media_edit))
+        .route(
+            "/api/media/edit",
+            post(extras::post_media_edit).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
+        )
         .route("/trash/batch", post(extras::post_trash_batch))
         .route("/find_duplicates_server", post(extras::post_find_duplicates))
         .route("/prepare-zip", post(extras::post_prepare_zip))
         .route("/zip-progress/{taskId}", get(extras::get_zip_progress))
         .route("/download-zip/{filename}", get(extras::get_download_zip))
-        .route("/upload", post(media::post_upload))
+        .route(
+            "/upload",
+            post(media::post_upload).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
+        )
         .route("/media/{filename}", get(media::get_media))
         .route("/trash/media/{filename}", get(media::get_trash_media))
         .route("/trash/{filename}", post(media::post_trash_file))

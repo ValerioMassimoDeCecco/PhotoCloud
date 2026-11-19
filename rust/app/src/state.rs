@@ -4,11 +4,21 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use crate::vault;
+use crate::zk_v2_store::ZkVaultStoreV2;
+
 #[derive(Clone)]
 pub struct SessionData {
     pub username: String,
     pub api_key: String,
     pub expires_at: u64,
+}
+
+#[derive(Clone)]
+pub struct SharePlaybackGrant {
+    pub granted_at: u64,
+    pub bytes_used: usize,
+    pub max_bytes: usize,
 }
 
 #[derive(Clone)]
@@ -48,17 +58,33 @@ pub struct AppState {
     pub temp_dir: PathBuf,
     pub zip_tasks: Arc<RwLock<HashMap<String, ZipTask>>>,
     pub chunked_uploads: Arc<RwLock<HashMap<String, ChunkedUpload>>>,
+    pub share_playback_grants: Arc<RwLock<HashMap<String, SharePlaybackGrant>>>,
+    pub zk_v2: Arc<ZkVaultStoreV2>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        let upload_dir = PathBuf::from("user_media");
+        let temp_dir = PathBuf::from("temp_uploads");
+        let vault_v2_dir = std::env::var("VAULT_V2_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("vault_v2"));
+        let _ = fs::create_dir_all(&upload_dir);
+        let _ = fs::create_dir_all(&temp_dir);
+        let server_secret = vault::get_or_create_server_secret(&upload_dir);
+        let zk_v2 = ZkVaultStoreV2::open(vault_v2_dir, temp_dir.clone(), server_secret)
+            .expect("failed to initialize Zero-Knowledge v2 vault store");
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            upload_dir: PathBuf::from("user_media"),
+            upload_dir,
             users_file: PathBuf::from("users.txt"),
-            temp_dir: PathBuf::from("temp_uploads"),
+            temp_dir,
             zip_tasks: Arc::new(RwLock::new(HashMap::new())),
             chunked_uploads: Arc::new(RwLock::new(HashMap::new())),
+            share_playback_grants: Arc::new(RwLock::new(HashMap::new())),
+            zk_v2: Arc::new(zk_v2),
         }
     }
 }

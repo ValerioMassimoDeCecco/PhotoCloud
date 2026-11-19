@@ -1,11 +1,15 @@
-use std::sync::Mutex;
-use std::collections::HashMap;
+use aes::Aes256;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
+use cfb_mode::cipher::{AsyncStreamCipher, KeyIvInit};
 use hmac::Hmac;
 use rand::Rng;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use subtle::ConstantTimeEq;
+
+type Aes256CfbDec = cfb_mode::Decryptor<Aes256>;
 
 const LOWER: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
 const UPPER: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -136,17 +140,80 @@ pub fn decrypt_file(encrypted_data: &[u8], key: &str) -> Result<Vec<u8>, String>
         payload.extend_from_slice(ciphertext);
         payload.extend_from_slice(tag);
 
-        cipher.decrypt(nonce, payload.as_ref()).map_err(|e| format!("Decryption failed: {e}"))
+        cipher
+            .decrypt(nonce, payload.as_ref())
+            .map_err(|e| format!("Decryption failed: {e}"))
     } else {
+        // Legacy AES-256-CFB format: 16B salt + 16B IV + ciphertext (full-block CFB-128)
         if encrypted_data.len() < 32 {
             return Err("Encrypted payload too short".to_string());
         }
-        let _salt = &encrypted_data[0..16];
-        let _iv = &encrypted_data[16..32];
-        let _ciphertext = &encrypted_data[32..];
-        let _derived = derive_key(key, _salt);
-        
-        // CFB fallback
-        Err("Legacy CFB format detected".to_string())
+        let salt = &encrypted_data[0..16];
+        let iv = &encrypted_data[16..32];
+        let ciphertext = &encrypted_data[32..];
+        let derived = derive_key(key, salt);
+
+        let mut plaintext = ciphertext.to_vec();
+        let decryptor = Aes256CfbDec::new_from_slices(&derived, iv)
+            .map_err(|e| format!("Invalid CFB key/iv: {e}"))?;
+        decryptor.decrypt(&mut plaintext);
+        Ok(plaintext)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cfb_mode::cipher::AsyncStreamCipher;
+
+    type Aes256CfbEnc = cfb_mode::Encryptor<Aes256>;
+
+    #[test]
+    fn gcm_roundtrip_and_tamper_detection() {
+        let key = "MySuperSecretKey!2026";
+        let plain = b"PhotoCloud AES-256-GCM test payload with unicode \xF0\x9F\x93\xB7";
+        let enc = encrypt_file(plain, key).expect("encrypt");
+        assert!(enc.starts_with(MAGIC));
+        assert_eq!(encrypted_plaintext_size(&enc), plain.len());
+
+        let dec = decrypt_file(&enc, key).expect("decrypt");
+        assert_eq!(dec, plain);
+
+        let mut tampered = enc.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        assert!(decrypt_file(&tampered, key).is_err());
+        assert!(decrypt_file(&enc, "WrongKey!2026").is_err());
+    }
+
+    #[test]
+    fn legacy_aes_256_cfb_decryption_works() {
+        let key = "LegacyVaultKey!99";
+        let salt = [0x11u8; 16];
+        let iv = [0x22u8; 16];
+        let plain = b"Legacy PhotoCloud CFB-128 payload spanning more than one 16-byte AES block!";
+        let derived = derive_key(key, &salt);
+
+        let mut ct = plain.to_vec();
+        let enc = Aes256CfbEnc::new_from_slices(&derived, &iv).unwrap();
+        enc.encrypt(&mut ct);
+
+        let mut legacy_blob = Vec::with_capacity(32 + ct.len());
+        legacy_blob.extend_from_slice(&salt);
+        legacy_blob.extend_from_slice(&iv);
+        legacy_blob.extend_from_slice(&ct);
+
+        assert_eq!(encrypted_plaintext_size(&legacy_blob), plain.len());
+        let dec = decrypt_file(&legacy_blob, key).expect("legacy CFB decrypt");
+        assert_eq!(dec, plain);
+    }
+
+    #[test]
+    fn verify_key_constant_time() {
+        let key = generate_api_key(32);
+        let h = hash_key(&key);
+        assert!(verify_key(&key, &h));
+        assert!(verify_key(&key, &h.to_uppercase()));
+        assert!(!verify_key("wrong", &h));
     }
 }

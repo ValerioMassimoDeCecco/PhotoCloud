@@ -1608,6 +1608,12 @@ pub fn serve_plain_media(
             );
             return resp;
         }
+        let mut resp = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+        resp.headers_mut().insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes */{total_len}")).unwrap(),
+        );
+        return resp;
     }
 
     let mut resp = (
