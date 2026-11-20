@@ -482,7 +482,7 @@ class ZkExternalOpenHelper(cacheDir: File) {
  * - Full-resolution streaming decryption & zero-disk-temp Range video reader
  * - Encrypted Albums CRUD with optimistic concurrency (`ETag` / `If-Match`)
  * - Trash / Restore / Permanent Delete / Empty Trash / Stats
- * - Zero-Knowledge Share Link generation (`/v2/s/<shareId>#<base64url(shareKey)>`) where `shareKey`
+ * - Zero-Knowledge Share Link generation (`/v2/share/<shareId>#<base64url(shareKey)>`) where `shareKey`
  *   never leaves the client
  */
 class ZkVaultRepository(
@@ -690,7 +690,7 @@ class ZkVaultRepository(
     }
 
     /**
-     * Creates a Zero-Knowledge public share link `/v2/s/<shareId>#<base64url(shareKey)>`.
+     * Creates a Zero-Knowledge public share link `/v2/share/<shareId>#<base64url(shareKey)>`.
      *
      * Security invariant:
      * - `shareKey` is generated locally (32 random bytes) and placed ONLY in the URL `#fragment`.

@@ -1022,7 +1022,7 @@ class ZkSessionManager(
         vaultKeyStore.clearBiometricWrappedVk()
         metadataStore.clearEncryptedBioSession()
         publishState(
-            lockReason = "Chiave biometrica invalidata (biometria modificata). Accedi con File Chiave."
+            lockReason = "Chiave biometrica invalidata (biometria modificata). Accedi con File Chiave e passphrase (se impostata)."
         )
     }
 

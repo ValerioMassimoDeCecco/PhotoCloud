@@ -1019,7 +1019,7 @@ class ZkUploadAndBackupV2Test {
                 meta = ZkBlobPlaintextMeta(name = "secret_family.jpg", mime = "image/jpeg", size = plaintext.size.toLong(), createdAt = 1L)
             )
             val share = repo.createZeroKnowledgeShare(listOf(item), title = "Estate 2026")
-            assertTrue(share.shareUrlWithFragment.contains("/v2/s/${share.shareId}#"))
+            assertTrue(share.shareUrlWithFragment.contains("/v2/share/${share.shareId}#"))
             val shareKeyB64u = share.shareUrlWithFragment.substringAfter('#')
             val shareKeyBytes = ZkCoreCrypto.fromBase64Url(shareKeyB64u)
             assertEquals(32, shareKeyBytes.size)
