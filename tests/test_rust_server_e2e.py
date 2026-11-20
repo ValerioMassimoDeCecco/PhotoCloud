@@ -374,7 +374,113 @@ def main():
         assert r.json() == {"authenticated": False}
         print("    OK (logged out and session invalidated)")
 
-        print("\nALL 17 END-TO-END RUST SERVER TEST SUITES PASSED WITH ZERO ERRORS!")
+        # 18. Zero-Knowledge V2 upload abort (DELETE /api/v2/blobs/upload/{uploadId}) & PHOTOCLOUD_ZK_ONLY=1
+        print("[18] Testing ZK V2 upload abort and PHOTOCLOUD_ZK_ONLY=1 strict mode...")
+        import base64 as _b64
+        import socket as _socket
+        import uuid as _uuid
+
+        v2_client = HttpSession()
+        user_salt = _b64.urlsafe_b64encode(os.urandom(16)).decode("ascii").rstrip("=")
+        auth_secret = _b64.urlsafe_b64encode(os.urandom(32)).decode("ascii").rstrip("=")
+        wrapped_vk = _b64.urlsafe_b64encode(os.urandom(60)).decode("ascii").rstrip("=")
+        r_v2_reg = v2_client.post(
+            f"{BASE_URL}/api/v2/register",
+            json_body={
+                "username": "rust_zk_abort_user",
+                "salt": user_salt,
+                "kdfParams": {"algorithm": "Argon2id", "memoryKiB": 65536, "iterations": 3, "parallelism": 1},
+                "authSecret": auth_secret,
+                "wrappedVaultKey": wrapped_vk,
+                "setupToken": setup_token,
+            },
+        )
+        assert r_v2_reg.status_code == 201, f"V2 register failed: {r_v2_reg.status_code} {r_v2_reg.text}"
+        set_cookie_hdr = r_v2_reg.headers.get("set-cookie", "")
+        assert "HttpOnly" in set_cookie_hdr and "SameSite=Strict" in set_cookie_hdr, (
+            f"Missing V2 session cookie flags: {set_cookie_hdr}"
+        )
+        v2_cookie_pair = set_cookie_hdr.split(";", 1)[0].strip()
+        v2_csrf = r_v2_reg.json().get("csrfToken", "")
+        v2_headers = {"Cookie": v2_cookie_pair, "X-CSRF-Token": v2_csrf}
+
+        blob_id = str(_uuid.uuid4())
+        enc_meta = _b64.urlsafe_b64encode(os.urandom(48)).decode("ascii").rstrip("=")
+        r_init = v2_client.post(
+            f"{BASE_URL}/api/v2/blobs/upload/init",
+            json_body={
+                "blobId": blob_id,
+                "totalSize": 128,
+                "chunkSize": 128,
+                "totalChunks": 1,
+                "expectedSha256": "a" * 64,
+                "encMeta": enc_meta,
+            },
+            headers=v2_headers,
+        )
+        assert r_init.status_code == 201, f"V2 upload init failed: {r_init.status_code} {r_init.text}"
+        upload_id = r_init.json()["uploadId"]
+        r_abort = v2_client.request("DELETE", f"{BASE_URL}/api/v2/blobs/upload/{upload_id}", headers=v2_headers)
+        assert r_abort.status_code == 200 and r_abort.json().get("ok") is True, f"Abort failed: {r_abort.status_code} {r_abort.text}"
+        r_abort_again = v2_client.request("DELETE", f"{BASE_URL}/api/v2/blobs/upload/{upload_id}", headers=v2_headers)
+        assert r_abort_again.status_code == 404, f"Expected 404 after abort, got {r_abort_again.status_code}"
+
+        # Spawn a second short-lived Rust server with PHOTOCLOUD_ZK_ONLY=1
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as _sock:
+            _sock.bind(("127.0.0.1", 0))
+            zk_only_port = _sock.getsockname()[1]
+        zk_only_dir = tempfile.mkdtemp(prefix="photocloud_rust_zk_only_")
+        for asset_dir in ("public", "static", "templates", "dist", "release", "android-app"):
+            src = os.path.join(REPO_ROOT, asset_dir)
+            dst = os.path.join(zk_only_dir, asset_dir)
+            if os.path.exists(src):
+                try:
+                    os.symlink(src, dst, target_is_directory=True)
+                except OSError:
+                    shutil.copytree(src, dst)
+        zk_only_env = env.copy()
+        zk_only_env["PORT"] = str(zk_only_port)
+        zk_only_env["PHOTOCLOUD_ZK_ONLY"] = "1"
+        zk_only_proc = subprocess.Popen(
+            [BINARY],
+            cwd=zk_only_dir,
+            env=zk_only_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            zk_url = f"http://127.0.0.1:{zk_only_port}"
+            zk_ready = False
+            for _ in range(40):
+                try:
+                    rr = HttpSession().get(f"{zk_url}/v2")
+                    if rr.status_code == 200:
+                        zk_ready = True
+                        break
+                except Exception:
+                    time.sleep(0.2)
+            assert zk_ready, "Rust PHOTOCLOUD_ZK_ONLY=1 server failed to start"
+            zk_sess = HttpSession()
+            r_root_zk = zk_sess.get(f"{zk_url}/")
+            assert r_root_zk.status_code in (302, 307) and r_root_zk.headers.get("location") == "/v2", (
+                f"Expected redirect to /v2, got {r_root_zk.status_code} loc={r_root_zk.headers.get('location')}"
+            )
+            r_legacy_v1 = zk_sess.get(f"{zk_url}/api/session")
+            assert r_legacy_v1.status_code == 410, f"Expected 410 on legacy V1 route, got {r_legacy_v1.status_code}"
+            assert r_legacy_v1.json().get("error") == "LEGACY_V1_DISABLED_ZK_ONLY"
+            r_v2_ok = zk_sess.post(f"{zk_url}/api/v2/login/params", json_body={"username": "probe_user"})
+            assert r_v2_ok.status_code == 200, f"Expected 200 on V2 login params, got {r_v2_ok.status_code}"
+        finally:
+            zk_only_proc.terminate()
+            try:
+                zk_only_proc.wait(timeout=3)
+            except Exception:
+                zk_only_proc.kill()
+            shutil.rmtree(zk_only_dir, ignore_errors=True)
+        print("    OK (V2 upload abort & PHOTOCLOUD_ZK_ONLY=1 verified on Rust)")
+
+        print("\nALL 18 END-TO-END RUST SERVER TEST SUITES PASSED WITH ZERO ERRORS!")
     finally:
         server_proc.terminate()
         try:
@@ -386,3 +492,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

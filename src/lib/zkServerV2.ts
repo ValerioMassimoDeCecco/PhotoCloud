@@ -264,13 +264,12 @@ export function fsyncDirBestEffort(dirPath: string): void {
   }
 }
 
-export function writeBufferAtomicSync(tempDir: string, targetPath: string, data: Buffer): void {
+export function writeBufferAtomicSync(_tempDir: string, targetPath: string, data: Buffer): void {
   const parentDir = path.dirname(targetPath);
   fs.mkdirSync(parentDir, { recursive: true });
-  fs.mkdirSync(tempDir, { recursive: true });
   const tmpPath = path.join(
-    tempDir,
-    `v2_atomic_${Date.now()}_${crypto.randomBytes(8).toString('hex')}.tmp`
+    parentDir,
+    `.v2_atomic_${process.pid}_${Date.now()}_${crypto.randomBytes(8).toString('hex')}.tmp`
   );
   const fd = fs.openSync(tmpPath, 'w', 0o600);
   try {
@@ -279,7 +278,16 @@ export function writeBufferAtomicSync(tempDir: string, targetPath: string, data:
   } finally {
     fs.closeSync(fd);
   }
-  fs.renameSync(tmpPath, targetPath);
+  try {
+    fs.renameSync(tmpPath, targetPath);
+  } catch (err) {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      // Ignore cleanup failure
+    }
+    throw err;
+  }
   fsyncDirBestEffort(parentDir);
 }
 
@@ -292,7 +300,37 @@ export function moveTempFileAtomicSync(tempFilePath: string, targetPath: string)
   } finally {
     fs.closeSync(fd);
   }
-  fs.renameSync(tempFilePath, targetPath);
+  try {
+    fs.renameSync(tempFilePath, targetPath);
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    if (code !== 'EXDEV') {
+      throw err;
+    }
+    const stagedTarget = `${targetPath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    try {
+      fs.copyFileSync(tempFilePath, stagedTarget);
+      const stagedFd = fs.openSync(stagedTarget, 'r+');
+      try {
+        fs.fsyncSync(stagedFd);
+      } finally {
+        fs.closeSync(stagedFd);
+      }
+      fs.renameSync(stagedTarget, targetPath);
+      try {
+        fs.unlinkSync(tempFilePath);
+      } catch {
+        // Best-effort cleanup of source temp file after atomic commit
+      }
+    } catch (copyErr) {
+      try {
+        if (fs.existsSync(stagedTarget)) fs.unlinkSync(stagedTarget);
+      } catch {
+        // Ignore cleanup failure
+      }
+      throw copyErr;
+    }
+  }
   fsyncDirBestEffort(parentDir);
 }
 
@@ -2011,6 +2049,46 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
         sha256: actualSha256,
       });
     }
+  });
+
+  router.delete('/blobs/upload/:uploadId', (req: Request, res: Response) => {
+    const sess = requireAuth(req, res);
+    if (!sess) return;
+
+    const uploadId = String(req.params.uploadId || '');
+    if (!isValidUuidV4(uploadId)) {
+      res.status(404).json({ error: 'NOT_FOUND' });
+      return;
+    }
+
+    const uploadRow = store.db
+      .prepare(`SELECT upload_id, blob_id, temp_path FROM uploads_v2 WHERE upload_id = ? AND owner_id = ?`)
+      .get(uploadId, sess.userId) as { upload_id: string; blob_id: string; temp_path: string } | undefined;
+
+    if (!uploadRow) {
+      res.status(404).json({ error: 'NOT_FOUND' });
+      return;
+    }
+
+    store.db
+      .prepare(`DELETE FROM uploads_v2 WHERE upload_id = ? AND owner_id = ?`)
+      .run(uploadId, sess.userId);
+
+    try {
+      if (uploadRow.temp_path && fs.existsSync(uploadRow.temp_path)) {
+        fs.unlinkSync(uploadRow.temp_path);
+      }
+    } catch {
+      // ignore unlink errors
+    }
+
+    logger.info('v2_blob_upload_aborted', {
+      userId: sess.userId,
+      uploadId,
+      blobId: uploadRow.blob_id,
+    });
+
+    res.status(200).json({ ok: true, uploadId });
   });
 
   // Helper per lo streaming di un blob cifrato con supporto RFC 9110 Range

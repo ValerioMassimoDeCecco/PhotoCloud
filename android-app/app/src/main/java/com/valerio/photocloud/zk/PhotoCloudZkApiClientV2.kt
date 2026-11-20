@@ -590,6 +590,16 @@ class PhotoCloudZkApiClientV2(
         }
     }
 
+    suspend fun abortBlobUpload(uploadId: String): Boolean {
+        val url = buildV2EndpointUrl("/api/v2/blobs/upload/$uploadId")
+        val req = Request.Builder()
+            .url(url)
+            .delete()
+            .build()
+        val (status, _) = executeJsonRequest(req)
+        return status in 200..299
+    }
+
     suspend fun uploadEncryptedThumbnail(
         blobId: String,
         variant: String,

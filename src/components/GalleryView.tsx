@@ -506,6 +506,15 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
               <span className="btn-text">Duplicati</span>
             </button>
 
+            <a
+              href="/v2"
+              className="btn outlined"
+              title="Apri Vault Zero-Knowledge E2EE (v2)"
+            >
+              <span className="material-icons">enhanced_encryption</span>
+              <span className="btn-text">Vault ZK v2</span>
+            </a>
+
             <button
               type="button"
               className="btn primary"

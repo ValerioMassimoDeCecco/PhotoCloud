@@ -2016,4 +2016,64 @@ describe('FASE 2 — PhotoCloud Zero-Knowledge Server API v2 (/api/v2/*)', () =>
       await srv.close();
     }
   });
+
+  it('11. DELETE /api/v2/blobs/upload/:uploadId annulla upload cifrato, rimuove file temporaneo e blocca abusi cross-user', async () => {
+    const srv = await startTestV2Server();
+    try {
+      const userA = await registerTestUser(srv.baseUrl, 'abort_owner');
+      const userB = await registerTestUser(srv.baseUrl, 'abort_other');
+
+      const blobId = crypto.randomUUID();
+      const pczk = await generateValidPczkBlob(userA.vaultKey, blobId, crypto.randomBytes(1024));
+
+      const initRes = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/init`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: userA.cookie },
+        body: JSON.stringify({
+          blobId,
+          totalSize: pczk.ciphertext.byteLength,
+          chunkSize: pczk.ciphertext.byteLength,
+          totalChunks: 1,
+          expectedSha256: pczk.sha256Hex,
+          encMeta: pczk.encMetaB64,
+          dedupTag: pczk.dedupTagHex,
+        }),
+      });
+      assert.equal(initRes.status, 201);
+      const { uploadId } = (await initRes.json()) as { uploadId: string };
+
+      const tempPart = path.join(srv.tempUploadDir, `v2_upload_${uploadId}.part`);
+      assert.equal(fs.existsSync(tempPart), true);
+
+      // Cross-user abort MUST return 404 and leave temp file intact
+      const crossAbort = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/${uploadId}`, {
+        method: 'DELETE',
+        headers: { Cookie: userB.cookie },
+      });
+      assert.equal(crossAbort.status, 404);
+      assert.equal(fs.existsSync(tempPart), true);
+
+      // Owner abort returns 200 and removes temp file + session
+      const ownerAbort = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/${uploadId}`, {
+        method: 'DELETE',
+        headers: { Cookie: userA.cookie },
+      });
+      assert.equal(ownerAbort.status, 200);
+      const abortBody = (await ownerAbort.json()) as { ok: boolean; uploadId: string };
+      assert.equal(abortBody.ok, true);
+      assert.equal(abortBody.uploadId, uploadId);
+      assert.equal(fs.existsSync(tempPart), false);
+
+      // Subsequent chunk upload or second abort MUST return 404
+      const putAfterAbort = await fetch(`${srv.baseUrl}/api/v2/blobs/upload/${uploadId}/0`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream', Cookie: userA.cookie },
+        body: new Uint8Array(pczk.ciphertext),
+      });
+      assert.equal(putAfterAbort.status, 404);
+    } finally {
+      await srv.close();
+    }
+  });
 });
+

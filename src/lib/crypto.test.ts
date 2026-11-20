@@ -634,6 +634,9 @@ test('Security Hardening: constant-time verifyKey, AndroidBuilder escaping, and 
   const mainKt = generateMainActivityKt(baseConfig);
   assert.ok(mainKt.includes('settings.allowFileAccess = false'));
   assert.ok(mainKt.includes('settings.allowContentAccess = false'));
+  assert.ok(mainKt.includes('/v2'), 'Generated MainActivity must target Zero-Knowledge /v2 vault');
+  assert.ok(mainKt.includes('AES/GCM/NoPadding'), 'Generated MainActivity must use AES-256-GCM AEAD');
+  assert.equal(mainKt.includes('AES/CFB/NoPadding'), false, 'Generated MainActivity must not emit legacy AES/CFB');
 });
 
 test('Dual-Theme & Liquid Glass Design System (Web + Android Kyant0/AndroidLiquidGlass parity)', async () => {

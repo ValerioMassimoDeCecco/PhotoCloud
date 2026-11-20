@@ -280,6 +280,14 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, onOpenAndro
             </div>
 
             <div className="auth-quick-actions">
+              <a
+                href="/v2"
+                className="btn primary full-width-btn"
+              >
+                <span className="material-icons">enhanced_encryption</span>
+                Apri Vault Zero-Knowledge E2EE (v2 — Consigliato)
+              </a>
+
               <button
                 type="button"
                 className="btn outlined full-width-btn"
@@ -287,7 +295,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, onOpenAndro
                 disabled={loading}
               >
                 <span className="material-icons">smartphone</span>
-                Accesso Rapido Demo Mobile (con foto cifrate)
+                Accesso Rapido Demo Mobile (v1 compatibilità)
               </button>
 
               <button
@@ -388,7 +396,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, onOpenAndro
       </div>
 
       <div className="auth-footer">
-        <p>I tuoi file sono protetti con crittografia end-to-end AES-256-CFB</p>
+        <p>Modalità Classica (v1 AES-256-CFB) • Per crittografia Zero-Knowledge E2EE client-side (Argon2id + AES-256-GCM) usa il <a href="/v2">Vault v2</a></p>
         <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'center' }}>
           <PWAInstallButton onOpenAndroidStudio={onOpenAndroidStudio} />
         </div>

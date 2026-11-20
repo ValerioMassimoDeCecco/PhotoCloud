@@ -95,7 +95,7 @@ import { createZkV2WebRouter } from './src/client/v2-app/router';
 const APP_ROOT = process.cwd();
 const UPLOAD_FOLDER = path.resolve(APP_ROOT, 'user_media');
 const VAULT_V2_FOLDER = path.resolve(APP_ROOT, process.env.VAULT_V2_DIR || 'vault_v2');
-const TEMP_UPLOAD_DIR = path.resolve(APP_ROOT, 'temp_uploads');
+const TEMP_UPLOAD_DIR = path.resolve(APP_ROOT, process.env.TEMP_UPLOAD_DIR || 'temp_uploads');
 const RELEASE_DIR = path.resolve(process.cwd(), 'release');
 
 /**
@@ -104,7 +104,7 @@ const RELEASE_DIR = path.resolve(process.cwd(), 'release');
  * così non si può più annunciare una versione diversa da quella realmente compilata.
  */
 function readAndroidAppVersion(): { versionName: string; versionCode: number } {
-  const fallback = { versionName: '1.4.1', versionCode: 31 };
+  const fallback = { versionName: '1.5.1', versionCode: 33 };
   try {
     const gradlePath = path.resolve(APP_ROOT, 'android-app/app/build.gradle.kts');
     if (!fs.existsSync(gradlePath)) return fallback;
@@ -867,6 +867,46 @@ async function startServer() {
   });
   app.use('/api/v2', zkV2.router);
   app.use('/v2', createZkV2WebRouter(APP_ROOT));
+
+  const zkOnlyMode = ['1', 'true', 'yes'].includes(
+    String(process.env.PHOTOCLOUD_ZK_ONLY || '').trim().toLowerCase()
+  );
+  if (zkOnlyMode) {
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const p = req.path;
+      if (p === '/' && (req.method === 'GET' || req.method === 'HEAD')) {
+        res.redirect(302, '/v2');
+        return;
+      }
+      const allowedInZkOnly =
+        p === '/v2' ||
+        p.startsWith('/v2/') ||
+        p.startsWith('/api/v2/') ||
+        p.startsWith('/api/android/') ||
+        p.startsWith('/api/ai-model/') ||
+        p.startsWith('/api/push/') ||
+        p.startsWith('/static/') ||
+        p.startsWith('/release/') ||
+        p === '/register-pwa.js' ||
+        p === '/service-worker.js' ||
+        p === '/manifest.webmanifest' ||
+        p === '/favicon.ico' ||
+        p === '/icon.svg' ||
+        p === '/apple-touch-icon.png' ||
+        p === '/pwa-192x192.png' ||
+        p === '/pwa-512x512.png' ||
+        p === '/pwa-maskable-512x512.png';
+      if (allowedInZkOnly) {
+        next();
+        return;
+      }
+      res.status(410).json({
+        error: 'LEGACY_V1_DISABLED_ZK_ONLY',
+        message: 'Modalità Zero-Knowledge esclusiva attiva. Usa /v2 e /api/v2/*.',
+        v2Url: '/v2',
+      });
+    });
+  }
 
   app.use('/static', express.static(STATIC_DIR));
   app.use(express.static(path.resolve(process.cwd(), 'public'), { index: false }));

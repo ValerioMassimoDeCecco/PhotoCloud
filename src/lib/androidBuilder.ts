@@ -115,6 +115,7 @@ android {
         buildConfigField("String", "SERVER_URL", "\\"${safeServerUrl}\\"")
         buildConfigField("boolean", "ENABLE_BIOMETRIC", "${Boolean(config.enableBiometricLock)}")
         buildConfigField("boolean", "ENABLE_OFFLINE_CACHE", "${Boolean(config.enableOfflineCache)}")
+        buildConfigField("boolean", "ZK_V2_DEFAULT", "true")
     }
 
     androidResources {
@@ -202,6 +203,8 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // Zero-Knowledge v2 Cryptography (Argon2id + HKDF-SHA256 + AES-256-GCM)
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
     // On-Device AI Categorization (MediaPipe Tasks Vision + WorkManager + Room + ExifInterface)
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
@@ -243,15 +246,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import javax.crypto.Cipher
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * ${safeAppName} - Native Android Client + Hybrid Encrypted Vault
+ * ${safeAppName} - Native Android Client + Zero-Knowledge E2EE Vault (v2)
  * Version: ${safeVersionName} (Code ${Number(config.versionCode)})
- * Endpoint: ${safeServerUrl}
+ * Endpoint: ${safeServerUrl}/v2
  */
 class MainActivity : ComponentActivity() {
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -263,7 +264,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 var webViewRef by remember { mutableStateOf<WebView?>(null) }
-                var currentTab by remember { mutableStateOf("gallery") }
+                var currentTab by remember { mutableStateOf("vault_zk") }
 
                 val filePicker = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.GetMultipleContents()
@@ -276,31 +277,22 @@ class MainActivity : ComponentActivity() {
                     bottomBar = {
                         NavigationBar {
                             NavigationBarItem(
-                                selected = currentTab == "gallery",
+                                selected = currentTab == "vault_zk",
                                 onClick = {
-                                    currentTab = "gallery"
+                                    currentTab = "vault_zk"
+                                    webViewRef?.loadUrl("${safeServerUrl}/v2")
+                                },
+                                icon = { Icon(Icons.Default.Lock, contentDescription = "Vault E2EE") },
+                                label = { Text("Vault E2EE") }
+                            )
+                            NavigationBarItem(
+                                selected = currentTab == "gallery_legacy",
+                                onClick = {
+                                    currentTab = "gallery_legacy"
                                     webViewRef?.loadUrl("${safeServerUrl}/")
                                 },
-                                icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = "Galleria") },
-                                label = { Text("Galleria") }
-                            )
-                            NavigationBarItem(
-                                selected = currentTab == "trash",
-                                onClick = {
-                                    currentTab = "trash"
-                                    webViewRef?.loadUrl("${safeServerUrl}/trash")
-                                },
-                                icon = { Icon(Icons.Default.DeleteOutline, contentDescription = "Cestino") },
-                                label = { Text("Cestino") }
-                            )
-                            NavigationBarItem(
-                                selected = currentTab == "security",
-                                onClick = {
-                                    currentTab = "security"
-                                    webViewRef?.loadUrl("${safeServerUrl}/security")
-                                },
-                                icon = { Icon(Icons.Default.Security, contentDescription = "Sicurezza") },
-                                label = { Text("Sicurezza") }
+                                icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = "Classico") },
+                                label = { Text("Classico") }
                             )
                         }
                     }
@@ -329,7 +321,7 @@ class MainActivity : ComponentActivity() {
                                         return true
                                     }
                                 }
-                                loadUrl("${safeServerUrl}")
+                                loadUrl("${safeServerUrl}/v2")
                                 webViewRef = this
                             }
                         }
@@ -345,21 +337,22 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         /**
-         * Native Kotlin implementation of PhotoCloud AES-256-CFB + PBKDF2-HMAC-SHA256
-         * matching main.py decrypt_file(encrypted_data, key).
+         * Zero-Knowledge v2 AES-256-GCM AEAD decryption helper (12-byte nonce + 128-bit GCM tag)
+         * aligned with PhotoCloud PCZK v1 specification (Argon2id + HKDF-SHA256 + AES-256-GCM).
          */
-        fun decryptMedia(encryptedData: ByteArray, apiKey: String): ByteArray {
-            val salt = encryptedData.copyOfRange(0, 16)
-            val iv = encryptedData.copyOfRange(16, 32)
-            val ciphertext = encryptedData.copyOfRange(32, encryptedData.size)
-
-            val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-            val spec = PBEKeySpec(apiKey.toCharArray(), salt, 100000, 256)
-            val secretKey = SecretKeySpec(factory.generateSecret(spec).encoded, "AES")
-
-            val cipher = Cipher.getInstance("AES/CFB/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(iv))
-            return cipher.doFinal(ciphertext)
+        fun decryptAesGcmChunk(
+            ciphertextWithTag: ByteArray,
+            fileKey32: ByteArray,
+            nonce12: ByteArray,
+            aad: ByteArray
+        ): ByteArray {
+            require(fileKey32.size == 32) { "AES-256 key must be 32 bytes" }
+            require(nonce12.size == 12) { "GCM nonce must be 12 bytes" }
+            val secretKey = SecretKeySpec(fileKey32, "AES")
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(128, nonce12))
+            cipher.updateAAD(aad)
+            return cipher.doFinal(ciphertextWithTag)
         }
     }
 }

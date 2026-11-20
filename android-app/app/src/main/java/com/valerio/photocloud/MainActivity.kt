@@ -850,13 +850,14 @@ fun PhotoCloudNativeApp(
     var showServerDialog by remember { mutableStateOf(false) }
     var tempServerInput by remember { mutableStateOf(serverUrl) }
 
+    val defaultZkV2 = remember(serverUrl) { !apiClient.hasActiveSessionCookie() }
     var zkV2ModeEnabled by remember {
-        mutableStateOf(prefs.getBoolean("zk_v2_enabled", false))
+        mutableStateOf(prefs.getBoolean("zk_v2_enabled", defaultZkV2))
     }
 
     val zkV2Gate = remember {
         ZkV2FeatureGate(
-            isEnabledProvider = { prefs.getBoolean("zk_v2_enabled", false) },
+            isEnabledProvider = { prefs.getBoolean("zk_v2_enabled", defaultZkV2) },
             factory = {
                 val allowLoopbackHttp = BuildConfig.DEBUG
                 val v2Client = PhotoCloudZkApiClientV2(

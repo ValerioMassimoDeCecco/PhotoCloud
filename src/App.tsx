@@ -166,6 +166,15 @@ export function App() {
           <span className="material-icons">android</span>
           <span>Release APK</span>
         </button>
+
+        <a
+          href="/v2"
+          className="android-nav-item"
+          title="Apri Vault Zero-Knowledge E2EE (v2)"
+        >
+          <span className="material-icons">enhanced_encryption</span>
+          <span>Vault ZK v2</span>
+        </a>
       </nav>
 
       <LightboxModal

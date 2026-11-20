@@ -1,6 +1,7 @@
 import {
   ZkVaultClient,
   evaluatePassphraseStrength,
+  generateUuidV4,
   isSafeRasterImageMime,
   isSvgMime,
   isUntrustedActiveMime,
@@ -12,6 +13,7 @@ import {
   type PinnedKdfRecord,
   type PreparedRegistrationV2,
   type TimelineGroupModeV2,
+  type VaultDetailedStatsV2,
   type ZkKeyFileV2,
 } from '../zk-sdk/index.ts';
 import {
@@ -168,7 +170,9 @@ export function initZkWebApp(): void {
   };
 
   let bannerMessage: { type: 'error' | 'warning' | 'success'; text: string } | null = null;
-  let currentView: 'gallery' | 'albums' | 'trash' = 'gallery';
+  let currentView: 'gallery' | 'albums' | 'trash' | 'security' = 'gallery';
+  let selectedAlbumId: string | null = null;
+  let cachedStats: VaultDetailedStatsV2 | null = null;
   let groupMode: TimelineGroupModeV2 = 'day';
   let searchQuery = '';
   let preparedReg: PreparedRegistrationV2 | null = null;
@@ -600,6 +604,7 @@ export function initZkWebApp(): void {
     galBtn.id = 'nav-gallery';
     galBtn.addEventListener('click', () => {
       currentView = 'gallery';
+      selectedAlbumId = null;
       render();
     });
 
@@ -607,19 +612,36 @@ export function initZkWebApp(): void {
     albBtn.id = 'nav-albums';
     albBtn.addEventListener('click', () => {
       currentView = 'albums';
-      render();
+      selectedAlbumId = null;
+      client.getAlbums().then(() => render()).catch(() => render());
     });
 
     const trashBtn = el('button', `nav-item ${currentView === 'trash' ? 'active' : ''}`, 'Cestino');
     trashBtn.id = 'nav-trash';
     trashBtn.addEventListener('click', () => {
       currentView = 'trash';
+      selectedAlbumId = null;
       render();
+    });
+
+    const secBtn = el('button', `nav-item ${currentView === 'security' ? 'active' : ''}`, 'Sicurezza & Chiavi');
+    secBtn.id = 'nav-security';
+    secBtn.addEventListener('click', () => {
+      currentView = 'security';
+      selectedAlbumId = null;
+      client
+        .getStats()
+        .then((st) => {
+          cachedStats = st;
+          render();
+        })
+        .catch(() => render());
     });
 
     navList.appendChild(galBtn);
     navList.appendChild(albBtn);
     navList.appendChild(trashBtn);
+    navList.appendChild(secBtn);
     sidebar.appendChild(navList);
 
     const uploadPanel = el('div', 'stats-box');
@@ -807,77 +829,378 @@ export function initZkWebApp(): void {
 
     const gridContainer = el('div', '');
     gridContainer.id = 'vault-grid-container';
-    renderGalleryGrid(gridContainer);
+    if (currentView === 'albums') {
+      renderAlbumsView(gridContainer);
+    } else if (currentView === 'security') {
+      renderSecurityView(gridContainer);
+    } else {
+      renderGalleryGrid(gridContainer);
+    }
     main.appendChild(gridContainer);
 
     layout.appendChild(main);
     container.appendChild(layout);
   }
 
+  function createMediaCard(item: DecryptedItemV2): HTMLElement {
+    const card = el('article', 'media-card');
+    card.dataset.itemId = item.id;
+    card.dataset.itemName = item.meta.name;
+
+    const thumbBox = el('div', 'media-thumb-box');
+    if (item.thumbs.includes(320) && isSafeRasterImageMime(item.meta.mime)) {
+      const img = el('img', 'media-thumb-img');
+      img.alt = item.meta.name;
+      client
+        .downloadThumbnail(item.blobId, 320)
+        .then((bytes) => {
+          img.src = registerObjectUrl(new Blob([bytes as unknown as BlobPart], { type: 'image/jpeg' }));
+        })
+        .catch(() => {});
+      thumbBox.appendChild(img);
+    } else {
+      thumbBox.appendChild(el('span', 'media-card-meta', item.category.toUpperCase()));
+    }
+    card.appendChild(thumbBox);
+
+    const body = el('div', 'media-card-body');
+    const titleText = item.meta.isFavorite ? `★ ${item.meta.name}` : item.meta.name;
+    const titleEl = el('div', 'media-card-title', titleText);
+    body.appendChild(titleEl);
+    body.appendChild(
+      el(
+        'div',
+        'media-card-meta',
+        `${formatBytes(item.meta.size)} • v${item.version} • ${item.meta.mime}`
+      )
+    );
+    card.appendChild(body);
+
+    card.addEventListener('click', () => {
+      selectedLightboxItem = item;
+      render();
+    });
+    return card;
+  }
+
   function renderGalleryGrid(container: HTMLElement): void {
     container.textContent = '';
 
-    const items =
-      currentView === 'trash'
-        ? client.getItems('trashed')
-        : searchQuery.trim()
-          ? client.searchItems(searchQuery)
-          : client.getItems('active');
+    if (currentView === 'trash' || searchQuery.trim()) {
+      const items =
+        currentView === 'trash'
+          ? client.getItems('trashed')
+          : client.searchItems(searchQuery);
 
-    if (items.length === 0) {
-      const empty = el(
-        'div',
-        'alert-banner',
-        currentView === 'trash' ? 'Il cestino è vuoto.' : 'Nessun elemento nel vault.'
-      );
+      if (items.length === 0) {
+        const empty = el(
+          'div',
+          'alert-banner',
+          currentView === 'trash' ? 'Il cestino è vuoto.' : 'Nessun elemento corrispondente nel vault.'
+        );
+        empty.id = 'vault-empty-state';
+        container.appendChild(empty);
+        return;
+      }
+
+      const grid = el('div', 'gallery-grid');
+      for (const item of items) {
+        grid.appendChild(createMediaCard(item));
+      }
+      container.appendChild(grid);
+      return;
+    }
+
+    const activeItems = client.getItems('active');
+    if (activeItems.length === 0) {
+      const empty = el('div', 'alert-banner', 'Nessun elemento nel vault.');
       empty.id = 'vault-empty-state';
       container.appendChild(empty);
       return;
     }
 
-    const grid = el('div', 'gallery-grid');
-    for (const item of items) {
-      const card = el('article', 'media-card');
-      card.dataset.itemId = item.id;
-      card.dataset.itemName = item.meta.name;
-
-      const thumbBox = el('div', 'media-thumb-box');
-      if (item.thumbs.includes(320) && isSafeRasterImageMime(item.meta.mime)) {
-        const img = el('img', 'media-thumb-img');
-        img.alt = item.meta.name;
-        client
-          .downloadThumbnail(item.blobId, 320)
-          .then((bytes) => {
-            img.src = registerObjectUrl(new Blob([bytes as unknown as BlobPart], { type: 'image/jpeg' }));
-          })
-          .catch(() => {});
-        thumbBox.appendChild(img);
-      } else {
-        thumbBox.appendChild(el('span', 'media-card-meta', item.category.toUpperCase()));
-      }
-      card.appendChild(thumbBox);
-
-      const body = el('div', 'media-card-body');
-      const titleEl = el('div', 'media-card-title', item.meta.name);
-      body.appendChild(titleEl);
-      body.appendChild(
-        el(
-          'div',
-          'media-card-meta',
-          `${formatBytes(item.meta.size)} • v${item.version} • ${item.meta.mime}`
-        )
+    const groups = client.groupItems(groupMode);
+    if (groups.length === 0) {
+      const info = el(
+        'div',
+        'alert-banner',
+        groupMode === 'album'
+          ? 'Nessun album cifrato ancora creato. Mostra tutti gli elementi attivi.'
+          : 'Nessun gruppo disponibile.'
       );
-      card.appendChild(body);
-
-      card.addEventListener('click', () => {
-        selectedLightboxItem = item;
-        render();
-      });
-
-      grid.appendChild(card);
+      container.appendChild(info);
+      const grid = el('div', 'gallery-grid');
+      for (const item of activeItems) {
+        grid.appendChild(createMediaCard(item));
+      }
+      container.appendChild(grid);
+      return;
     }
 
+    for (const grp of groups) {
+      if (grp.items.length === 0) continue;
+      const section = el('section', 'timeline-section');
+      const headerRow = el('div', 'timeline-group-header');
+      headerRow.appendChild(el('span', 'timeline-group-title', grp.label));
+      headerRow.appendChild(el('span', 'media-card-meta', `${grp.items.length} file`));
+      section.appendChild(headerRow);
+
+      const grid = el('div', 'gallery-grid');
+      for (const item of grp.items) {
+        grid.appendChild(createMediaCard(item));
+      }
+      section.appendChild(grid);
+      container.appendChild(section);
+    }
+  }
+
+  function renderAlbumsView(container: HTMLElement): void {
+    container.textContent = '';
+    const catalog = client.getCachedAlbums();
+    const activeItems = client.getItems('active');
+    const byBlob = new Map<string, DecryptedItemV2>();
+    for (const it of activeItems) byBlob.set(it.blobId, it);
+
+    if (selectedAlbumId) {
+      const album = catalog.albums.find((a) => a.id === selectedAlbumId);
+      if (!album) {
+        selectedAlbumId = null;
+      } else {
+        const bar = el('div', 'toolbar-row');
+        const backBtn = el('button', 'btn', '← Tutti gli Album');
+        backBtn.id = 'btn-album-back';
+        backBtn.addEventListener('click', () => {
+          selectedAlbumId = null;
+          render();
+        });
+        bar.appendChild(backBtn);
+        bar.appendChild(el('span', 'brand-title', `${album.title} (${album.blobIds.length})`));
+
+        const delBtn = el('button', 'btn btn-danger', 'Elimina Album Cifrato');
+        delBtn.id = 'btn-album-delete';
+        delBtn.addEventListener('click', async () => {
+          try {
+            await client.saveAlbums((cur) => ({
+              ...cur,
+              albums: cur.albums.filter((a) => a.id !== album.id),
+            }));
+            selectedAlbumId = null;
+            bannerMessage = { type: 'success', text: `Album "${album.title}" eliminato dal catalogo cifrato.` };
+            render();
+          } catch (err) {
+            bannerMessage = {
+              type: 'error',
+              text: err instanceof Error ? err.message : 'Errore eliminazione album.',
+            };
+            render();
+          }
+        });
+        bar.appendChild(delBtn);
+        container.appendChild(bar);
+
+        const albumItems = album.blobIds
+          .map((bId) => byBlob.get(bId))
+          .filter((x): x is DecryptedItemV2 => Boolean(x));
+
+        if (albumItems.length === 0) {
+          container.appendChild(
+            el(
+              'div',
+              'alert-banner',
+              'Questo album cifrato è vuoto. Apri una foto o un file in Galleria e assegnalo a questo album.'
+            )
+          );
+        } else {
+          const grid = el('div', 'gallery-grid');
+          for (const it of albumItems) {
+            grid.appendChild(createMediaCard(it));
+          }
+          container.appendChild(grid);
+        }
+        return;
+      }
+    }
+
+    const createRow = el('div', 'toolbar-row');
+    const nameInput = el('input', 'form-input search-input');
+    nameInput.type = 'text';
+    nameInput.id = 'album-name-input';
+    nameInput.placeholder = 'Nome nuovo album cifrato E2EE (es. Vacanze 2026)';
+    createRow.appendChild(nameInput);
+
+    const createBtn = el('button', 'btn btn-primary', 'Crea Album Cifrato');
+    createBtn.id = 'btn-create-album';
+    createBtn.addEventListener('click', async () => {
+      const title = nameInput.value.trim();
+      if (!title) return;
+      createBtn.disabled = true;
+      try {
+        const now = Date.now();
+        await client.saveAlbums((cur) => ({
+          ...cur,
+          albums: [
+            ...cur.albums,
+            {
+              id: generateUuidV4(),
+              title,
+              coverBlobId: null,
+              blobIds: [],
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }));
+        bannerMessage = {
+          type: 'success',
+          text: `Album cifrato "${title}" creato e salvato con AES-256-GCM + If-Match.`,
+        };
+        render();
+      } catch (err) {
+        bannerMessage = {
+          type: 'error',
+          text: err instanceof Error ? err.message : 'Errore creazione album.',
+        };
+        render();
+      }
+    });
+    createRow.appendChild(createBtn);
+    container.appendChild(createRow);
+
+    if (catalog.albums.length === 0) {
+      const empty = el(
+        'div',
+        'alert-banner',
+        'Nessun album cifrato. Crea un album sopra: nomi e associazioni sono cifrati client-side con AES-256-GCM.'
+      );
+      empty.id = 'albums-empty-state';
+      container.appendChild(empty);
+      return;
+    }
+
+    const grid = el('div', 'gallery-grid');
+    for (const alb of catalog.albums) {
+      const card = el('article', 'media-card album-card');
+      card.dataset.albumId = alb.id;
+      const body = el('div', 'media-card-body');
+      body.appendChild(el('div', 'media-card-title', alb.title));
+      body.appendChild(
+        el('div', 'media-card-meta', `${alb.blobIds.length} elementi • Catalogo rev. ${catalog.revision} • E2EE`)
+      );
+      card.appendChild(body);
+      card.addEventListener('click', () => {
+        selectedAlbumId = alb.id;
+        render();
+      });
+      grid.appendChild(card);
+    }
     container.appendChild(grid);
+  }
+
+  function renderSecurityView(container: HTMLElement): void {
+    container.textContent = '';
+    const secGrid = el('div', 'security-grid');
+
+    // Card 1: Passphrase Rewrap (POST /api/v2/account/rewrap)
+    const rewrapCard = el('section', 'stats-box security-card');
+    rewrapCard.appendChild(el('h2', 'brand-title', 'Cambia Passphrase (Rewrap Zero-Knowledge)'));
+    rewrapCard.appendChild(
+      el(
+        'p',
+        'media-card-meta',
+        'Ricalcola Argon2id (64 MiB, t=3, p=1) con un nuovo salt casuale e ri-cifra la Vault Key lato client senza ricifrare i file. Tutte le altre sessioni vengono revocate.'
+      )
+    );
+
+    const fgOld = el('div', 'form-group');
+    fgOld.appendChild(el('label', 'form-label', 'Passphrase Attuale'));
+    const oldInput = el('input', 'form-input');
+    oldInput.type = 'password';
+    oldInput.id = 'rewrap-old-pass';
+    fgOld.appendChild(oldInput);
+    rewrapCard.appendChild(fgOld);
+
+    const fgNew = el('div', 'form-group');
+    fgNew.appendChild(el('label', 'form-label', 'Nuova Passphrase (>= 12 caratteri)'));
+    const newInput = el('input', 'form-input');
+    newInput.type = 'password';
+    newInput.id = 'rewrap-new-pass';
+    const strengthEl = el('div', 'media-card-meta', '');
+    newInput.addEventListener('input', () => {
+      const st = evaluatePassphraseStrength(newInput.value);
+      strengthEl.textContent = `${st.feedback} (${st.estimatedBits} bit stimati)`;
+    });
+    fgNew.appendChild(newInput);
+    fgNew.appendChild(strengthEl);
+    rewrapCard.appendChild(fgNew);
+
+    const fgConf = el('div', 'form-group');
+    fgConf.appendChild(el('label', 'form-label', 'Conferma Nuova Passphrase'));
+    const confInput = el('input', 'form-input');
+    confInput.type = 'password';
+    confInput.id = 'rewrap-confirm-pass';
+    fgConf.appendChild(confInput);
+    rewrapCard.appendChild(fgConf);
+
+    const rewrapBtn = el('button', 'btn btn-primary', 'Aggiorna Passphrase e Scarica Keyfile');
+    rewrapBtn.id = 'btn-rewrap-submit';
+    rewrapBtn.addEventListener('click', async () => {
+      if (newInput.value !== confInput.value) {
+        bannerMessage = { type: 'error', text: 'Le nuove passphrase non corrispondono.' };
+        render();
+        return;
+      }
+      rewrapBtn.disabled = true;
+      rewrapBtn.textContent = 'Derivazione Argon2id e rewrap in corso...';
+      try {
+        const updatedKf = await client.changePassphrase(oldInput.value, newInput.value);
+        const fileName = `photocloud_v2_key_${updatedKf.username}.json`;
+        lastGeneratedKeyFile = { keyFile: updatedKf, fileName };
+        loadedKeyFile = updatedKf;
+        triggerDownload(
+          new TextEncoder().encode(JSON.stringify(updatedKf, null, 2)),
+          fileName,
+          'application/json'
+        );
+        bannerMessage = {
+          type: 'success',
+          text: 'Passphrase aggiornata con successo! Il Keyfile JSON aggiornato è stato scaricato.',
+        };
+        render();
+      } catch (err) {
+        bannerMessage = {
+          type: 'error',
+          text: err instanceof Error ? err.message : 'Errore durante il cambio passphrase.',
+        };
+        render();
+      }
+    });
+    rewrapCard.appendChild(rewrapBtn);
+    secGrid.appendChild(rewrapCard);
+
+    // Card 2: Cryptographic Posture & Storage Stats
+    const postureCard = el('section', 'stats-box security-card');
+    postureCard.appendChild(el('h2', 'brand-title', 'Stato Crittografia Zero-Knowledge'));
+    const lines = [
+      'KDF Master: Argon2id (64 MiB, t=3, p=1) + Account Key 256-bit',
+      'Subkey Derivation: HKDF-SHA256 con domain separation (KEK, Auth, Meta, Thumb, Dedup, FKWrap)',
+      'Blob & Metadata AEAD: AES-256-GCM (PCZK v1 chunked streaming 1 MiB)',
+      'Share Pubblici: Chiave 256-bit nel fragment # (mai inviata al server)',
+      'Auto-Lock: 15 minuti di inattività con zeroizzazione completa della RAM',
+    ];
+    for (const line of lines) {
+      postureCard.appendChild(el('div', 'media-card-meta', `• ${line}`));
+    }
+    if (cachedStats) {
+      postureCard.appendChild(
+        el(
+          'div',
+          'exif-meta-bar',
+          `Storage cifrato: ${formatBytes(cachedStats.activeBytes + cachedStats.trashedBytes)} / ${formatBytes(cachedStats.quotaBytes)} • Foto: ${cachedStats.photosCount} • Video: ${cachedStats.videosCount} • Documenti: ${cachedStats.documentsCount}`
+        )
+      );
+    }
+    secGrid.appendChild(postureCard);
+    container.appendChild(secGrid);
   }
 
   function renderLightboxModal(container: HTMLElement, item: DecryptedItemV2): void {
@@ -969,6 +1292,24 @@ export function initZkWebApp(): void {
         });
     }
 
+    const exifParts: string[] = [
+      `Dimensione: ${formatBytes(item.meta.size)}`,
+      `MIME: ${item.meta.mime}`,
+    ];
+    if (item.meta.width && item.meta.height) {
+      exifParts.push(`${item.meta.width}×${item.meta.height}`);
+    }
+    if (item.meta.takenAt) {
+      exifParts.push(`Data: ${new Date(item.meta.takenAt).toLocaleDateString('it-IT')}`);
+    }
+    if (item.meta.exifSubset?.model) {
+      exifParts.push(`Camera: ${item.meta.exifSubset.model}`);
+    }
+    if (item.meta.exifSubset?.iso) {
+      exifParts.push(`ISO ${item.meta.exifSubset.iso}`);
+    }
+    panel.appendChild(el('div', 'exif-meta-bar', exifParts.join(' • ')));
+
     const actionsRow = el('div', 'toolbar-row');
 
     const dlBtn = el('button', 'btn btn-primary', 'Scarica Originale');
@@ -987,6 +1328,50 @@ export function initZkWebApp(): void {
       render();
     });
     actionsRow.appendChild(favBtn);
+
+    const allAlbums = client.getCachedAlbums().albums;
+    if (allAlbums.length > 0 && item.state === 'active') {
+      const albSelect = el('select', 'form-input');
+      albSelect.id = 'lightbox-album-select';
+      const placeholderOpt = el('option', '', 'Assegna ad Album Cifrato...');
+      placeholderOpt.value = '';
+      albSelect.appendChild(placeholderOpt);
+      for (const alb of allAlbums) {
+        const inAlb = alb.blobIds.includes(item.blobId);
+        const opt = el('option', '', inAlb ? `✓ ${alb.title} (rimuovi)` : `+ ${alb.title}`);
+        opt.value = alb.id;
+        albSelect.appendChild(opt);
+      }
+      albSelect.addEventListener('change', async () => {
+        const targetId = albSelect.value;
+        if (!targetId) return;
+        try {
+          await client.saveAlbums((cur) => ({
+            ...cur,
+            albums: cur.albums.map((a) => {
+              if (a.id !== targetId) return a;
+              const exists = a.blobIds.includes(item.blobId);
+              return {
+                ...a,
+                blobIds: exists
+                  ? a.blobIds.filter((b) => b !== item.blobId)
+                  : [...a.blobIds, item.blobId],
+                updatedAt: Date.now(),
+              };
+            }),
+          }));
+          bannerMessage = { type: 'success', text: 'Catalogo album cifrato aggiornato.' };
+          render();
+        } catch (err) {
+          bannerMessage = {
+            type: 'error',
+            text: err instanceof Error ? err.message : 'Errore aggiornamento album.',
+          };
+          render();
+        }
+      });
+      actionsRow.appendChild(albSelect);
+    }
 
     const sharePwInput = el('input', 'form-input');
     sharePwInput.type = 'password';

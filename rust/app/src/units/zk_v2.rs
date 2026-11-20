@@ -13,7 +13,7 @@ use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -67,6 +67,10 @@ pub fn v2_api_router(state: AppState) -> Router<AppState> {
         .route(
             "/blobs/upload/{uploadId}/complete",
             post(post_blob_upload_complete),
+        )
+        .route(
+            "/blobs/upload/{uploadId}",
+            delete(delete_blob_upload),
         )
         .route("/blobs/{id}", get(get_blob))
         .route(
@@ -1826,6 +1830,63 @@ async fn post_blob_upload_complete(
             }),
         )
     }
+}
+
+async fn delete_blob_upload(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(upload_id): Path<String>,
+) -> Response {
+    let sess = match require_auth(&state, &headers) {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+
+    if !is_valid_uuid_v4(&upload_id) {
+        return v2_json(
+            StatusCode::NOT_FOUND,
+            serde_json::json!({ "error": "NOT_FOUND" }),
+        );
+    }
+
+    let temp_path_opt: Option<String> = {
+        let conn = state.zk_v2.db.lock().unwrap();
+        let found: Option<String> = conn
+            .query_row(
+                "SELECT temp_path FROM uploads_v2 WHERE upload_id = ?1 AND owner_id = ?2",
+                params![&upload_id, &sess.user_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        if found.is_some() {
+            let _ = conn.execute(
+                "DELETE FROM uploads_v2 WHERE upload_id = ?1 AND owner_id = ?2",
+                params![&upload_id, &sess.user_id],
+            );
+        }
+        found
+    };
+
+    let Some(temp_path) = temp_path_opt else {
+        return v2_json(
+            StatusCode::NOT_FOUND,
+            serde_json::json!({ "error": "NOT_FOUND" }),
+        );
+    };
+
+    if !temp_path.is_empty() {
+        let _ = fs::remove_file(&temp_path);
+    }
+
+    v2_json(
+        StatusCode::OK,
+        serde_json::json!({
+            "ok": true,
+            "uploadId": upload_id,
+        }),
+    )
 }
 
 fn serve_ciphertext_blob_with_range(

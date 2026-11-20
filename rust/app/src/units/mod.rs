@@ -12,13 +12,69 @@ pub mod android;
 pub mod zk_v2;
 pub mod fallback;
 
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{DefaultBodyLimit, Request};
+use axum::http::{Method, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, get_service, post, put};
-use axum::Router;
+use axum::{Json, Router};
 use tower_http::services::{ServeDir, ServeFile};
 use crate::state::AppState;
 
 const UPLOAD_BODY_LIMIT: usize = 512 * 1024 * 1024; // 512 MiB
+
+fn is_zk_only_mode() -> bool {
+    matches!(
+        std::env::var("PHOTOCLOUD_ZK_ONLY")
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase()
+            .as_str(),
+        "1" | "true" | "yes"
+    )
+}
+
+async fn zk_only_guard_middleware(req: Request, next: Next) -> Response {
+    if !is_zk_only_mode() {
+        return next.run(req).await;
+    }
+    let path = req.uri().path();
+    if path == "/" && (req.method() == Method::GET || req.method() == Method::HEAD) {
+        return Redirect::temporary("/v2").into_response();
+    }
+    let allowed = path == "/v2"
+        || path.starts_with("/v2/")
+        || path.starts_with("/api/v2/")
+        || path.starts_with("/api/android/")
+        || path.starts_with("/api/ai-model/")
+        || path.starts_with("/api/push/")
+        || path.starts_with("/static/")
+        || path.starts_with("/release/")
+        || matches!(
+            path,
+            "/register-pwa.js"
+                | "/service-worker.js"
+                | "/manifest.webmanifest"
+                | "/favicon.ico"
+                | "/icon.svg"
+                | "/apple-touch-icon.png"
+                | "/pwa-192x192.png"
+                | "/pwa-512x512.png"
+                | "/pwa-maskable-512x512.png"
+        );
+    if allowed {
+        return next.run(req).await;
+    }
+    (
+        StatusCode::GONE,
+        Json(serde_json::json!({
+            "error": "LEGACY_V1_DISABLED_ZK_ONLY",
+            "message": "Modalità Zero-Knowledge esclusiva attiva. Usa /v2 e /api/v2/*.",
+            "v2Url": "/v2"
+        })),
+    )
+        .into_response()
+}
 
 pub fn router(state: AppState) -> Router {
     let zk_api = zk_v2::v2_api_router(state.clone());
@@ -132,5 +188,6 @@ pub fn router(state: AppState) -> Router {
             get_service(ServeFile::new("public/pwa-maskable-512x512.png")),
         )
         .fallback(fallback::not_found)
+        .layer(middleware::from_fn(zk_only_guard_middleware))
         .with_state(state)
 }

@@ -1796,6 +1796,14 @@ export class ZkVaultClient {
   // 6. ALBUM CIFRATI CON MERGE AUTOMATICO SU 412 PRECONDITION FAILED
   // ==========================================================================
 
+  public getCachedAlbums(): DecryptedAlbumCatalogV2 {
+    return {
+      v: this.albumCatalog.v,
+      revision: this.albumCatalog.revision,
+      albums: this.albumCatalog.albums.map((a) => ({ ...a, blobIds: [...a.blobIds] })),
+    };
+  }
+
   public async getAlbums(): Promise<DecryptedAlbumCatalogV2> {
     const { userId, subkeys } = this.requireUnlocked();
     const resp = await this.apiFetch('/api/v2/albums');

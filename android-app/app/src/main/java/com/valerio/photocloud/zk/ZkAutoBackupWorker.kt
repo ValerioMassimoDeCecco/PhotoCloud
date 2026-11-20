@@ -363,7 +363,7 @@ class ZkAutoBackupWorker(
         fun syncScheduleFromPrefs(context: Context) {
             val appCtx = context.applicationContext
             val mainPrefs = appCtx.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE)
-            val zkV2Enabled = mainPrefs.getBoolean("zk_v2_enabled", false)
+            val zkV2Enabled = mainPrefs.getBoolean("zk_v2_enabled", true)
             val config = ZkAutoBackupPrefs.load(appCtx)
             val wm = WorkManager.getInstance(appCtx)
 
@@ -403,7 +403,7 @@ class ZkAutoBackupWorker(
         fun enqueueImmediate(context: Context) {
             val appCtx = context.applicationContext
             val mainPrefs = appCtx.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE)
-            if (!mainPrefs.getBoolean("zk_v2_enabled", false)) return
+            if (!mainPrefs.getBoolean("zk_v2_enabled", true)) return
             val req = OneTimeWorkRequestBuilder<ZkAutoBackupWorker>()
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build()
@@ -430,7 +430,7 @@ class ZkAutoBackupWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val mainPrefs = applicationContext.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE)
-        if (!mainPrefs.getBoolean("zk_v2_enabled", false)) {
+        if (!mainPrefs.getBoolean("zk_v2_enabled", true)) {
             return@withContext Result.success()
         }
         val config = ZkAutoBackupPrefs.load(applicationContext)
