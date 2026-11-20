@@ -1331,4 +1331,130 @@ object ZkCoreCrypto {
             shareMetaKey.zeroize()
         }
     }
+
+    /**
+     * Encrypts private owner-only share metadata using `metaKey` directly with
+     * `AAD = UTF8("owner-share-meta|" + shareId.lowercase())`.
+     * Byte-for-byte compatible with Web SDK `encryptOwnerShareMeta`.
+     */
+    fun encryptOwnerShareMeta(
+        metaKey: ByteArray,
+        shareId: String,
+        plaintextJson: String,
+        nonce: ByteArray? = null,
+        cryptoProvider: ZkCryptoProvider = JvmCryptoProvider
+    ): ByteArray {
+        if (metaKey.size != 32) {
+            throw ZkCryptoException(ZkErrorCode.INVALID_PARAMETER, "metaKey must be 32 bytes.")
+        }
+        val canonicalShareId = shareId.lowercase()
+        val iv = nonce ?: cryptoProvider.randomBytes(12)
+        val aad = "owner-share-meta|$canonicalShareId".toByteArray(StandardCharsets.UTF_8)
+        val pt = plaintextJson.toByteArray(StandardCharsets.UTF_8)
+        return try {
+            val ct = cryptoProvider.aes256GcmEncrypt(metaKey, iv, pt, aad)
+            iv + ct
+        } finally {
+            pt.zeroize()
+        }
+    }
+
+    /**
+     * Decrypts private owner-only share metadata using `metaKey` directly.
+     * Byte-for-byte compatible with Web SDK `decryptOwnerShareMeta`.
+     */
+    fun decryptOwnerShareMeta(
+        metaKey: ByteArray,
+        shareId: String,
+        encryptedOwnerMeta: ByteArray,
+        cryptoProvider: ZkCryptoProvider = JvmCryptoProvider
+    ): String {
+        if (metaKey.size != 32) {
+            throw ZkCryptoException(ZkErrorCode.INVALID_PARAMETER, "metaKey must be 32 bytes.")
+        }
+        if (encryptedOwnerMeta.size < 28) {
+            throw ZkCryptoException(ZkErrorCode.TRUNCATED_BLOB, "encryptedOwnerMeta shorter than 28 bytes.")
+        }
+        val canonicalShareId = shareId.lowercase()
+        val iv = encryptedOwnerMeta.copyOfRange(0, 12)
+        val ct = encryptedOwnerMeta.copyOfRange(12, encryptedOwnerMeta.size)
+        val aad = "owner-share-meta|$canonicalShareId".toByteArray(StandardCharsets.UTF_8)
+        val pt = cryptoProvider.aes256GcmDecrypt(metaKey, iv, ct, aad, ZkErrorCode.AUTH_TAG_MISMATCH)
+        return try {
+            String(pt, StandardCharsets.UTF_8)
+        } finally {
+            pt.zeroize()
+        }
+    }
+
+    /**
+     * Encrypts minimal re-authentication material (`authSecret`, `username`, `userId`) under a dedicated
+     * HKDF subkey derived from `VK` so that cold biometric unlock (which unwraps `VK` from AndroidKeyStore)
+     * can transparently renew an expired HTTP session cookie without ever storing plaintext `authSecret` on disk.
+     */
+    fun encryptBiometricSessionEnvelope(
+        vaultKey: ByteArray,
+        userId: String,
+        plaintextJson: String,
+        nonce: ByteArray? = null,
+        cryptoProvider: ZkCryptoProvider = JvmCryptoProvider
+    ): ByteArray {
+        if (vaultKey.size != 32) {
+            throw ZkCryptoException(ZkErrorCode.INVALID_PARAMETER, "vaultKey must be 32 bytes.")
+        }
+        val canonicalUserId = userId.lowercase()
+        val bioSessionKey = cryptoProvider.hkdfSha256(
+            vaultKey,
+            ByteArray(0),
+            "photocloud/v2/bio-session".toByteArray(StandardCharsets.UTF_8),
+            32
+        )
+        val pt = plaintextJson.toByteArray(StandardCharsets.UTF_8)
+        return try {
+            val iv = nonce ?: cryptoProvider.randomBytes(12)
+            val aad = "bio-session|$canonicalUserId".toByteArray(StandardCharsets.UTF_8)
+            val ct = cryptoProvider.aes256GcmEncrypt(bioSessionKey, iv, pt, aad)
+            iv + ct
+        } finally {
+            pt.zeroize()
+            bioSessionKey.zeroize()
+        }
+    }
+
+    /**
+     * Decrypts the re-authentication session envelope after `VK` has been unwrapped via BiometricPrompt.
+     */
+    fun decryptBiometricSessionEnvelope(
+        vaultKey: ByteArray,
+        userId: String,
+        encryptedEnvelope: ByteArray,
+        cryptoProvider: ZkCryptoProvider = JvmCryptoProvider
+    ): String {
+        if (vaultKey.size != 32) {
+            throw ZkCryptoException(ZkErrorCode.INVALID_PARAMETER, "vaultKey must be 32 bytes.")
+        }
+        if (encryptedEnvelope.size < 28) {
+            throw ZkCryptoException(ZkErrorCode.TRUNCATED_BLOB, "encryptedEnvelope shorter than 28 bytes.")
+        }
+        val canonicalUserId = userId.lowercase()
+        val bioSessionKey = cryptoProvider.hkdfSha256(
+            vaultKey,
+            ByteArray(0),
+            "photocloud/v2/bio-session".toByteArray(StandardCharsets.UTF_8),
+            32
+        )
+        return try {
+            val iv = encryptedEnvelope.copyOfRange(0, 12)
+            val ct = encryptedEnvelope.copyOfRange(12, encryptedEnvelope.size)
+            val aad = "bio-session|$canonicalUserId".toByteArray(StandardCharsets.UTF_8)
+            val pt = cryptoProvider.aes256GcmDecrypt(bioSessionKey, iv, ct, aad, ZkErrorCode.AUTH_TAG_MISMATCH)
+            try {
+                String(pt, StandardCharsets.UTF_8)
+            } finally {
+                pt.zeroize()
+            }
+        } finally {
+            bioSessionKey.zeroize()
+        }
+    }
 }

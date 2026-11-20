@@ -7,20 +7,20 @@ import {
   isUntrustedActiveMime,
   parseClientDocumentPreview,
   zeroize,
+  type AuthConfigV2,
   type DecryptedItemV2,
   type KdfPinningStore,
   type OpenedShareV2,
+  type OwnerShareSummaryV2,
   type PinnedKdfRecord,
-  type PreparedRegistrationV2,
   type TimelineGroupModeV2,
   type VaultDetailedStatsV2,
   type ZkKeyFileV2,
 } from '../zk-sdk/index.ts';
-import {
-  DEFAULT_PHOTO_EDIT_STATE,
-  normalizeRotation,
-  transformRgbPixel,
-} from '../../lib/photoEditorMath.ts';
+import { formatCoordinates, isValidGpsCoord } from '../../lib/gpsMapClustering.ts';
+import { renderGpsMapView } from './gpsMapView.ts';
+import { openPhotoEditorModal } from './photoEditorModal.ts';
+import { openCreateShareModal, renderSharesManagementView } from './sharesView.ts';
 
 class BrowserLocalStoragePinStore implements KdfPinningStore {
   private readonly prefix = 'pc_v2_kdf_pin_';
@@ -152,6 +152,8 @@ async function generateBrowserImageThumbs(
   }
 }
 
+type WorkspaceView = 'gallery' | 'albums' | 'map' | 'shares' | 'trash' | 'security';
+
 export function initZkWebApp(): void {
   const rootEl = document.getElementById('zk-app-root');
   if (!rootEl) return;
@@ -169,24 +171,55 @@ export function initZkWebApp(): void {
     activeObjectUrls.clear();
   };
 
+  let authConfig: AuthConfigV2 = {
+    registrationOpen: true,
+    requiresInviteToken: false,
+    policy: 'open',
+  };
+  let authTab: 'login' | 'register' | 'recovery' = 'login';
+  let regKeyMode: 'generated' | 'passphrase' = 'generated';
   let bannerMessage: { type: 'error' | 'warning' | 'success'; text: string } | null = null;
-  let currentView: 'gallery' | 'albums' | 'trash' | 'security' = 'gallery';
+
+  let currentView: WorkspaceView = 'gallery';
   let selectedAlbumId: string | null = null;
   let cachedStats: VaultDetailedStatsV2 | null = null;
   let groupMode: TimelineGroupModeV2 = 'day';
   let searchQuery = '';
-  let preparedReg: PreparedRegistrationV2 | null = null;
-  let pendingRegPassphrase = '';
-  let pendingRegSetupToken = '';
+  let includeGpsOnUpload = false;
+  let mapFocusCoords: { lat: number; lon: number } | null = null;
+
+  // Multi-select state
+  let selectionMode = false;
+  const selectedIds = new Set<string>();
+  let lastClickedItemId: string | null = null;
+  let renderedOrderIds: string[] = [];
+  let confirmBatchPermanentDelete = false;
+
+  // Shares management state
+  let ownerShares: OwnerShareSummaryV2[] = [];
+  let sharesLoading = false;
+
+  // Auth & modal state
   let loadedKeyFile: ZkKeyFileV2 | null = null;
   let lastGeneratedKeyFile: { keyFile: ZkKeyFileV2; fileName: string } | null = null;
   let lastCreatedShare: { shareId: string; shareUrl: string } | null = null;
   let selectedLightboxItem: DecryptedItemV2 | null = null;
+  let activeModalCleanup: (() => void) | null = null;
+
+  const closeActiveOverlayModal = () => {
+    if (activeModalCleanup) {
+      activeModalCleanup();
+      activeModalCleanup = null;
+    }
+  };
 
   const client = new ZkVaultClient({
     pinningStore: new BrowserLocalStoragePinStore(),
     onAutoLock: () => {
+      closeActiveOverlayModal();
       revokeAllObjectUrls();
+      selectedIds.clear();
+      selectionMode = false;
       if (navigator.serviceWorker?.controller) {
         navigator.serviceWorker.controller.postMessage({ type: 'LOCK_ALL_KEYS' });
       }
@@ -216,46 +249,116 @@ export function initZkWebApp(): void {
     return;
   }
 
+  // Load server auth configuration (open vs invite-only)
+  client
+    .getAuthConfig()
+    .then((cfg) => {
+      authConfig = cfg;
+      if (!cfg.registrationOpen && authTab === 'register') {
+        authTab = 'login';
+      }
+      if (!client.isUnlocked()) {
+        render();
+      }
+    })
+    .catch(() => {});
+
+  const refreshOwnerShares = () => {
+    sharesLoading = true;
+    render();
+    client
+      .listOwnerShares(window.location.origin)
+      .then((list) => {
+        ownerShares = list;
+        sharesLoading = false;
+        render();
+      })
+      .catch((err) => {
+        sharesLoading = false;
+        bannerMessage = {
+          type: 'error',
+          text: err instanceof Error ? err.message : 'Errore caricamento condivisioni.',
+        };
+        render();
+      });
+  };
+
+  const clearSelection = () => {
+    selectedIds.clear();
+    selectionMode = false;
+    lastClickedItemId = null;
+    confirmBatchPermanentDelete = false;
+  };
+
+  const switchView = (next: WorkspaceView) => {
+    currentView = next;
+    selectedAlbumId = null;
+    clearSelection();
+    if (next === 'albums') {
+      client.getAlbums().then(() => render()).catch(() => render());
+      return;
+    }
+    if (next === 'shares') {
+      refreshOwnerShares();
+      return;
+    }
+    if (next === 'security') {
+      client
+        .getStats()
+        .then((st) => {
+          cachedStats = st;
+          render();
+        })
+        .catch(() => render());
+      return;
+    }
+    render();
+  };
+
   function render(): void {
     rootEl!.textContent = '';
 
+    // 3-zone single-row header
     const header = el('header', 'app-header');
     const brandGroup = el('div', 'brand-group');
-    brandGroup.appendChild(el('span', 'brand-title', 'PhotoCloud v2'));
-    const badge = el(
-      'span',
-      'e2ee-badge',
-      client.isUnlocked() ? 'E2EE Attivo (Vault Sbloccato)' : 'Zero-Knowledge E2EE'
+    brandGroup.appendChild(el('span', 'brand-title', 'PhotoCloud'));
+    const statusDot = el('span', `header-status-line ${client.isUnlocked() ? 'unlocked' : ''}`);
+    statusDot.id = 'e2ee-status-badge';
+    statusDot.appendChild(el('span', `status-dot ${client.isUnlocked() ? 'status-dot-active' : ''}`));
+    statusDot.appendChild(
+      el('span', '', client.isUnlocked() ? `E2EE · ${client.getUsername() ?? ''}` : 'Zero-Knowledge E2EE')
     );
-    badge.id = 'e2ee-status-badge';
-    brandGroup.appendChild(badge);
+    brandGroup.appendChild(statusDot);
     header.appendChild(brandGroup);
 
     const actions = el('div', 'header-actions');
 
     if (client.isUnlocked()) {
-      const userLabel = el('span', 'media-card-meta user-chip', `Utente: ${client.getUsername() ?? ''}`);
-      actions.appendChild(userLabel);
-
-      if (lastGeneratedKeyFile) {
-        const dlKeyBtn = el('button', 'btn', 'Scarica Keyfile JSON');
+      const currentKeyFile = lastGeneratedKeyFile?.keyFile ?? client.exportCurrentKeyFile();
+      if (currentKeyFile) {
+        const dlKeyBtn = el('button', 'btn btn-ghost', 'Keyfile JSON');
         dlKeyBtn.id = 'btn-download-keyfile';
-        dlKeyBtn.title =
-          'Il Keyfile JSON contiene la tua Account Key (32B), ma NON contiene la Passphrase. Passphrase persa = dati non recuperabili.';
+        dlKeyBtn.title = 'Scarica il tuo Keyfile JSON cifrato';
         dlKeyBtn.addEventListener('click', () => {
-          const jsonStr = JSON.stringify(lastGeneratedKeyFile!.keyFile, null, 2);
+          const jsonStr = JSON.stringify(currentKeyFile, null, 2);
           dlKeyBtn.dataset.lastDownloadedJson = jsonStr;
           const bytes = new TextEncoder().encode(jsonStr);
-          triggerDownload(bytes, lastGeneratedKeyFile!.fileName, 'application/json');
+          triggerDownload(
+            bytes,
+            lastGeneratedKeyFile?.fileName ?? `photocloud_v2_key_${currentKeyFile.username}.json`,
+            'application/json'
+          );
         });
         actions.appendChild(dlKeyBtn);
       }
 
-      const lockBtn = el('button', 'btn', 'Blocca Vault');
+      const lockBtn = el('button', 'btn btn-ghost', 'Blocca');
       lockBtn.id = 'btn-lock-vault';
       lockBtn.addEventListener('click', () => {
+        closeActiveOverlayModal();
         client.lock();
         revokeAllObjectUrls();
+        clearSelection();
         if (navigator.serviceWorker?.controller) {
           navigator.serviceWorker.controller.postMessage({ type: 'LOCK_ALL_KEYS' });
         }
@@ -268,12 +371,15 @@ export function initZkWebApp(): void {
       const logoutBtn = el('button', 'btn btn-danger', 'Esci');
       logoutBtn.id = 'btn-logout';
       logoutBtn.addEventListener('click', async () => {
+        closeActiveOverlayModal();
         await client.logout();
         revokeAllObjectUrls();
+        clearSelection();
         if (navigator.serviceWorker?.controller) {
           navigator.serviceWorker.controller.postMessage({ type: 'LOCK_ALL_KEYS' });
         }
         loadedKeyFile = null;
+        lastGeneratedKeyFile = null;
         authTab = 'login';
         render();
       });
@@ -293,18 +399,16 @@ export function initZkWebApp(): void {
     }
   }
 
-  let authTab: 'login' | 'register' | 'recovery' = 'login';
-
   function renderAuthView(container: HTMLElement): void {
     const box = el('main', 'auth-container');
 
     const authHero = el('div', 'auth-hero');
-    authHero.appendChild(el('h1', 'auth-hero-title', 'Vault Zero-Knowledge'));
+    authHero.appendChild(el('h1', 'auth-hero-title', 'Archivio Fotografico Zero-Knowledge'));
     authHero.appendChild(
       el(
         'p',
         'auth-hero-sub',
-        'Cifratura client-side Argon2id + AES-256-GCM. Le tue chiavi non lasciano mai il dispositivo.'
+        'Accesso rapido tramite file chiave cifrato sul dispositivo. Il server non vede mai chiavi, foto o metadati in chiaro.'
       )
     );
     box.appendChild(authHero);
@@ -323,14 +427,18 @@ export function initZkWebApp(): void {
       bannerMessage = null;
       render();
     });
+    tabs.appendChild(loginTabBtn);
 
-    const regTabBtn = el('button', `tab-btn ${authTab === 'register' ? 'active' : ''}`, 'Registrati');
-    regTabBtn.id = 'tab-register';
-    regTabBtn.addEventListener('click', () => {
-      authTab = 'register';
-      bannerMessage = null;
-      render();
-    });
+    if (authConfig.registrationOpen) {
+      const regTabBtn = el('button', `tab-btn ${authTab === 'register' ? 'active' : ''}`, 'Registrati');
+      regTabBtn.id = 'tab-register';
+      regTabBtn.addEventListener('click', () => {
+        authTab = 'register';
+        bannerMessage = null;
+        render();
+      });
+      tabs.appendChild(regTabBtn);
+    }
 
     const recTabBtn = el('button', `tab-btn ${authTab === 'recovery' ? 'active' : ''}`, 'Recovery Code');
     recTabBtn.id = 'tab-recovery';
@@ -339,51 +447,70 @@ export function initZkWebApp(): void {
       bannerMessage = null;
       render();
     });
-
-    tabs.appendChild(loginTabBtn);
-    tabs.appendChild(regTabBtn);
     tabs.appendChild(recTabBtn);
     box.appendChild(tabs);
 
     if (authTab === 'login') {
       const fgFile = el('div', 'form-group');
-      fgFile.appendChild(el('label', 'form-label', 'Keyfile JSON (.json)'));
+      fgFile.appendChild(el('label', 'form-label', 'File Chiave (.json)'));
       const fileInput = el('input', 'form-input');
       fileInput.type = 'file';
       fileInput.id = 'login-keyfile-input';
       fileInput.accept = '.json,application/json';
       const keyfileMetaEl = el(
         'div',
-        'media-card-meta',
-        loadedKeyFile ? `Utente keyfile: ${loadedKeyFile.username}` : ''
+        'media-card-meta keyfile-hint-line',
+        loadedKeyFile
+          ? loadedKeyFile.hasPassphrase === false
+            ? `Account: ${loadedKeyFile.username} · Accesso rapido 1-clic (chiave 256-bit)`
+            : `Account: ${loadedKeyFile.username} · Protetto da passphrase`
+          : 'Seleziona il tuo file photocloud_v2_key_<utente>.json'
       );
       keyfileMetaEl.id = 'login-keyfile-status';
+
       fileInput.addEventListener('change', async () => {
         const f = fileInput.files?.[0];
         if (!f) return;
         try {
           const txt = await f.text();
           loadedKeyFile = JSON.parse(txt) as ZkKeyFileV2;
-          keyfileMetaEl.textContent = `Utente keyfile: ${loadedKeyFile.username}`;
+          bannerMessage = null;
+          render();
         } catch {
           loadedKeyFile = null;
-          keyfileMetaEl.textContent = 'File keyfile JSON non valido.';
+          bannerMessage = { type: 'error', text: 'File keyfile JSON non valido.' };
+          render();
         }
       });
+
       fgFile.appendChild(fileInput);
       fgFile.appendChild(keyfileMetaEl);
       box.appendChild(fgFile);
 
-      const fgPass = el('div', 'form-group');
-      fgPass.appendChild(el('label', 'form-label', 'Passphrase'));
-      const passInput = el('input', 'form-input');
-      passInput.type = 'password';
-      passInput.id = 'login-passphrase-input';
-      passInput.placeholder = 'Inserisci la tua passphrase (>= 12 caratteri)';
-      fgPass.appendChild(passInput);
-      box.appendChild(fgPass);
+      const needsPassphrase = !loadedKeyFile || loadedKeyFile.hasPassphrase !== false;
+      let passInput: HTMLInputElement | null = null;
+      if (needsPassphrase) {
+        const fgPass = el('div', 'form-group');
+        fgPass.appendChild(
+          el(
+            'label',
+            'form-label',
+            loadedKeyFile ? 'Passphrase' : 'Passphrase (solo se impostata alla registrazione)'
+          )
+        );
+        passInput = el('input', 'form-input');
+        passInput.type = 'password';
+        passInput.id = 'login-passphrase-input';
+        passInput.placeholder = 'Inserisci la passphrase del vault';
+        fgPass.appendChild(passInput);
+        box.appendChild(fgPass);
+      }
 
-      const submitBtn = el('button', 'btn btn-primary', 'Sblocca Vault');
+      const submitBtn = el(
+        'button',
+        'btn btn-primary btn-full',
+        loadedKeyFile?.hasPassphrase === false ? 'Accedi al Vault' : 'Sblocca Vault'
+      );
       submitBtn.id = 'btn-login-submit';
       submitBtn.addEventListener('click', async () => {
         if (!loadedKeyFile && fileInput.files?.[0]) {
@@ -394,14 +521,17 @@ export function initZkWebApp(): void {
           }
         }
         if (!loadedKeyFile) {
-          bannerMessage = { type: 'error', text: 'Carica prima il tuo Keyfile JSON.' };
+          bannerMessage = { type: 'error', text: 'Carica prima il tuo File Chiave JSON.' };
           render();
           return;
         }
         submitBtn.disabled = true;
-        submitBtn.textContent = 'Derivazione chiavi Argon2id (64 MiB, t=3) in corso...';
+        submitBtn.textContent =
+          loadedKeyFile.hasPassphrase === false
+            ? 'Sblocco chiavi 256-bit in corso...'
+            : 'Derivazione chiavi Argon2id (64 MiB) in corso...';
         try {
-          await client.login(loadedKeyFile, passInput.value);
+          await client.login(loadedKeyFile, passInput?.value ?? '');
           await client.syncItems('all');
           await client.getAlbums();
           bannerMessage = null;
@@ -416,126 +546,136 @@ export function initZkWebApp(): void {
       });
       box.appendChild(submitBtn);
     } else if (authTab === 'register') {
-      const warningNotice = el(
-        'div',
-        'alert-banner alert-warning',
-        'AVVISO CRITICO ZERO-KNOWLEDGE: Il Recovery Code (codifica esadecimale della tua Account Key a 32 byte) sostituisce SOLO il Keyfile JSON, ma NON sostituisce MAI la tua Passphrase. Passphrase persa = dati matematicamente non recuperabili.'
+      const fgUser = el('div', 'form-group');
+      fgUser.appendChild(el('label', 'form-label', 'Scegli uno Username'));
+      const userInput = el('input', 'form-input');
+      userInput.type = 'text';
+      userInput.id = 'reg-username-input';
+      userInput.placeholder = 'es. valerio';
+      fgUser.appendChild(userInput);
+      box.appendChild(fgUser);
+
+      // V1-simple radio selector for key mode
+      const modeGroup = el('div', 'form-group');
+      modeGroup.appendChild(el('label', 'form-label', 'Modalità Chiave Zero-Knowledge'));
+      const radioGrid = el('div', 'auth-mode-grid');
+
+      const optGen = el('button', `auth-mode-card ${regKeyMode === 'generated' ? 'active' : ''}`);
+      optGen.type = 'button';
+      optGen.id = 'reg-mode-generated';
+      optGen.appendChild(el('div', 'auth-mode-title', 'Genera una chiave sicura per me (Consigliato)'));
+      optGen.appendChild(
+        el(
+          'div',
+          'media-card-meta',
+          'Chiave casuale a 256 bit salvata in un file JSON. Accesso immediato in 1 clic, nessuna passphrase da ricordare.'
+        )
       );
-      warningNotice.id = 'reg-warning-unrecoverable';
-      box.appendChild(warningNotice);
+      optGen.addEventListener('click', () => {
+        regKeyMode = 'generated';
+        render();
+      });
 
-      if (!preparedReg) {
-        const fgUser = el('div', 'form-group');
-        fgUser.appendChild(el('label', 'form-label', 'Username'));
-        const userInput = el('input', 'form-input');
-        userInput.type = 'text';
-        userInput.id = 'reg-username-input';
-        userInput.placeholder = 'es. alice';
-        fgUser.appendChild(userInput);
-        box.appendChild(fgUser);
+      const optPass = el('button', `auth-mode-card ${regKeyMode === 'passphrase' ? 'active' : ''}`);
+      optPass.type = 'button';
+      optPass.id = 'reg-mode-passphrase';
+      optPass.appendChild(el('div', 'auth-mode-title', 'Proteggi anche con passphrase personalizzata'));
+      optPass.appendChild(
+        el(
+          'div',
+          'media-card-meta',
+          'Secondo fattore opzionale con Argon2id (64 MiB). Richiede sia il file chiave sia la passphrase ad ogni accesso.'
+        )
+      );
+      optPass.addEventListener('click', () => {
+        regKeyMode = 'passphrase';
+        render();
+      });
 
-        const fgToken = el('div', 'form-group');
-        fgToken.appendChild(el('label', 'form-label', 'Setup Token / Invite Token'));
-        const tokenInput = el('input', 'form-input');
-        tokenInput.type = 'text';
-        tokenInput.id = 'reg-setup-token-input';
-        tokenInput.placeholder = 'Token stampato su stdout dal server al primo avvio';
-        fgToken.appendChild(tokenInput);
-        box.appendChild(fgToken);
+      radioGrid.append(optGen, optPass);
+      modeGroup.appendChild(radioGrid);
+      box.appendChild(modeGroup);
 
+      let passInput: HTMLInputElement | null = null;
+      if (regKeyMode === 'passphrase') {
         const fgPass = el('div', 'form-group');
-        fgPass.appendChild(el('label', 'form-label', 'Passphrase (minimo 12 caratteri)'));
-        const passInput = el('input', 'form-input');
+        fgPass.appendChild(el('label', 'form-label', 'Passphrase personalizzata (minimo 12 caratteri)'));
+        passInput = el('input', 'form-input');
         passInput.type = 'password';
         passInput.id = 'reg-passphrase-input';
-        const strengthInfo = el('div', 'media-card-meta', '');
+        passInput.placeholder = 'Inserisci una passphrase lunga e sicura';
+        const strengthInfo = el('div', 'media-card-meta mono-nums', '');
         strengthInfo.id = 'reg-passphrase-strength';
         passInput.addEventListener('input', () => {
-          const st = evaluatePassphraseStrength(passInput.value);
-          strengthInfo.textContent = `${st.feedback} (${st.estimatedBits} bit stimati)`;
+          const st = evaluatePassphraseStrength(passInput!.value);
+          strengthInfo.textContent = `${st.feedback} · ${st.estimatedBits} bit stimati`;
         });
         fgPass.appendChild(passInput);
         fgPass.appendChild(strengthInfo);
         box.appendChild(fgPass);
-
-        const prepBtn = el('button', 'btn btn-primary', 'Genera Chiavi e Recovery Code');
-        prepBtn.id = 'btn-reg-prepare';
-        prepBtn.addEventListener('click', () => {
-          try {
-            preparedReg = client.prepareRegistration(userInput.value, passInput.value);
-            pendingRegPassphrase = passInput.value;
-            pendingRegSetupToken = tokenInput.value.trim();
-            bannerMessage = null;
-            render();
-          } catch (err) {
-            bannerMessage = {
-              type: 'error',
-              text: err instanceof Error ? err.message : 'Parametri non validi.',
-            };
-            render();
-          }
-        });
-        box.appendChild(prepBtn);
-      } else {
-        const recNotice = el(
-          'p',
-          'form-label',
-          'Salva questo Recovery Code (rappresenta la tua Account Key a 32 byte). Ricorda: il Recovery Code sostituisce il Keyfile JSON in caso di perdita del dispositivo, ma NON sostituisce la Passphrase. Se perdi la Passphrase, i dati sono irrecuperabili:'
-        );
-        recNotice.id = 'reg-recovery-notice';
-        box.appendChild(recNotice);
-
-        const codeBox = el('div', 'recovery-box', preparedReg.recoveryCode);
-        codeBox.id = 'reg-recovery-code-display';
-        box.appendChild(codeBox);
-
-        const fgConfirm = el('div', 'form-group');
-        fgConfirm.appendChild(
-          el('label', 'form-label', 'Riscrivi o incolla il Recovery Code per confermare il backup')
-        );
-        const confirmInput = el('input', 'form-input');
-        confirmInput.type = 'text';
-        confirmInput.id = 'reg-recovery-confirm-input';
-        confirmInput.placeholder = 'Incolla qui il Recovery Code completo';
-        fgConfirm.appendChild(confirmInput);
-        box.appendChild(fgConfirm);
-
-        const completeBtn = el('button', 'btn btn-primary', 'Completa Registrazione e Sblocca Vault');
-        completeBtn.id = 'btn-reg-complete';
-        completeBtn.addEventListener('click', async () => {
-          completeBtn.disabled = true;
-          completeBtn.textContent = 'Registrazione e derivazione Argon2id (64 MiB, t=3) in corso...';
-          try {
-            const res = await client.register(
-              preparedReg!,
-              pendingRegPassphrase,
-              confirmInput.value,
-              { setupToken: pendingRegSetupToken }
-            );
-            lastGeneratedKeyFile = { keyFile: res.keyFile, fileName: res.keyFileFileName };
-            loadedKeyFile = res.keyFile;
-            preparedReg = null;
-            pendingRegPassphrase = '';
-            bannerMessage = {
-              type: 'success',
-              text: `Registrazione completata! Il tuo Keyfile (${res.keyFileFileName}) è pronto. Nota: il Keyfile e il Recovery Code non contengono la Passphrase (passphrase persa = dati non recuperabili).`,
-            };
-            render();
-          } catch (err) {
-            bannerMessage = {
-              type: 'error',
-              text: err instanceof Error ? err.message : 'Registrazione fallita.',
-            };
-            render();
-          }
-        });
-        box.appendChild(completeBtn);
       }
+
+      let tokenInput: HTMLInputElement | null = null;
+      if (authConfig.requiresInviteToken) {
+        const fgToken = el('div', 'form-group');
+        fgToken.appendChild(el('label', 'form-label', 'Token di Setup / Invito'));
+        tokenInput = el('input', 'form-input');
+        tokenInput.type = 'text';
+        tokenInput.id = 'reg-setup-token-input';
+        tokenInput.placeholder = 'Token richiesto dal server self-hosted';
+        fgToken.appendChild(tokenInput);
+        box.appendChild(fgToken);
+      }
+
+      const submitBtn = el(
+        'button',
+        'btn btn-primary btn-full',
+        'Crea Account e Scarica File Chiave'
+      );
+      submitBtn.id = 'btn-reg-submit';
+      submitBtn.addEventListener('click', async () => {
+        const username = userInput.value.trim();
+        const passphrase = regKeyMode === 'passphrase' ? (passInput?.value ?? '') : '';
+        const token = tokenInput?.value.trim() || undefined;
+        submitBtn.disabled = true;
+        submitBtn.textContent =
+          regKeyMode === 'passphrase'
+            ? 'Generazione chiavi e Argon2id (64 MiB)...'
+            : 'Generazione chiave 256-bit e creazione account...';
+        try {
+          const prepared = client.prepareRegistration(username, passphrase);
+          const res = await client.register(prepared, passphrase, undefined, {
+            setupToken: token,
+            inviteToken: token,
+            skipRecoveryConfirmation: true,
+          });
+          lastGeneratedKeyFile = { keyFile: res.keyFile, fileName: res.keyFileFileName };
+          loadedKeyFile = res.keyFile;
+          // Auto-download keyfile just like V1
+          triggerDownload(
+            new TextEncoder().encode(JSON.stringify(res.keyFile, null, 2)),
+            res.keyFileFileName,
+            'application/json'
+          );
+          bannerMessage = {
+            type: 'success',
+            text: `Account creato! Il tuo File Chiave (${res.keyFileFileName}) è stato scaricato. Conservalo al sicuro per accedere dai tuoi dispositivi.`,
+          };
+          render();
+        } catch (err) {
+          bannerMessage = {
+            type: 'error',
+            text: err instanceof Error ? err.message : 'Registrazione fallita.',
+          };
+          render();
+        }
+      });
+      box.appendChild(submitBtn);
     } else if (authTab === 'recovery') {
       const recExplain = el(
         'div',
         'alert-banner alert-warning',
-        'Il Recovery Code ricostruisce il tuo Keyfile JSON (Account Key a 32 byte), ma richiede comunque la tua Passphrase originale per sbloccare il vault. Senza la Passphrase i dati non sono recuperabili.'
+        'Usa il Recovery Code (8 blocchi hex) per ricostruire il tuo file chiave se hai perso il file JSON. Lascia la passphrase vuota se avevi scelto la modalità rapida.'
       );
       recExplain.id = 'recovery-tab-explanation';
       box.appendChild(recExplain);
@@ -549,26 +689,28 @@ export function initZkWebApp(): void {
       box.appendChild(fgUser);
 
       const fgCode = el('div', 'form-group');
-      fgCode.appendChild(el('label', 'form-label', 'Recovery Code (8 gruppi da 8 caratteri hex = Account Key)'));
-      const codeInput = el('input', 'form-input');
+      fgCode.appendChild(el('label', 'form-label', 'Recovery Code'));
+      const codeInput = el('input', 'form-input mono-nums');
       codeInput.type = 'text';
       codeInput.id = 'rec-code-input';
+      codeInput.placeholder = 'XXXXXXXX-XXXXXXXX-...';
       fgCode.appendChild(codeInput);
       box.appendChild(fgCode);
 
       const fgPass = el('div', 'form-group');
-      fgPass.appendChild(el('label', 'form-label', 'Passphrase (Obbligatoria)'));
+      fgPass.appendChild(el('label', 'form-label', 'Passphrase (lascia vuoto se non impostata)'));
       const passInput = el('input', 'form-input');
       passInput.type = 'password';
       passInput.id = 'rec-passphrase-input';
       fgPass.appendChild(passInput);
       box.appendChild(fgPass);
 
-      const recBtn = el('button', 'btn btn-primary', 'Ricostruisci Keyfile e Accedi');
+      const recBtn = el('button', 'btn btn-primary btn-full', 'Ricostruisci Keyfile e Accedi');
       recBtn.id = 'btn-rec-submit';
       recBtn.addEventListener('click', async () => {
         try {
-          const kf = client.recoverKeyFileFromRecoveryCode(userInput.value, codeInput.value);
+          const hasPw = passInput.value.length > 0;
+          const kf = client.recoverKeyFileFromRecoveryCode(userInput.value, codeInput.value, hasPw);
           loadedKeyFile = kf;
           await client.login(kf, passInput.value);
           await client.syncItems('all');
@@ -593,86 +735,87 @@ export function initZkWebApp(): void {
     const layout = el('div', 'workspace-layout');
 
     const sidebar = el('aside', 'sidebar');
-    const navList = el('div', 'nav-list');
+    const navList = el('nav', 'nav-list');
 
-    const galBtn = el('button', `nav-item ${currentView === 'gallery' ? 'active' : ''}`, 'Galleria Media');
-    galBtn.id = 'nav-gallery';
-    galBtn.addEventListener('click', () => {
-      currentView = 'gallery';
-      selectedAlbumId = null;
-      render();
-    });
+    const activeItems = client.getItems('active');
+    const trashedItems = client.getItems('trashed');
+    const gpsCount = activeItems.filter((it) =>
+      isValidGpsCoord(it.meta.exifSubset?.lat, it.meta.exifSubset?.lon)
+    ).length;
 
-    const albBtn = el('button', `nav-item ${currentView === 'albums' ? 'active' : ''}`, 'Album Cifrati');
-    albBtn.id = 'nav-albums';
-    albBtn.addEventListener('click', () => {
-      currentView = 'albums';
-      selectedAlbumId = null;
-      client.getAlbums().then(() => render()).catch(() => render());
-    });
+    const navDefs: Array<{ id: string; view: WorkspaceView; label: string }> = [
+      { id: 'nav-gallery', view: 'gallery', label: 'Galleria' },
+      { id: 'nav-albums', view: 'albums', label: 'Album' },
+      { id: 'nav-map', view: 'map', label: gpsCount > 0 ? `Mappa (${gpsCount})` : 'Mappa' },
+      { id: 'nav-shares', view: 'shares', label: 'Condivisioni' },
+      { id: 'nav-trash', view: 'trash', label: trashedItems.length > 0 ? `Cestino (${trashedItems.length})` : 'Cestino' },
+      { id: 'nav-security', view: 'security', label: 'Sicurezza' },
+    ];
 
-    const trashBtn = el('button', `nav-item ${currentView === 'trash' ? 'active' : ''}`, 'Cestino');
-    trashBtn.id = 'nav-trash';
-    trashBtn.addEventListener('click', () => {
-      currentView = 'trash';
-      selectedAlbumId = null;
-      render();
-    });
-
-    const secBtn = el('button', `nav-item ${currentView === 'security' ? 'active' : ''}`, 'Sicurezza & Chiavi');
-    secBtn.id = 'nav-security';
-    secBtn.addEventListener('click', () => {
-      currentView = 'security';
-      selectedAlbumId = null;
-      client
-        .getStats()
-        .then((st) => {
-          cachedStats = st;
-          render();
-        })
-        .catch(() => render());
-    });
-
-    navList.appendChild(galBtn);
-    navList.appendChild(albBtn);
-    navList.appendChild(trashBtn);
-    navList.appendChild(secBtn);
+    for (const nav of navDefs) {
+      const btn = el('button', `nav-item ${currentView === nav.view ? 'active' : ''}`, nav.label);
+      btn.id = nav.id;
+      btn.addEventListener('click', () => switchView(nav.view));
+      navList.appendChild(btn);
+    }
     sidebar.appendChild(navList);
 
+    // Upload Panel
     const uploadPanel = el('div', 'stats-box');
-    uploadPanel.appendChild(el('div', 'form-label', 'Carica File Cifrati (E2EE)'));
+    uploadPanel.appendChild(el('div', 'form-label', 'Carica File E2EE'));
     const fileInput = el('input', 'form-input');
     fileInput.type = 'file';
     fileInput.multiple = true;
     fileInput.id = 'vault-upload-input';
     uploadPanel.appendChild(fileInput);
 
-    const statusLine = el('div', 'media-card-meta', 'Pronto per la cifratura locale');
+    const gpsToggleRow = el('label', 'checkbox-row');
+    const gpsCheckbox = el('input', '');
+    gpsCheckbox.type = 'checkbox';
+    gpsCheckbox.id = 'upload-include-gps';
+    gpsCheckbox.checked = includeGpsOnUpload;
+    gpsCheckbox.addEventListener('change', () => {
+      includeGpsOnUpload = gpsCheckbox.checked;
+    });
+    gpsToggleRow.appendChild(gpsCheckbox);
+    gpsToggleRow.appendChild(el('span', 'media-card-meta', 'Includi GPS cifrato per la Mappa'));
+    uploadPanel.appendChild(gpsToggleRow);
+
+    const statusLine = el('div', 'media-card-meta', 'Cifratura locale AES-256-GCM');
     statusLine.id = 'upload-status-line';
     uploadPanel.appendChild(statusLine);
 
     fileInput.addEventListener('change', async () => {
       const files = Array.from(fileInput.files ?? []);
       if (files.length === 0) return;
-      statusLine.textContent = `Cifratura e upload di ${files.length} file in corso...`;
+      statusLine.textContent = `Cifratura e upload di ${files.length} file...`;
       try {
         for (const f of files) {
           const thumbs = await generateBrowserImageThumbs(f);
           const bytes = new Uint8Array(await f.arrayBuffer());
-          await client.uploadFile({
-            name: f.name,
-            mimeType: f.type || 'application/octet-stream',
-            size: f.size,
-            source: bytes,
-            lastModified: f.lastModified,
-            width: thumbs.width,
-            height: thumbs.height,
-            thumb320Plaintext: thumbs.thumb320,
-            thumb1280Plaintext: thumbs.thumb1280,
-          });
+          await client.uploadFile(
+            {
+              name: f.name,
+              mimeType: f.type || 'application/octet-stream',
+              size: f.size,
+              source: bytes,
+              lastModified: f.lastModified,
+              width: thumbs.width,
+              height: thumbs.height,
+              thumb320Plaintext: thumbs.thumb320,
+              thumb1280Plaintext: thumbs.thumb1280,
+            },
+            { includeGps: includeGpsOnUpload }
+          );
         }
         await client.syncItems('all');
-        bannerMessage = { type: 'success', text: `${files.length} file cifrati e caricati con successo.` };
+        bannerMessage = {
+          type: 'success',
+          text:
+            files.length === 1
+              ? '1 file cifrato e caricato nel vault.'
+              : `${files.length} file cifrati e caricati nel vault.`,
+        };
         render();
       } catch (err) {
         bannerMessage = {
@@ -684,28 +827,12 @@ export function initZkWebApp(): void {
     });
     sidebar.appendChild(uploadPanel);
 
-    if (lastGeneratedKeyFile) {
-      const kfWarningBox = el('div', 'stats-box');
-      kfWarningBox.id = 'keyfile-passphrase-warning';
-      kfWarningBox.appendChild(
-        el(
-          'div',
-          'media-card-meta',
-          'Promemoria Sicurezza: Il Keyfile JSON e il Recovery Code contengono solo la Account Key (32B) e NON sostituiscono la Passphrase. Passphrase persa = dati non recuperabili.'
-        )
-      );
-      sidebar.appendChild(kfWarningBox);
-    }
-
-    const statsBox = el('div', 'stats-box');
-    const activeItems = client.getItems('active');
-    const trashedItems = client.getItems('trashed');
-    const activeCountEl = el('div', '', `Elementi attivi: ${activeItems.length}`);
+    const statsBox = el('div', 'stats-box mono-nums');
+    const activeCountEl = el('div', '', `Attivi: ${activeItems.length}`);
     activeCountEl.id = 'stats-active-count';
-    const trashedCountEl = el('div', '', `Nel cestino: ${trashedItems.length}`);
+    const trashedCountEl = el('div', '', `Cestino: ${trashedItems.length}`);
     trashedCountEl.id = 'stats-trashed-count';
-    statsBox.appendChild(activeCountEl);
-    statsBox.appendChild(trashedCountEl);
+    statsBox.append(activeCountEl, trashedCountEl);
     sidebar.appendChild(statsBox);
 
     layout.appendChild(sidebar);
@@ -717,64 +844,157 @@ export function initZkWebApp(): void {
       main.appendChild(alert);
     }
 
-    if (lastCreatedShare) {
+    if (lastCreatedShare && currentView !== 'shares') {
       const shareBanner = el('div', 'toolbar-row');
       shareBanner.id = 'last-share-banner';
-      const urlSpan = el('span', 'media-card-meta', lastCreatedShare.shareUrl);
+      const urlSpan = el('span', 'media-card-meta mono-nums', lastCreatedShare.shareUrl);
       urlSpan.id = 'last-share-url-display';
       shareBanner.appendChild(urlSpan);
 
-      const revokeBtn = el('button', 'btn btn-danger', 'Revoca Ultimo Link');
+      const manageBtn = el('button', 'btn btn-ghost', 'Gestisci Condivisioni');
+      manageBtn.addEventListener('click', () => switchView('shares'));
+      shareBanner.appendChild(manageBtn);
+
+      const revokeBtn = el('button', 'btn btn-danger', 'Revoca');
       revokeBtn.id = 'btn-revoke-last-share';
       revokeBtn.addEventListener('click', async () => {
         if (!lastCreatedShare) return;
         const idToRevoke = lastCreatedShare.shareId;
         await client.revokeShare(idToRevoke);
-        bannerMessage = { type: 'success', text: `Link di condivisione ${idToRevoke} revocato.` };
+        bannerMessage = { type: 'success', text: `Link di condivisione revocato.` };
         lastCreatedShare = null;
         render();
       });
       shareBanner.appendChild(revokeBtn);
+
+      const dismissShareBtn = el('button', 'btn btn-ghost', 'Chiudi');
+      dismissShareBtn.setAttribute('aria-label', 'Nascondi banner link condiviso');
+      dismissShareBtn.addEventListener('click', () => {
+        lastCreatedShare = null;
+        render();
+      });
+      shareBanner.appendChild(dismissShareBtn);
       main.appendChild(shareBanner);
     }
 
-    const toolbar = el('div', 'toolbar-row');
-    const searchInput = el('input', 'form-input search-input');
-    searchInput.type = 'search';
-    searchInput.id = 'vault-search-input';
-    searchInput.placeholder = 'Cerca in linguaggio naturale (es. "foto preferite", "documenti")';
-    searchInput.value = searchQuery;
-    searchInput.addEventListener('input', () => {
-      searchQuery = searchInput.value;
-      renderGalleryGrid(gridContainer);
-    });
-    toolbar.appendChild(searchInput);
+    const gridContainer = el('div', '');
+    gridContainer.id = 'vault-grid-container';
 
-    const groupSelect = el('select', 'form-input');
-    groupSelect.id = 'vault-group-select';
-    for (const [val, label] of [
-      ['day', 'Raggruppa per Giorno'],
-      ['month', 'Raggruppa per Mese'],
-      ['year', 'Raggruppa per Anno'],
-      ['album', 'Raggruppa per Album'],
-    ] as const) {
-      const opt = el('option', '', label);
-      opt.value = val;
-      if (groupMode === val) opt.selected = true;
-      groupSelect.appendChild(opt);
+    if (currentView === 'gallery' || currentView === 'trash') {
+      const toolbar = el('div', 'toolbar-row');
+      const searchInput = el('input', 'form-input search-input');
+      searchInput.type = 'search';
+      searchInput.id = 'vault-search-input';
+      searchInput.placeholder = 'Cerca in linguaggio naturale (es. "foto preferite", "documenti")';
+      searchInput.value = searchQuery;
+      searchInput.addEventListener('input', () => {
+        searchQuery = searchInput.value;
+        renderGalleryGrid(gridContainer);
+      });
+      toolbar.appendChild(searchInput);
+
+      if (currentView === 'gallery') {
+        const groupSelect = el('select', 'form-input');
+        groupSelect.id = 'vault-group-select';
+        for (const [val, label] of [
+          ['day', 'Giorno'],
+          ['month', 'Mese'],
+          ['year', 'Anno'],
+          ['album', 'Album'],
+        ] as const) {
+          const opt = el('option', '', label);
+          opt.value = val;
+          if (groupMode === val) opt.selected = true;
+          groupSelect.appendChild(opt);
+        }
+        groupSelect.addEventListener('change', () => {
+          groupMode = groupSelect.value as TimelineGroupModeV2;
+          renderGalleryGrid(gridContainer);
+        });
+        toolbar.appendChild(groupSelect);
+      }
+
+      const selectToggleBtn = el(
+        'button',
+        `btn ${selectionMode ? 'active-toggle' : ''}`,
+        selectionMode ? 'Fine Selezione' : 'Seleziona'
+      );
+      selectToggleBtn.id = 'btn-toggle-select';
+      selectToggleBtn.addEventListener('click', () => {
+        if (selectionMode) {
+          clearSelection();
+        } else {
+          selectionMode = true;
+        }
+        render();
+      });
+      toolbar.appendChild(selectToggleBtn);
+
+      if (currentView === 'gallery') {
+        const zipBtn = el('button', 'btn btn-ghost', 'Esporta ZIP');
+        zipBtn.id = 'btn-export-zip';
+        zipBtn.addEventListener('click', () => {
+          const items = client.getItems('active');
+          void runZipExport(items.map((i) => i.id), zipBtn);
+        });
+        toolbar.appendChild(zipBtn);
+      }
+
+      if (currentView === 'trash' && trashedItems.length > 0) {
+        const emptyTrashBtn = el('button', 'btn btn-danger', 'Svuota Cestino');
+        emptyTrashBtn.id = 'btn-empty-trash';
+        emptyTrashBtn.addEventListener('click', async () => {
+          await client.emptyTrash();
+          clearSelection();
+          bannerMessage = { type: 'success', text: 'Cestino svuotato definitivamente.' };
+          render();
+        });
+        toolbar.appendChild(emptyTrashBtn);
+      }
+
+      main.appendChild(toolbar);
+      renderGalleryGrid(gridContainer);
+    } else if (currentView === 'albums') {
+      renderAlbumsView(gridContainer);
+    } else if (currentView === 'map') {
+      renderGpsMapView(gridContainer, {
+        client,
+        items: activeItems,
+        initialFocus: mapFocusCoords,
+        registerObjectUrl,
+        onOpenItem: (it) => {
+          selectedLightboxItem = it;
+          render();
+        },
+        onNavigateUploadHint: () => switchView('gallery'),
+      });
+      mapFocusCoords = null;
+    } else if (currentView === 'shares') {
+      renderSharesManagementView(gridContainer, client, ownerShares, sharesLoading, {
+        onStatusMessage: (type, text) => {
+          bannerMessage = { type, text };
+          render();
+        },
+        onRefreshRequested: () => refreshOwnerShares(),
+      });
+    } else if (currentView === 'security') {
+      renderSecurityView(gridContainer);
     }
-    groupSelect.addEventListener('change', () => {
-      groupMode = groupSelect.value as TimelineGroupModeV2;
-      renderGalleryGrid(gridContainer);
-    });
-    toolbar.appendChild(groupSelect);
 
-    const zipBtn = el('button', 'btn', 'Esporta ZIP');
-    zipBtn.id = 'btn-export-zip';
-    zipBtn.addEventListener('click', async () => {
-      const items = client.getItems('active');
-      if (items.length === 0) return;
-      const stream = client.exportZipStream(items.map((i) => i.id));
+    main.appendChild(gridContainer);
+    layout.appendChild(main);
+    container.appendChild(layout);
+
+    // Floating Batch Action Bar when selection active
+    if (selectedIds.size > 0) {
+      renderBatchActionBar(container);
+    }
+  }
+
+  async function runZipExport(itemIds: string[], triggerBtn?: HTMLButtonElement): Promise<void> {
+    if (itemIds.length === 0) return;
+    try {
+      const stream = client.exportZipStream(itemIds);
       const reader = stream.getReader();
       const chunks: Uint8Array[] = [];
       let total = 0;
@@ -792,57 +1012,237 @@ export function initZkWebApp(): void {
         out.set(c, off);
         off += c.byteLength;
       }
-      const sigHex =
-        out.byteLength >= 4
-          ? Array.from(out.subarray(0, 4))
-              .map((b) => b.toString(16).padStart(2, '0'))
-              .join('')
-          : '';
-      zipBtn.dataset.lastZipBytes = String(out.byteLength);
-      zipBtn.dataset.lastZipMagic = sigHex;
+      if (triggerBtn) {
+        const sigHex =
+          out.byteLength >= 4
+            ? Array.from(out.subarray(0, 4))
+                .map((b) => b.toString(16).padStart(2, '0'))
+                .join('')
+            : '';
+        triggerBtn.dataset.lastZipBytes = String(out.byteLength);
+        triggerBtn.dataset.lastZipMagic = sigHex;
+      }
       triggerDownload(out, 'photocloud_v2_export.zip', 'application/zip');
       bannerMessage = {
         type: 'success',
         text: `Archivio ZIP esportato in streaming (${formatBytes(out.byteLength)}).`,
       };
       render();
-    });
-    toolbar.appendChild(zipBtn);
+    } catch (err) {
+      bannerMessage = {
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Errore durante export ZIP.',
+      };
+      render();
+    }
+  }
 
-    if (currentView === 'trash' && trashedItems.length > 0) {
-      const emptyTrashBtn = el('button', 'btn btn-danger', 'Svuota Cestino');
-      emptyTrashBtn.id = 'btn-empty-trash';
-      emptyTrashBtn.addEventListener('click', async () => {
-        await client.emptyTrash();
-        bannerMessage = { type: 'success', text: 'Cestino svuotato definitivamente.' };
+  function toggleItemSelection(itemId: string, shiftKey: boolean): void {
+    if (shiftKey && lastClickedItemId && renderedOrderIds.length > 0) {
+      const idxA = renderedOrderIds.indexOf(lastClickedItemId);
+      const idxB = renderedOrderIds.indexOf(itemId);
+      if (idxA >= 0 && idxB >= 0) {
+        const [start, end] = idxA <= idxB ? [idxA, idxB] : [idxB, idxA];
+        for (let i = start; i <= end; i++) {
+          selectedIds.add(renderedOrderIds[i]);
+        }
+        selectionMode = true;
+        lastClickedItemId = itemId;
+        render();
+        return;
+      }
+    }
+
+    if (selectedIds.has(itemId)) {
+      selectedIds.delete(itemId);
+    } else {
+      selectedIds.add(itemId);
+      selectionMode = true;
+    }
+    lastClickedItemId = itemId;
+    render();
+  }
+
+  function renderBatchActionBar(container: HTMLElement): void {
+    const bar = el('div', 'batch-action-bar');
+    bar.id = 'batch-action-bar';
+
+    const left = el('div', 'batch-bar-left');
+    const countLabel = el('span', 'batch-count mono-nums', `${selectedIds.size} selezionati`);
+    countLabel.id = 'batch-selected-count';
+    left.appendChild(countLabel);
+
+    const selectAllBtn = el('button', 'btn btn-ghost', 'Tutti');
+    selectAllBtn.id = 'btn-batch-select-all';
+    selectAllBtn.addEventListener('click', () => {
+      for (const id of renderedOrderIds) selectedIds.add(id);
+      render();
+    });
+
+    const clearBtn = el('button', 'btn btn-ghost', 'Annulla');
+    clearBtn.id = 'btn-batch-clear';
+    clearBtn.addEventListener('click', () => {
+      clearSelection();
+      render();
+    });
+    left.append(selectAllBtn, clearBtn);
+    bar.appendChild(left);
+
+    const right = el('div', 'batch-bar-actions');
+    const ids = Array.from(selectedIds);
+
+    if (currentView === 'trash') {
+      const restoreBtn = el('button', 'btn btn-primary', 'Ripristina');
+      restoreBtn.id = 'btn-batch-restore';
+      restoreBtn.addEventListener('click', async () => {
+        await client.restoreItems(ids);
+        clearSelection();
+        bannerMessage = { type: 'success', text: `${ids.length} elementi ripristinati dal cestino.` };
         render();
       });
-      toolbar.appendChild(emptyTrashBtn);
-    }
+      right.appendChild(restoreBtn);
 
-    main.appendChild(toolbar);
-
-    const gridContainer = el('div', '');
-    gridContainer.id = 'vault-grid-container';
-    if (currentView === 'albums') {
-      renderAlbumsView(gridContainer);
-    } else if (currentView === 'security') {
-      renderSecurityView(gridContainer);
+      if (confirmBatchPermanentDelete) {
+        const confirmDelBtn = el('button', 'btn btn-danger', 'Conferma Eliminazione');
+        confirmDelBtn.id = 'btn-batch-confirm-delete';
+        confirmDelBtn.addEventListener('click', async () => {
+          for (const id of ids) {
+            await client.deleteItemPermanently(id);
+          }
+          clearSelection();
+          bannerMessage = { type: 'success', text: `${ids.length} elementi eliminati definitivamente.` };
+          render();
+        });
+        right.appendChild(confirmDelBtn);
+      } else {
+        const delBtn = el('button', 'btn btn-danger', 'Elimina Definit.');
+        delBtn.id = 'btn-batch-delete';
+        delBtn.addEventListener('click', () => {
+          confirmBatchPermanentDelete = true;
+          render();
+        });
+        right.appendChild(delBtn);
+      }
     } else {
-      renderGalleryGrid(gridContainer);
-    }
-    main.appendChild(gridContainer);
+      const albums = client.getCachedAlbums().albums;
+      if (albums.length > 0) {
+        const albSelect = el('select', 'form-input batch-album-select');
+        albSelect.id = 'batch-album-select';
+        const defOpt = el('option', '', '+ Album...');
+        defOpt.value = '';
+        albSelect.appendChild(defOpt);
+        for (const a of albums) {
+          const o = el('option', '', a.title);
+          o.value = a.id;
+          albSelect.appendChild(o);
+        }
+        albSelect.addEventListener('change', async () => {
+          const targetId = albSelect.value;
+          if (!targetId) return;
+          const activeById = new Map(client.getItems('active').map((i) => [i.id, i]));
+          const blobIdsToAdd = ids
+            .map((id) => activeById.get(id)?.blobId)
+            .filter((b): b is string => Boolean(b));
+          await client.saveAlbums((cur) => ({
+            ...cur,
+            albums: cur.albums.map((a) =>
+              a.id === targetId
+                ? {
+                    ...a,
+                    blobIds: Array.from(new Set([...a.blobIds, ...blobIdsToAdd])),
+                    updatedAt: Date.now(),
+                  }
+                : a
+            ),
+          }));
+          clearSelection();
+          bannerMessage = { type: 'success', text: `${blobIdsToAdd.length} elementi aggiunti all'album.` };
+          render();
+        });
+        right.appendChild(albSelect);
+      }
 
-    layout.appendChild(main);
-    container.appendChild(layout);
+      const shareBtn = el('button', 'btn btn-primary', 'Condividi');
+      shareBtn.id = 'btn-batch-share';
+      shareBtn.addEventListener('click', () => {
+        closeActiveOverlayModal();
+        activeModalCleanup = openCreateShareModal(rootEl!, client, {
+          itemIds: ids,
+          defaultTitle: `Selezione (${ids.length} file)`,
+          onCreated: (res) => {
+            lastCreatedShare = { shareId: res.shareId, shareUrl: res.shareUrl };
+            clearSelection();
+          },
+          onClose: () => {
+            activeModalCleanup = null;
+            render();
+          },
+        });
+      });
+      right.appendChild(shareBtn);
+
+      const favBtn = el('button', 'btn', 'Preferiti');
+      favBtn.id = 'btn-batch-favorite';
+      favBtn.addEventListener('click', async () => {
+        const map = new Map(client.getItems('active').map((i) => [i.id, i]));
+        const anyNotFav = ids.some((id) => !map.get(id)?.meta.isFavorite);
+        for (const id of ids) {
+          if (map.has(id)) {
+            await client.updateItemMeta(id, { isFavorite: anyNotFav });
+          }
+        }
+        clearSelection();
+        bannerMessage = {
+          type: 'success',
+          text: anyNotFav
+            ? `${ids.length} elementi aggiunti ai preferiti.`
+            : `${ids.length} elementi rimossi dai preferiti.`,
+        };
+        render();
+      });
+      right.appendChild(favBtn);
+
+      const zipBtn = el('button', 'btn', 'ZIP');
+      zipBtn.id = 'btn-batch-zip';
+      zipBtn.addEventListener('click', () => {
+        void runZipExport(ids, zipBtn);
+      });
+      right.appendChild(zipBtn);
+
+      const trashBtn = el('button', 'btn btn-danger', 'Cestino');
+      trashBtn.id = 'btn-batch-trash';
+      trashBtn.addEventListener('click', async () => {
+        await client.trashItems(ids);
+        clearSelection();
+        bannerMessage = { type: 'success', text: `${ids.length} elementi spostati nel cestino.` };
+        render();
+      });
+      right.appendChild(trashBtn);
+    }
+
+    bar.appendChild(right);
+    container.appendChild(bar);
   }
 
   function createMediaCard(item: DecryptedItemV2): HTMLElement {
-    const card = el('article', 'media-card');
+    const isSelected = selectedIds.has(item.id);
+    const card = el('article', `media-card ${isSelected ? 'selected' : ''}`);
     card.dataset.itemId = item.id;
     card.dataset.itemName = item.meta.name;
 
     const thumbBox = el('div', 'media-thumb-box');
+
+    // Multi-select checkbox overlay
+    const checkBtn = el('button', `card-select-check ${isSelected ? 'checked' : ''} ${selectionMode ? 'visible' : ''}`);
+    checkBtn.type = 'button';
+    checkBtn.setAttribute('aria-label', `Seleziona ${item.meta.name}`);
+    checkBtn.textContent = isSelected ? '✓' : '';
+    checkBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      toggleItemSelection(item.id, ev.shiftKey);
+    });
+    thumbBox.appendChild(checkBtn);
+
     if (item.thumbs.includes(320) && isSafeRasterImageMime(item.meta.mime)) {
       const img = el('img', 'media-thumb-img');
       img.alt = item.meta.name;
@@ -854,24 +1254,24 @@ export function initZkWebApp(): void {
         .catch(() => {});
       thumbBox.appendChild(img);
     } else {
-      thumbBox.appendChild(el('span', 'media-card-meta', item.category.toUpperCase()));
+      thumbBox.appendChild(el('span', 'media-card-meta mono-nums', item.category.toUpperCase()));
     }
     card.appendChild(thumbBox);
 
     const body = el('div', 'media-card-body');
     const titleText = item.meta.isFavorite ? `★ ${item.meta.name}` : item.meta.name;
-    const titleEl = el('div', 'media-card-title', titleText);
-    body.appendChild(titleEl);
-    body.appendChild(
-      el(
-        'div',
-        'media-card-meta',
-        `${formatBytes(item.meta.size)} • v${item.version} • ${item.meta.mime}`
-      )
-    );
+    body.appendChild(el('div', 'media-card-title', titleText));
+    const hasGps = isValidGpsCoord(item.meta.exifSubset?.lat, item.meta.exifSubset?.lon);
+    const metaParts = [formatBytes(item.meta.size), `v${item.version}`];
+    if (hasGps) metaParts.push('GPS');
+    body.appendChild(el('div', 'media-card-meta mono-nums', metaParts.join(' · ')));
     card.appendChild(body);
 
-    card.addEventListener('click', () => {
+    card.addEventListener('click', (ev) => {
+      if (selectionMode || ev.shiftKey) {
+        toggleItemSelection(item.id, ev.shiftKey);
+        return;
+      }
       selectedLightboxItem = item;
       render();
     });
@@ -880,17 +1280,16 @@ export function initZkWebApp(): void {
 
   function renderGalleryGrid(container: HTMLElement): void {
     container.textContent = '';
+    renderedOrderIds = [];
 
     if (currentView === 'trash' || searchQuery.trim()) {
       const items =
-        currentView === 'trash'
-          ? client.getItems('trashed')
-          : client.searchItems(searchQuery);
+        currentView === 'trash' ? client.getItems('trashed') : client.searchItems(searchQuery);
 
       if (items.length === 0) {
         const empty = el(
           'div',
-          'alert-banner',
+          'empty-state-card',
           currentView === 'trash' ? 'Il cestino è vuoto.' : 'Nessun elemento corrispondente nel vault.'
         );
         empty.id = 'vault-empty-state';
@@ -900,6 +1299,7 @@ export function initZkWebApp(): void {
 
       const grid = el('div', 'gallery-grid');
       for (const item of items) {
+        renderedOrderIds.push(item.id);
         grid.appendChild(createMediaCard(item));
       }
       container.appendChild(grid);
@@ -908,8 +1308,16 @@ export function initZkWebApp(): void {
 
     const activeItems = client.getItems('active');
     if (activeItems.length === 0) {
-      const empty = el('div', 'alert-banner', 'Nessun elemento nel vault.');
+      const empty = el('div', 'empty-state-card');
       empty.id = 'vault-empty-state';
+      empty.appendChild(el('h3', 'brand-title', 'Il tuo Vault E2EE è pronto'));
+      empty.appendChild(
+        el(
+          'p',
+          'media-card-meta',
+          'Carica foto, video o documenti dal pannello laterale: ogni file viene cifrato sul tuo dispositivo prima dell\'invio.'
+        )
+      );
       container.appendChild(empty);
       return;
     }
@@ -920,12 +1328,13 @@ export function initZkWebApp(): void {
         'div',
         'alert-banner',
         groupMode === 'album'
-          ? 'Nessun album cifrato ancora creato. Mostra tutti gli elementi attivi.'
+          ? 'Nessun album cifrato creato. Visualizzazione completa degli elementi attivi.'
           : 'Nessun gruppo disponibile.'
       );
       container.appendChild(info);
       const grid = el('div', 'gallery-grid');
       for (const item of activeItems) {
+        renderedOrderIds.push(item.id);
         grid.appendChild(createMediaCard(item));
       }
       container.appendChild(grid);
@@ -937,11 +1346,12 @@ export function initZkWebApp(): void {
       const section = el('section', 'timeline-section');
       const headerRow = el('div', 'timeline-group-header');
       headerRow.appendChild(el('span', 'timeline-group-title', grp.label));
-      headerRow.appendChild(el('span', 'media-card-meta', `${grp.items.length} file`));
+      headerRow.appendChild(el('span', 'media-card-meta mono-nums', `${grp.items.length} file`));
       section.appendChild(headerRow);
 
       const grid = el('div', 'gallery-grid');
       for (const item of grp.items) {
+        renderedOrderIds.push(item.id);
         grid.appendChild(createMediaCard(item));
       }
       section.appendChild(grid);
@@ -951,6 +1361,7 @@ export function initZkWebApp(): void {
 
   function renderAlbumsView(container: HTMLElement): void {
     container.textContent = '';
+    renderedOrderIds = [];
     const catalog = client.getCachedAlbums();
     const activeItems = client.getItems('active');
     const byBlob = new Map<string, DecryptedItemV2>();
@@ -962,16 +1373,17 @@ export function initZkWebApp(): void {
         selectedAlbumId = null;
       } else {
         const bar = el('div', 'toolbar-row');
-        const backBtn = el('button', 'btn', '← Tutti gli Album');
+        const backBtn = el('button', 'btn btn-ghost', '← Tutti gli Album');
         backBtn.id = 'btn-album-back';
         backBtn.addEventListener('click', () => {
           selectedAlbumId = null;
+          clearSelection();
           render();
         });
         bar.appendChild(backBtn);
         bar.appendChild(el('span', 'brand-title', `${album.title} (${album.blobIds.length})`));
 
-        const delBtn = el('button', 'btn btn-danger', 'Elimina Album Cifrato');
+        const delBtn = el('button', 'btn btn-danger', 'Elimina Album');
         delBtn.id = 'btn-album-delete';
         delBtn.addEventListener('click', async () => {
           try {
@@ -980,7 +1392,7 @@ export function initZkWebApp(): void {
               albums: cur.albums.filter((a) => a.id !== album.id),
             }));
             selectedAlbumId = null;
-            bannerMessage = { type: 'success', text: `Album "${album.title}" eliminato dal catalogo cifrato.` };
+            bannerMessage = { type: 'success', text: `Album "${album.title}" eliminato.` };
             render();
           } catch (err) {
             bannerMessage = {
@@ -1001,13 +1413,14 @@ export function initZkWebApp(): void {
           container.appendChild(
             el(
               'div',
-              'alert-banner',
-              'Questo album cifrato è vuoto. Apri una foto o un file in Galleria e assegnalo a questo album.'
+              'empty-state-card',
+              'Questo album cifrato è vuoto. Usa la selezione multipla in Galleria o la lightbox per aggiungere file.'
             )
           );
         } else {
           const grid = el('div', 'gallery-grid');
           for (const it of albumItems) {
+            renderedOrderIds.push(it.id);
             grid.appendChild(createMediaCard(it));
           }
           container.appendChild(grid);
@@ -1020,10 +1433,10 @@ export function initZkWebApp(): void {
     const nameInput = el('input', 'form-input search-input');
     nameInput.type = 'text';
     nameInput.id = 'album-name-input';
-    nameInput.placeholder = 'Nome nuovo album cifrato E2EE (es. Vacanze 2026)';
+    nameInput.placeholder = 'Nome nuovo album cifrato (es. Vacanze 2026)';
     createRow.appendChild(nameInput);
 
-    const createBtn = el('button', 'btn btn-primary', 'Crea Album Cifrato');
+    const createBtn = el('button', 'btn btn-primary', 'Crea Album');
     createBtn.id = 'btn-create-album';
     createBtn.addEventListener('click', async () => {
       const title = nameInput.value.trim();
@@ -1045,10 +1458,7 @@ export function initZkWebApp(): void {
             },
           ],
         }));
-        bannerMessage = {
-          type: 'success',
-          text: `Album cifrato "${title}" creato e salvato con AES-256-GCM + If-Match.`,
-        };
+        bannerMessage = { type: 'success', text: `Album cifrato "${title}" creato.` };
         render();
       } catch (err) {
         bannerMessage = {
@@ -1064,8 +1474,8 @@ export function initZkWebApp(): void {
     if (catalog.albums.length === 0) {
       const empty = el(
         'div',
-        'alert-banner',
-        'Nessun album cifrato. Crea un album sopra: nomi e associazioni sono cifrati client-side con AES-256-GCM.'
+        'empty-state-card',
+        'Nessun album cifrato. Crea il tuo primo album: nomi e contenuti sono cifrati end-to-end.'
       );
       empty.id = 'albums-empty-state';
       container.appendChild(empty);
@@ -1079,7 +1489,7 @@ export function initZkWebApp(): void {
       const body = el('div', 'media-card-body');
       body.appendChild(el('div', 'media-card-title', alb.title));
       body.appendChild(
-        el('div', 'media-card-meta', `${alb.blobIds.length} elementi • Catalogo rev. ${catalog.revision} • E2EE`)
+        el('div', 'media-card-meta mono-nums', `${alb.blobIds.length} elementi · rev. ${catalog.revision}`)
       );
       card.appendChild(body);
       card.addEventListener('click', () => {
@@ -1095,37 +1505,91 @@ export function initZkWebApp(): void {
     container.textContent = '';
     const secGrid = el('div', 'security-grid');
 
-    // Card 1: Passphrase Rewrap (POST /api/v2/account/rewrap)
+    // Card 1: Keyfile & Recovery Backup
+    const backupCard = el('section', 'stats-box security-card');
+    backupCard.appendChild(el('h2', 'brand-title', 'File Chiave & Recovery Code'));
+    backupCard.appendChild(
+      el(
+        'p',
+        'media-card-meta',
+        client.isPassphraseProtected()
+          ? 'Modalità attiva: File Chiave 256-bit + Passphrase Argon2id (64 MiB).'
+          : 'Modalità attiva: Accesso rapido File Chiave 256-bit (nessuna passphrase impostata).'
+      )
+    );
+
+    const recCode = client.getCurrentRecoveryCode();
+    if (recCode) {
+      const recBox = el('div', 'recovery-box mono-nums', recCode);
+      recBox.id = 'security-recovery-code';
+      backupCard.appendChild(recBox);
+    }
+
+    const kf = client.exportCurrentKeyFile();
+    if (kf) {
+      const dlBtn = el('button', 'btn btn-primary', 'Scarica File Chiave JSON');
+      dlBtn.addEventListener('click', () => {
+        triggerDownload(
+          new TextEncoder().encode(JSON.stringify(kf, null, 2)),
+          `photocloud_v2_key_${kf.username}.json`,
+          'application/json'
+        );
+      });
+      backupCard.appendChild(dlBtn);
+    }
+    secGrid.appendChild(backupCard);
+
+    // Card 2: Passphrase Rewrap (Add / Change / Remove)
     const rewrapCard = el('section', 'stats-box security-card');
-    rewrapCard.appendChild(el('h2', 'brand-title', 'Cambia Passphrase (Rewrap Zero-Knowledge)'));
+    rewrapCard.appendChild(
+      el(
+        'h2',
+        'brand-title',
+        client.isPassphraseProtected() ? 'Cambia o Rimuovi Passphrase' : 'Aggiungi Passphrase (Opzionale)'
+      )
+    );
     rewrapCard.appendChild(
       el(
         'p',
         'media-card-meta',
-        'Ricalcola Argon2id (64 MiB, t=3, p=1) con un nuovo salt casuale e ri-cifra la Vault Key lato client senza ricifrare i file. Tutte le altre sessioni vengono revocate.'
+        'Ri-cifra solo la Vault Key lato client senza toccare i tuoi file. Tutte le altre sessioni attive vengono revocate.'
       )
     );
 
-    const fgOld = el('div', 'form-group');
-    fgOld.appendChild(el('label', 'form-label', 'Passphrase Attuale'));
-    const oldInput = el('input', 'form-input');
-    oldInput.type = 'password';
-    oldInput.id = 'rewrap-old-pass';
-    fgOld.appendChild(oldInput);
-    rewrapCard.appendChild(fgOld);
+    let oldInput: HTMLInputElement | null = null;
+    if (client.isPassphraseProtected()) {
+      const fgOld = el('div', 'form-group');
+      fgOld.appendChild(el('label', 'form-label', 'Passphrase Attuale'));
+      oldInput = el('input', 'form-input');
+      oldInput.type = 'password';
+      oldInput.id = 'rewrap-old-pass';
+      fgOld.appendChild(oldInput);
+      rewrapCard.appendChild(fgOld);
+    }
 
     const fgNew = el('div', 'form-group');
-    fgNew.appendChild(el('label', 'form-label', 'Nuova Passphrase (>= 12 caratteri)'));
+    fgNew.appendChild(
+      el(
+        'label',
+        'form-label',
+        client.isPassphraseProtected()
+          ? 'Nuova Passphrase (>= 12 caratteri, oppure vuoto per modalità rapida)'
+          : 'Nuova Passphrase (>= 12 caratteri)'
+      )
+    );
     const newInput = el('input', 'form-input');
     newInput.type = 'password';
     newInput.id = 'rewrap-new-pass';
-    const strengthEl = el('div', 'media-card-meta', '');
+    const strengthEl = el('div', 'media-card-meta mono-nums', '');
     newInput.addEventListener('input', () => {
+      if (!newInput.value) {
+        strengthEl.textContent = 'Modalità rapida (solo File Chiave 256-bit)';
+        return;
+      }
       const st = evaluatePassphraseStrength(newInput.value);
-      strengthEl.textContent = `${st.feedback} (${st.estimatedBits} bit stimati)`;
+      strengthEl.textContent = `${st.feedback} · ${st.estimatedBits} bit`;
     });
-    fgNew.appendChild(newInput);
-    fgNew.appendChild(strengthEl);
+    fgNew.append(newInput, strengthEl);
     rewrapCard.appendChild(fgNew);
 
     const fgConf = el('div', 'form-group');
@@ -1136,7 +1600,7 @@ export function initZkWebApp(): void {
     fgConf.appendChild(confInput);
     rewrapCard.appendChild(fgConf);
 
-    const rewrapBtn = el('button', 'btn btn-primary', 'Aggiorna Passphrase e Scarica Keyfile');
+    const rewrapBtn = el('button', 'btn btn-primary', 'Aggiorna e Scarica Nuovo Keyfile');
     rewrapBtn.id = 'btn-rewrap-submit';
     rewrapBtn.addEventListener('click', async () => {
       if (newInput.value !== confInput.value) {
@@ -1145,9 +1609,9 @@ export function initZkWebApp(): void {
         return;
       }
       rewrapBtn.disabled = true;
-      rewrapBtn.textContent = 'Derivazione Argon2id e rewrap in corso...';
+      rewrapBtn.textContent = 'Rewrap Zero-Knowledge in corso...';
       try {
-        const updatedKf = await client.changePassphrase(oldInput.value, newInput.value);
+        const updatedKf = await client.changePassphrase(oldInput?.value ?? '', newInput.value);
         const fileName = `photocloud_v2_key_${updatedKf.username}.json`;
         lastGeneratedKeyFile = { keyFile: updatedKf, fileName };
         loadedKeyFile = updatedKf;
@@ -1158,13 +1622,13 @@ export function initZkWebApp(): void {
         );
         bannerMessage = {
           type: 'success',
-          text: 'Passphrase aggiornata con successo! Il Keyfile JSON aggiornato è stato scaricato.',
+          text: 'Protezione account aggiornata! Il nuovo File Chiave JSON è stato scaricato.',
         };
         render();
       } catch (err) {
         bannerMessage = {
           type: 'error',
-          text: err instanceof Error ? err.message : 'Errore durante il cambio passphrase.',
+          text: err instanceof Error ? err.message : 'Errore durante il rewrap.',
         };
         render();
       }
@@ -1172,25 +1636,29 @@ export function initZkWebApp(): void {
     rewrapCard.appendChild(rewrapBtn);
     secGrid.appendChild(rewrapCard);
 
-    // Card 2: Cryptographic Posture & Storage Stats
+    // Card 3: Cryptographic Posture & Storage Stats
     const postureCard = el('section', 'stats-box security-card');
-    postureCard.appendChild(el('h2', 'brand-title', 'Stato Crittografia Zero-Knowledge'));
+    postureCard.appendChild(el('h2', 'brand-title', 'Architettura Crittografica'));
     const lines = [
-      'KDF Master: Argon2id (64 MiB, t=3, p=1) + Account Key 256-bit',
-      'Subkey Derivation: HKDF-SHA256 con domain separation (KEK, Auth, Meta, Thumb, Dedup, FKWrap)',
+      'Account Key 256-bit CSPRNG + Passphrase opzionale Argon2id (64 MiB, t=3, p=1)',
+      'HKDF-SHA256 domain separation: KEK, Auth, Meta, Thumb, Dedup, FKWrap',
       'Blob & Metadata AEAD: AES-256-GCM (PCZK v1 chunked streaming 1 MiB)',
-      'Share Pubblici: Chiave 256-bit nel fragment # (mai inviata al server)',
-      'Auto-Lock: 15 minuti di inattività con zeroizzazione completa della RAM',
+      'Condivisioni: Chiave 256-bit solo nel fragment # · Revoca istantanea',
+      'Auto-Lock: 15 minuti di inattività con zeroizzazione RAM',
     ];
     for (const line of lines) {
-      postureCard.appendChild(el('div', 'media-card-meta', `• ${line}`));
+      postureCard.appendChild(el('div', 'media-card-meta', `· ${line}`));
     }
     if (cachedStats) {
       postureCard.appendChild(
         el(
           'div',
-          'exif-meta-bar',
-          `Storage cifrato: ${formatBytes(cachedStats.activeBytes + cachedStats.trashedBytes)} / ${formatBytes(cachedStats.quotaBytes)} • Foto: ${cachedStats.photosCount} • Video: ${cachedStats.videosCount} • Documenti: ${cachedStats.documentsCount}`
+          'exif-meta-bar mono-nums',
+          `Spazio: ${formatBytes(cachedStats.activeBytes + cachedStats.trashedBytes)} / ${formatBytes(
+            cachedStats.quotaBytes
+          )} · Foto: ${cachedStats.photosCount} · Video: ${cachedStats.videosCount} · Documenti: ${
+            cachedStats.documentsCount
+          }`
         )
       );
     }
@@ -1204,11 +1672,11 @@ export function initZkWebApp(): void {
 
     const panel = el('div', 'modal-panel');
     const topRow = el('div', 'toolbar-row');
-    const title = el('h2', 'brand-title', `${item.meta.name} (v${item.version})`);
+    const title = el('h2', 'brand-title', `${item.meta.name}`);
     title.id = 'lightbox-item-title';
     topRow.appendChild(title);
 
-    const closeBtn = el('button', 'btn', 'Chiudi');
+    const closeBtn = el('button', 'btn btn-ghost', 'Chiudi');
     closeBtn.id = 'btn-lightbox-close';
     closeBtn.addEventListener('click', () => {
       selectedLightboxItem = null;
@@ -1238,7 +1706,9 @@ export function initZkWebApp(): void {
           } else {
             const plainBytes = await client.downloadBlobToBytes(item.blobId);
             video.dataset.streamMode = 'blob-fallback';
-            video.src = registerObjectUrl(new Blob([plainBytes as unknown as BlobPart], { type: item.meta.mime }));
+            video.src = registerObjectUrl(
+              new Blob([plainBytes as unknown as BlobPart], { type: item.meta.mime })
+            );
           }
           previewBox.appendChild(video);
         } catch (err) {
@@ -1261,10 +1731,16 @@ export function initZkWebApp(): void {
             const img = el('img', 'lightbox-img');
             img.id = 'lightbox-decrypted-image';
             img.alt = item.meta.name;
-            img.src = registerObjectUrl(new Blob([plainBytes as unknown as BlobPart], { type: item.meta.mime }));
+            img.src = registerObjectUrl(
+              new Blob([plainBytes as unknown as BlobPart], { type: item.meta.mime })
+            );
             previewBox.appendChild(img);
           } else if (item.category === 'document') {
-            const docPreview = await parseClientDocumentPreview(plainBytes, item.meta.name, item.meta.mime);
+            const docPreview = await parseClientDocumentPreview(
+              plainBytes,
+              item.meta.name,
+              item.meta.mime
+            );
             const pre = el('pre', 'recovery-box', docPreview.paragraphs.join('\n\n'));
             pre.id = 'lightbox-doc-preview';
             pre.dataset.docKind = docPreview.kind;
@@ -1282,32 +1758,96 @@ export function initZkWebApp(): void {
         .catch((err) => {
           previewBox.textContent = '';
           previewBox.appendChild(
-            el('div', 'alert-banner alert-error', err instanceof Error ? err.message : 'Errore decifratura.')
+            el(
+              'div',
+              'alert-banner alert-error',
+              err instanceof Error ? err.message : 'Errore decifratura.'
+            )
           );
         });
     }
 
-    const exifParts: string[] = [
-      `Dimensione: ${formatBytes(item.meta.size)}`,
-      `MIME: ${item.meta.mime}`,
-    ];
+    const exifParts: string[] = [formatBytes(item.meta.size), `v${item.version}`, item.meta.mime];
     if (item.meta.width && item.meta.height) {
       exifParts.push(`${item.meta.width}×${item.meta.height}`);
     }
     if (item.meta.takenAt) {
-      exifParts.push(`Data: ${new Date(item.meta.takenAt).toLocaleDateString('it-IT')}`);
+      exifParts.push(new Date(item.meta.takenAt).toLocaleDateString('it-IT'));
     }
     if (item.meta.exifSubset?.model) {
-      exifParts.push(`Camera: ${item.meta.exifSubset.model}`);
+      exifParts.push(item.meta.exifSubset.model);
     }
     if (item.meta.exifSubset?.iso) {
       exifParts.push(`ISO ${item.meta.exifSubset.iso}`);
     }
-    panel.appendChild(el('div', 'exif-meta-bar', exifParts.join(' • ')));
+    const itemLat = item.meta.exifSubset?.lat;
+    const itemLon = item.meta.exifSubset?.lon;
+    const hasGps = isValidGpsCoord(itemLat, itemLon);
+    if (hasGps) {
+      exifParts.push(formatCoordinates(itemLat!, itemLon!));
+    }
+
+    const exifRow = el('div', 'exif-meta-bar mono-nums exif-row-flex');
+    exifRow.appendChild(el('span', '', exifParts.join(' · ')));
+    if (hasGps) {
+      const mapJumpBtn = el('button', 'btn btn-ghost btn-compact', 'Vedi su Mappa');
+      mapJumpBtn.id = 'btn-lightbox-view-map';
+      mapJumpBtn.addEventListener('click', () => {
+        mapFocusCoords = { lat: itemLat!, lon: itemLon! };
+        selectedLightboxItem = null;
+        switchView('map');
+      });
+      exifRow.appendChild(mapJumpBtn);
+    }
+    panel.appendChild(exifRow);
 
     const actionsRow = el('div', 'toolbar-row');
 
-    const dlBtn = el('button', 'btn btn-primary', 'Scarica Originale');
+    if (
+      isSafeRasterImageMime(item.meta.mime) &&
+      !isSvgMime(item.meta.mime, item.meta.name) &&
+      item.state === 'active'
+    ) {
+      const editBtn = el('button', 'btn btn-primary', 'Modifica Foto');
+      editBtn.id = 'btn-lightbox-edit';
+      editBtn.addEventListener('click', () => {
+        closeActiveOverlayModal();
+        const targetItem = item;
+        selectedLightboxItem = null;
+        render();
+        activeModalCleanup = openPhotoEditorModal(rootEl!, client, targetItem, {
+          onClose: () => {
+            activeModalCleanup = null;
+            selectedLightboxItem = targetItem;
+            render();
+          },
+          onSavedOverwrite: (updated) => {
+            activeModalCleanup = null;
+            selectedLightboxItem = updated;
+            bannerMessage = {
+              type: 'success',
+              text: `Foto modificata e sovrascritta in E2EE (v${updated.version}).`,
+            };
+            render();
+          },
+          onSavedCopy: (copyName) => {
+            activeModalCleanup = null;
+            selectedLightboxItem = null;
+            bannerMessage = {
+              type: 'success',
+              text: `Copia modificata cifrata salvata come "${copyName}".`,
+            };
+            render();
+          },
+          onError: (msg) => {
+            bannerMessage = { type: 'error', text: msg };
+          },
+        });
+      });
+      actionsRow.appendChild(editBtn);
+    }
+
+    const dlBtn = el('button', 'btn', 'Scarica');
     dlBtn.id = 'btn-lightbox-download';
     dlBtn.addEventListener('click', async () => {
       const plainBytes = await client.downloadBlobToBytes(item.blobId);
@@ -1315,7 +1855,7 @@ export function initZkWebApp(): void {
     });
     actionsRow.appendChild(dlBtn);
 
-    const favBtn = el('button', 'btn', item.meta.isFavorite ? 'Rimuovi Preferito' : 'Aggiungi Preferito');
+    const favBtn = el('button', 'btn', item.meta.isFavorite ? '★ Preferito' : '☆ Preferito');
     favBtn.id = 'btn-lightbox-favorite';
     favBtn.addEventListener('click', async () => {
       const updated = await client.updateItemMeta(item.id, { isFavorite: !item.meta.isFavorite });
@@ -1328,7 +1868,7 @@ export function initZkWebApp(): void {
     if (allAlbums.length > 0 && item.state === 'active') {
       const albSelect = el('select', 'form-input');
       albSelect.id = 'lightbox-album-select';
-      const placeholderOpt = el('option', '', 'Assegna ad Album Cifrato...');
+      const placeholderOpt = el('option', '', 'Assegna ad Album...');
       placeholderOpt.value = '';
       albSelect.appendChild(placeholderOpt);
       for (const alb of allAlbums) {
@@ -1355,7 +1895,7 @@ export function initZkWebApp(): void {
               };
             }),
           }));
-          bannerMessage = { type: 'success', text: 'Catalogo album cifrato aggiornato.' };
+          bannerMessage = { type: 'success', text: 'Catalogo album aggiornato.' };
           render();
         } catch (err) {
           bannerMessage = {
@@ -1368,91 +1908,29 @@ export function initZkWebApp(): void {
       actionsRow.appendChild(albSelect);
     }
 
-    const sharePwInput = el('input', 'form-input');
-    sharePwInput.type = 'password';
-    sharePwInput.id = 'share-password-input';
-    sharePwInput.placeholder = 'Password share opzionale';
-    actionsRow.appendChild(sharePwInput);
-
-    const shareBtn = el('button', 'btn', 'Condividi Link E2EE');
-    shareBtn.id = 'btn-lightbox-share';
-    shareBtn.addEventListener('click', async () => {
-      const pw = sharePwInput.value.trim();
-      const res = await client.createShare(
-        {
-          itemIds: [item.id],
-          title: item.meta.name,
-          password: pw.length > 0 ? pw : undefined,
-        },
-        window.location.origin
-      );
-      lastCreatedShare = { shareId: res.shareId, shareUrl: res.shareUrl };
-      bannerMessage = {
-        type: 'success',
-        text: `Link E2EE creato (chiave nel fragment #): ${res.shareUrl}`,
-      };
-      selectedLightboxItem = null;
-      render();
-    });
-    actionsRow.appendChild(shareBtn);
-
-    if (isSafeRasterImageMime(item.meta.mime)) {
-      const editOverwriteBtn = el('button', 'btn', 'Ruota 90° e Sovrascrivi (E2EE)');
-      editOverwriteBtn.id = 'btn-lightbox-rotate-save';
-      editOverwriteBtn.addEventListener('click', async () => {
-        const plainBytes = await client.downloadBlobToBytes(item.blobId);
-        const editState = {
-          ...DEFAULT_PHOTO_EDIT_STATE,
-          rotation: normalizeRotation(DEFAULT_PHOTO_EDIT_STATE.rotation + 90),
-          brightness: 4,
-        };
-        transformRgbPixel(255, 128, 64, editState);
-        const updated = await client.replaceItemWithEditedBlob(item.id, plainBytes, {
-          name: item.meta.name,
-        });
-        selectedLightboxItem = updated;
-        bannerMessage = {
-          type: 'success',
-          text: `Immagine sovrascritta alla versione v${updated.version}.`,
-        };
-        render();
-      });
-      actionsRow.appendChild(editOverwriteBtn);
-
-      const editSaveCopyBtn = el('button', 'btn', 'Salva come Copia (E2EE)');
-      editSaveCopyBtn.id = 'btn-lightbox-save-copy';
-      editSaveCopyBtn.addEventListener('click', async () => {
-        const plainBytes = await client.downloadBlobToBytes(item.blobId);
-        const editState = {
-          ...DEFAULT_PHOTO_EDIT_STATE,
-          rotation: normalizeRotation(DEFAULT_PHOTO_EDIT_STATE.rotation + 90),
-          contrast: 8,
-        };
-        transformRgbPixel(200, 100, 50, editState);
-        const dotIdx = item.meta.name.lastIndexOf('.');
-        const copyName =
-          dotIdx > 0
-            ? `${item.meta.name.slice(0, dotIdx)}_copia${item.meta.name.slice(dotIdx)}`
-            : `${item.meta.name}_copia`;
-        await client.uploadFile({
-          name: copyName,
-          mimeType: item.meta.mime,
-          size: plainBytes.byteLength,
-          source: plainBytes,
-        });
-        await client.syncItems('all');
-        selectedLightboxItem = null;
-        bannerMessage = {
-          type: 'success',
-          text: `Copia modificata salvata come "${copyName}".`,
-        };
-        render();
-      });
-      actionsRow.appendChild(editSaveCopyBtn);
-    }
-
     if (item.state === 'active') {
-      const trashBtn = el('button', 'btn btn-danger', 'Sposta nel Cestino');
+      const shareBtn = el('button', 'btn', 'Condividi E2EE');
+      shareBtn.id = 'btn-lightbox-share';
+      shareBtn.addEventListener('click', () => {
+        closeActiveOverlayModal();
+        const targetItem = item;
+        selectedLightboxItem = null;
+        render();
+        activeModalCleanup = openCreateShareModal(rootEl!, client, {
+          itemIds: [targetItem.id],
+          defaultTitle: targetItem.meta.name,
+          onCreated: (res) => {
+            lastCreatedShare = { shareId: res.shareId, shareUrl: res.shareUrl };
+          },
+          onClose: () => {
+            activeModalCleanup = null;
+            render();
+          },
+        });
+      });
+      actionsRow.appendChild(shareBtn);
+
+      const trashBtn = el('button', 'btn btn-danger', 'Cestino');
       trashBtn.id = 'btn-lightbox-trash';
       trashBtn.addEventListener('click', async () => {
         await client.trashItems([item.id]);
@@ -1461,7 +1939,7 @@ export function initZkWebApp(): void {
       });
       actionsRow.appendChild(trashBtn);
     } else {
-      const restoreBtn = el('button', 'btn', 'Ripristina');
+      const restoreBtn = el('button', 'btn btn-primary', 'Ripristina');
       restoreBtn.id = 'btn-lightbox-restore';
       restoreBtn.addEventListener('click', async () => {
         await client.restoreItems([item.id]);
@@ -1496,8 +1974,11 @@ function renderPublicShareApp(rootEl: HTMLElement, client: ZkVaultClient, shareI
   rootEl.textContent = '';
   const header = el('header', 'app-header');
   const brandGroup = el('div', 'brand-group');
-  brandGroup.appendChild(el('span', 'brand-title', 'PhotoCloud v2'));
-  brandGroup.appendChild(el('span', 'e2ee-badge', 'Condivisione E2EE'));
+  brandGroup.appendChild(el('span', 'brand-title', 'PhotoCloud'));
+  const stLine = el('span', 'header-status-line unlocked');
+  stLine.appendChild(el('span', 'status-dot status-dot-active'));
+  stLine.appendChild(el('span', '', 'Condivisione E2EE'));
+  brandGroup.appendChild(stLine);
   header.appendChild(brandGroup);
   const actions = el('div', 'header-actions');
   const homeLink = el('a', 'btn btn-ghost', 'Apri PhotoCloud');
@@ -1507,7 +1988,7 @@ function renderPublicShareApp(rootEl: HTMLElement, client: ZkVaultClient, shareI
   rootEl.appendChild(header);
 
   const box = el('main', 'auth-container');
-  box.appendChild(el('h1', 'brand-title', 'Condivisione Pubblica Zero-Knowledge'));
+  box.appendChild(el('h1', 'brand-title', 'Condivisione Zero-Knowledge'));
   const statusEl = el('div', 'media-card-meta', 'Decifratura shareManifest in corso...');
   statusEl.id = 'share-status-text';
   box.appendChild(statusEl);
@@ -1519,15 +2000,13 @@ function renderPublicShareApp(rootEl: HTMLElement, client: ZkVaultClient, shareI
   const renderOpenedShare = (opened: OpenedShareV2) => {
     contentContainer.textContent = '';
     statusEl.textContent = opened.title
-      ? `Collezione: ${opened.title} (${opened.items.length} file)`
-      : `${opened.items.length} file condivisi e verificati.`;
-    const list = el('div', '');
+      ? `${opened.title} · ${opened.items.length} file verificati`
+      : `${opened.items.length} file condivisi e verificati`;
+    const list = el('div', 'shares-list');
     list.id = 'shared-items-list';
     for (const item of opened.items) {
-      const row = el('div', 'toolbar-row');
-      row.className = 'toolbar-row shared-item-row';
-      const nameSpan = el('span', 'media-card-title', item.meta.name);
-      nameSpan.className = 'media-card-title shared-item-name';
+      const row = el('div', 'share-row-card shared-item-row');
+      const nameSpan = el('span', 'media-card-title shared-item-name', item.meta.name);
       row.appendChild(nameSpan);
       const dlBtn = el('button', 'btn btn-primary btn-download-shared-item', 'Scarica e Decifra');
       dlBtn.addEventListener('click', async () => {
@@ -1557,7 +2036,7 @@ function renderPublicShareApp(rootEl: HTMLElement, client: ZkVaultClient, shareI
     fg.appendChild(pwInput);
     contentContainer.appendChild(fg);
 
-    const unlockBtn = el('button', 'btn btn-primary', 'Sblocca Condivisione');
+    const unlockBtn = el('button', 'btn btn-primary btn-full', 'Sblocca Condivisione');
     unlockBtn.id = 'btn-share-unlock-password';
     unlockBtn.addEventListener('click', async () => {
       unlockBtn.disabled = true;

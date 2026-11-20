@@ -246,11 +246,23 @@ export function createPhotoCloudApp(options: PhotoCloudServerOptions = {}): {
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   // 1. Mount Zero-Knowledge v2 API & Web App (ONLY encryption mode in PhotoCloud)
+  const hasExplicitRegPolicy =
+    typeof process.env.REGISTRATION_ENABLED === 'string' &&
+    process.env.REGISTRATION_ENABLED.trim().length > 0;
+  const hasInviteTokenEnv =
+    typeof process.env.REGISTRATION_INVITE_TOKEN === 'string' &&
+    process.env.REGISTRATION_INVITE_TOKEN.trim().length > 0;
+
   const zkV2 = createZkV2Router({
     vaultV2Dir,
     tempUploadDir,
     serverSecret: getOrCreateServerSecret(vaultV2Dir),
     maxUploadBytes: MAX_UPLOAD_BYTES,
+    registrationEnabled: hasExplicitRegPolicy
+      ? undefined
+      : hasInviteTokenEnv
+        ? 'setup_token_or_invite'
+        : true,
     onSetupTokenGenerated:
       options.onSetupTokenGenerated ||
       ((token) => {

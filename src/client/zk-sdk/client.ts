@@ -50,8 +50,10 @@ import {
 } from './kdfPolicy.ts';
 import {
   buildShareUrl,
+  decryptOwnerShareMeta,
   decryptShareItemMeta,
   decryptShareManifest,
+  encryptOwnerShareMeta,
   encryptShareItemMeta,
   encryptShareManifest,
   parseShareUrlFragment,
@@ -60,12 +62,14 @@ import {
 } from './shareCrypto.ts';
 import { generateZipStream } from './zipStream.ts';
 import type {
+  AuthConfigV2,
   CreateShareOptionsV2,
   CreateShareResultV2,
   DecryptedAlbumCatalogV2,
   DecryptedAlbumV2,
   DecryptedItemV2,
   OpenedShareV2,
+  OwnerShareSummaryV2,
   PasswordWrappedShareKeyV2,
   PreparedRegistrationV2,
   ServerItemV2,
@@ -361,6 +365,7 @@ export class ZkVaultClient {
   private accountKey: Uint8Array | null = null;
   private userSalt: Uint8Array | null = null;
   private kdfParams: Argon2idParams | null = null;
+  private hasPassphrase = true;
   private wrappedVaultKeyBytes: Uint8Array | null = null;
   private vaultKey: Uint8Array | null = null;
   private subkeys: VaultSubkeys | null = null;
@@ -396,6 +401,34 @@ export class ZkVaultClient {
 
   public getCsrfToken(): string | null {
     return this.csrfToken;
+  }
+
+  public isPassphraseProtected(): boolean {
+    return this.hasPassphrase;
+  }
+
+  public exportCurrentKeyFile(): ZkKeyFileV2 | null {
+    if (!this.accountKey || !this.username || !this.userSalt || !this.kdfParams) return null;
+    return {
+      formatVersion: 2,
+      username: this.username,
+      userId: this.userId ?? undefined,
+      accountKey: toBase64Url(this.accountKey),
+      salt: toBase64Url(this.userSalt),
+      kdfParams: {
+        algorithm: 'Argon2id',
+        memoryKiB: this.kdfParams.memoryKiB,
+        iterations: this.kdfParams.iterations,
+        parallelism: this.kdfParams.parallelism,
+      },
+      hasPassphrase: this.hasPassphrase,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  public getCurrentRecoveryCode(): string | null {
+    if (!this.accountKey) return null;
+    return formatRecoveryCode(this.accountKey);
   }
 
   public setAutoLockTimeoutMs(timeoutMs: number): void {
@@ -498,21 +531,44 @@ export class ZkVaultClient {
   // 1. REGISTRAZIONE, LOGIN E CAMBIO PASSPHRASE (REWRAP)
   // ==========================================================================
 
+  public async getAuthConfig(): Promise<AuthConfigV2> {
+    try {
+      const resp = await this.apiFetch('/api/v2/auth/config', { method: 'GET' });
+      if (!resp.ok) {
+        return { registrationOpen: true, requiresInviteToken: false, policy: 'open' };
+      }
+      const data = (await resp.json()) as Partial<AuthConfigV2>;
+      return {
+        registrationOpen: data.registrationOpen !== false,
+        requiresInviteToken: Boolean(data.requiresInviteToken),
+        policy:
+          data.policy === 'disabled' || data.policy === 'setup_token_or_invite' || data.policy === 'open'
+            ? data.policy
+            : 'open',
+      };
+    } catch {
+      return { registrationOpen: true, requiresInviteToken: false, policy: 'open' };
+    }
+  }
+
   public prepareRegistration(
     username: string,
-    passphrase: string,
+    passphrase = '',
     kdfParams: Argon2idParams = DEFAULT_CLIENT_KDF_PARAMS
   ): PreparedRegistrationV2 {
     const trimmedUser = username.trim();
-    if (!/^[a-zA-Z0-9_.-]{3,64}$/.test(trimmedUser)) {
+    if (!/^[a-zA-Z0-9_.-]{3,32}$/.test(trimmedUser)) {
       throw new ZkCryptoError(
         ZkErrorCode.INVALID_PARAMETER,
-        'Username non valido (3-64 caratteri alfanumerici, punto, trattino o underscore).'
+        'Username non valido (3-32 caratteri alfanumerici, punto, trattino o underscore).'
       );
     }
-    const strength = evaluatePassphraseStrength(passphrase);
-    if (!strength.valid) {
-      throw new ZkCryptoError(ZkErrorCode.INVALID_PARAMETER, strength.feedback);
+    const usesPassphrase = typeof passphrase === 'string' && passphrase.length > 0;
+    if (usesPassphrase) {
+      const strength = evaluatePassphraseStrength(passphrase);
+      if (!strength.valid) {
+        throw new ZkCryptoError(ZkErrorCode.INVALID_PARAMETER, strength.feedback);
+      }
     }
     validateKdfParamsFloor(kdfParams);
 
@@ -525,26 +581,40 @@ export class ZkVaultClient {
       accountKey,
       userSalt,
       kdfParams: { ...kdfParams, hashLength: 32 },
+      hasPassphrase: usesPassphrase,
       recoveryCode,
     };
   }
 
   public async register(
     prepared: PreparedRegistrationV2,
-    passphrase: string,
-    recoveryConfirmationInput: string,
-    options: { setupToken?: string; inviteToken?: string } = {}
+    passphrase = '',
+    recoveryConfirmationInput?: string,
+    options: { setupToken?: string; inviteToken?: string; skipRecoveryConfirmation?: boolean } = {}
   ): Promise<{ keyFile: ZkKeyFileV2; keyFileFileName: string; userId: string }> {
-    if (!verifyRecoveryCodeConfirmation(prepared.recoveryCode, recoveryConfirmationInput)) {
-      throw new ZkCryptoError(
-        ZkErrorCode.INVALID_PARAMETER,
-        'Conferma del codice di recupero non corrispondente. Verifica di aver salvato il Recovery Code.'
-      );
+    if (!options.skipRecoveryConfirmation) {
+      if (
+        recoveryConfirmationInput === undefined ||
+        !verifyRecoveryCodeConfirmation(prepared.recoveryCode, recoveryConfirmationInput)
+      ) {
+        throw new ZkCryptoError(
+          ZkErrorCode.INVALID_PARAMETER,
+          'Conferma del codice di recupero non corrispondente. Verifica di aver salvato il Recovery Code.'
+        );
+      }
     }
 
-    const strength = evaluatePassphraseStrength(passphrase);
-    if (!strength.valid) {
-      throw new ZkCryptoError(ZkErrorCode.INVALID_PARAMETER, strength.feedback);
+    const usesPassphrase = typeof passphrase === 'string' && passphrase.length > 0;
+    if (usesPassphrase) {
+      const strength = evaluatePassphraseStrength(passphrase);
+      if (!strength.valid) {
+        throw new ZkCryptoError(ZkErrorCode.INVALID_PARAMETER, strength.feedback);
+      }
+    } else if (prepared.hasPassphrase) {
+      const strength = evaluatePassphraseStrength(passphrase);
+      if (!strength.valid) {
+        throw new ZkCryptoError(ZkErrorCode.INVALID_PARAMETER, strength.feedback);
+      }
     }
     validateKdfParamsFloor(prepared.kdfParams, prepared.userSalt);
 
@@ -554,7 +624,7 @@ export class ZkVaultClient {
     const { root, kek, authSecret } = await this.workerClient.deriveRootAndKeys({
       accountKey: prepared.accountKey,
       userSalt: prepared.userSalt,
-      passphrase,
+      passphrase: usesPassphrase ? passphrase : null,
       argon2Params: prepared.kdfParams,
     });
 
@@ -609,6 +679,7 @@ export class ZkVaultClient {
       this.accountKey = new Uint8Array(prepared.accountKey);
       this.userSalt = new Uint8Array(prepared.userSalt);
       this.kdfParams = { ...prepared.kdfParams, hashLength: 32 };
+      this.hasPassphrase = usesPassphrase;
       this.wrappedVaultKeyBytes = wrappedVkBytes;
       this.vaultKey = vaultKey;
       this.subkeys = subkeys;
@@ -628,6 +699,7 @@ export class ZkVaultClient {
           iterations: prepared.kdfParams.iterations,
           parallelism: prepared.kdfParams.parallelism,
         },
+        hasPassphrase: usesPassphrase,
         createdAt: new Date().toISOString(),
       };
 
@@ -641,13 +713,18 @@ export class ZkVaultClient {
     }
   }
 
-  public recoverKeyFileFromRecoveryCode(username: string, recoveryCodeInput: string): ZkKeyFileV2 {
+  public recoverKeyFileFromRecoveryCode(
+    username: string,
+    recoveryCodeInput: string,
+    hasPassphrase?: boolean
+  ): ZkKeyFileV2 {
     const accountKey = parseRecoveryCodeToAccountKey(recoveryCodeInput);
     try {
       return {
         formatVersion: 2,
         username: username.trim(),
         accountKey: toBase64Url(accountKey),
+        ...(hasPassphrase !== undefined ? { hasPassphrase } : {}),
         createdAt: new Date().toISOString(),
       };
     } finally {
@@ -657,14 +734,15 @@ export class ZkVaultClient {
 
   public async login(
     keyFile: ZkKeyFileV2,
-    passphrase: string,
+    passphrase = '',
     onProgress?: (percent: number) => void
   ): Promise<{ userId: string; username: string }> {
     if (!keyFile || keyFile.formatVersion !== 2 || typeof keyFile.username !== 'string') {
       throw new Error(UNIFORM_AUTH_ERROR_MESSAGE);
     }
     const username = keyFile.username.trim();
-    if (!username || !passphrase) {
+    const usesPassphrase = keyFile.hasPassphrase === false ? passphrase.length > 0 : true;
+    if (!username || (usesPassphrase && !passphrase)) {
       throw new Error(UNIFORM_AUTH_ERROR_MESSAGE);
     }
 
@@ -744,7 +822,7 @@ export class ZkVaultClient {
       const derived = await this.workerClient.deriveRootAndKeys({
         accountKey: accountKeyBytes,
         userSalt: saltBytes,
-        passphrase,
+        passphrase: usesPassphrase ? passphrase : null,
         argon2Params,
         onProgress: onProgress ? (p) => onProgress(p.percent) : undefined,
       });
@@ -790,6 +868,7 @@ export class ZkVaultClient {
       this.accountKey = new Uint8Array(accountKeyBytes);
       this.userSalt = saltBytes;
       this.kdfParams = argon2Params;
+      this.hasPassphrase = usesPassphrase;
       this.wrappedVaultKeyBytes = wrappedVkBytes;
       this.vaultKey = vaultKey;
       this.subkeys = subkeys;
@@ -811,16 +890,19 @@ export class ZkVaultClient {
       throw new ZkCryptoError(ZkErrorCode.INVALID_PARAMETER, 'Stato sessione incompleto per rewrap.');
     }
 
-    const strength = evaluatePassphraseStrength(newPassphrase);
-    if (!strength.valid) {
-      throw new ZkCryptoError(ZkErrorCode.INVALID_PARAMETER, strength.feedback);
+    const nextUsesPassphrase = typeof newPassphrase === 'string' && newPassphrase.length > 0;
+    if (nextUsesPassphrase) {
+      const strength = evaluatePassphraseStrength(newPassphrase);
+      if (!strength.valid) {
+        throw new ZkCryptoError(ZkErrorCode.INVALID_PARAMETER, strength.feedback);
+      }
     }
     validateKdfParamsFloor(newKdfParams);
 
     const oldDerived = await this.workerClient.deriveRootAndKeys({
       accountKey: this.accountKey,
       userSalt: this.userSalt,
-      passphrase: oldPassphrase,
+      passphrase: this.hasPassphrase ? oldPassphrase : null,
       argon2Params: this.kdfParams,
     });
     const oldAuthSecretB64 = toBase64Url(oldDerived.authSecret);
@@ -837,7 +919,7 @@ export class ZkVaultClient {
     const newDerived = await this.workerClient.deriveRootAndKeys({
       accountKey: this.accountKey,
       userSalt: newSalt,
-      passphrase: newPassphrase,
+      passphrase: nextUsesPassphrase ? newPassphrase : null,
       argon2Params: newKdfParams,
     });
 
@@ -876,6 +958,7 @@ export class ZkVaultClient {
       zeroize(this.userSalt, this.wrappedVaultKeyBytes);
       this.userSalt = newSalt;
       this.kdfParams = { ...newKdfParams, hashLength: 32 };
+      this.hasPassphrase = nextUsesPassphrase;
       this.wrappedVaultKeyBytes = newWrappedVk;
 
       checkAndPinKdfParameters(this.pinningStore, this.username, newSaltB64, newKdfParams);
@@ -892,6 +975,7 @@ export class ZkVaultClient {
           iterations: newKdfParams.iterations,
           parallelism: newKdfParams.parallelism,
         },
+        hasPassphrase: nextUsesPassphrase,
         createdAt: new Date().toISOString(),
       };
     } finally {
@@ -1773,6 +1857,28 @@ export class ZkVaultClient {
 
     const bodyData = (await resp.json()) as { item?: ServerItemV2 } & ServerItemV2;
     const srv = bodyData.item ?? bodyData;
+
+    // Carica le nuove miniature cifrate 320 / 1280 dopo il replace (ora newBlobId appartiene all'item)
+    const uploadedThumbs: number[] = Array.isArray(srv.thumbs) ? [...srv.thumbs] : [];
+    if (thumbs?.thumb320 && thumbs.thumb320.byteLength > 0) {
+      const enc320 = await encryptThumbnail(subkeys.thumbKey, newBlobId, '320', thumbs.thumb320);
+      const tResp = await this.apiFetch(`/api/v2/blobs/${newBlobId}/thumbs/320`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: enc320 as unknown as BodyInit,
+      });
+      if (tResp.ok && !uploadedThumbs.includes(320)) uploadedThumbs.push(320);
+    }
+    if (thumbs?.thumb1280 && thumbs.thumb1280.byteLength > 0) {
+      const enc1280 = await encryptThumbnail(subkeys.thumbKey, newBlobId, '1280', thumbs.thumb1280);
+      const tResp = await this.apiFetch(`/api/v2/blobs/${newBlobId}/thumbs/1280`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: enc1280 as unknown as BodyInit,
+      });
+      if (tResp.ok && !uploadedThumbs.includes(1280)) uploadedThumbs.push(1280);
+    }
+
     const updated: DecryptedItemV2 = {
       id: srv.id,
       blobId: srv.blobId,
@@ -1784,7 +1890,7 @@ export class ZkVaultClient {
       state: srv.state,
       trashedAt: srv.trashedAt,
       dedupTag: srv.dedupTag,
-      thumbs: srv.thumbs ?? [],
+      thumbs: uploadedThumbs,
       meta: newMeta,
       category: classifyItemCategory(newMeta.mime, newMeta.name),
     };
@@ -2145,6 +2251,14 @@ export class ZkVaultClient {
         items: manifestItems,
       };
       const shareManifestB64 = await encryptShareManifest(manifestPayload, shareKey, shareId);
+      const shareKeyB64 = toBase64Url(shareKey);
+      const encShareMetaB64 = await encryptOwnerShareMeta(subkeys.metaKey, shareId, {
+        v: 1,
+        title: options.title,
+        itemCount: apiItems.length,
+        shareKeyB64u: shareKeyB64,
+        hasPassword: Boolean(passwordWrap),
+      });
 
       const resp = await this.apiFetch('/api/v2/shares', {
         method: 'POST',
@@ -2154,6 +2268,7 @@ export class ZkVaultClient {
           expiresAt: options.expiresAt ?? null,
           maxDownloads: options.maxDownloads ?? null,
           passwordWrap,
+          encShareMeta: encShareMetaB64,
           shareManifest: shareManifestB64,
           items: apiItems,
         }),
@@ -2164,7 +2279,6 @@ export class ZkVaultClient {
         throw new Error(err.error || `CREATE_SHARE_FAILED_${resp.status}`);
       }
 
-      const shareKeyB64 = toBase64Url(shareKey);
       const shareUrl = buildShareUrl(origin, shareId, shareKey);
 
       return {
@@ -2177,6 +2291,82 @@ export class ZkVaultClient {
     } finally {
       zeroize(shareKey);
     }
+  }
+
+  public async listOwnerShares(origin = 'https://localhost:3000'): Promise<OwnerShareSummaryV2[]> {
+    const { subkeys } = this.requireUnlocked();
+    const resp = await this.apiFetch('/api/v2/shares', { method: 'GET' });
+    if (!resp.ok) {
+      throw new Error(`LIST_SHARES_FAILED_${resp.status}`);
+    }
+    const data = (await resp.json()) as {
+      shares?: Array<{
+        shareId: string;
+        encShareMeta: string | null;
+        hasPassword: boolean;
+        itemCount: number;
+        expiresAt: number | null;
+        maxDownloads: number | null;
+        downloadCount: number;
+        createdAt: number;
+      }>;
+    };
+
+    const now = Date.now();
+    const results: OwnerShareSummaryV2[] = [];
+    for (const row of data.shares ?? []) {
+      let title = `Condivisione ${row.shareId.slice(0, 8)}`;
+      let shareKeyBase64Url: string | null = null;
+      let shareUrl: string | null = null;
+
+      if (row.encShareMeta) {
+        try {
+          const decrypted = await decryptOwnerShareMeta(
+            subkeys.metaKey,
+            row.shareId,
+            row.encShareMeta
+          );
+          if (decrypted.title && decrypted.title.trim().length > 0) {
+            title = decrypted.title.trim();
+          }
+          if (decrypted.shareKeyB64u) {
+            const keyBytes = fromBase64Url(decrypted.shareKeyB64u);
+            try {
+              if (keyBytes.byteLength === 32) {
+                shareKeyBase64Url = decrypted.shareKeyB64u;
+                shareUrl = buildShareUrl(origin, row.shareId, keyBytes);
+              }
+            } finally {
+              zeroize(keyBytes);
+            }
+          }
+        } catch {
+          // Legacy or unreadable encShareMeta: keep safe fallback label
+        }
+      }
+
+      let status: OwnerShareSummaryV2['status'] = 'active';
+      if (row.expiresAt !== null && now >= row.expiresAt) {
+        status = 'expired';
+      } else if (row.maxDownloads !== null && row.downloadCount >= row.maxDownloads) {
+        status = 'limit_reached';
+      }
+
+      results.push({
+        shareId: row.shareId,
+        title,
+        itemCount: row.itemCount,
+        hasPassword: Boolean(row.hasPassword),
+        expiresAt: row.expiresAt,
+        maxDownloads: row.maxDownloads,
+        downloadCount: row.downloadCount,
+        createdAt: row.createdAt,
+        shareKeyBase64Url,
+        shareUrl,
+        status,
+      });
+    }
+    return results;
   }
 
   public async revokeShare(shareId: string): Promise<void> {

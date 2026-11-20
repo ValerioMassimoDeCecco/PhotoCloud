@@ -20,6 +20,7 @@ import {
 import { validateKdfParamsFloor } from './kdfPolicy.ts';
 import type {
   KdfParamsV2,
+  OwnerShareMetaPlaintextV2,
   PasswordWrapEnvelopeV2,
   ShareManifestPlaintextV2,
 } from './types.ts';
@@ -150,6 +151,59 @@ export async function decryptShareItemMeta(
   } finally {
     zeroize(shareWrapKey, shareMetaKey);
   }
+}
+
+/**
+ * Cifra i metadati privati della condivisione per il solo proprietario con `metaKey`
+ * e `AAD = UTF8("owner-share-meta|" + shareId)`. Mai esposto sull'endpoint pubblico.
+ */
+export async function encryptOwnerShareMeta(
+  metaKey: Uint8Array,
+  shareId: string,
+  meta: OwnerShareMetaPlaintextV2,
+  crypto: ZkCryptoProvider = defaultCryptoProvider
+): Promise<string> {
+  if (metaKey.byteLength !== 32) {
+    throw new ZkCryptoError(ZkErrorCode.INVALID_PARAMETER, 'metaKey deve essere di 32 byte.');
+  }
+  const nonce = crypto.randomBytes(GCM_NONCE_LEN);
+  const aad = utf8Encode(`owner-share-meta|${shareId.toLowerCase()}`);
+  const plaintext = utf8Encode(JSON.stringify(meta));
+  const ctAndTag = await crypto.aes256GcmEncrypt(metaKey, nonce, plaintext, aad);
+  return toBase64Url(concatBytes(nonce, ctAndTag));
+}
+
+/**
+ * Decifra i metadati privati della condivisione del proprietario con `metaKey`.
+ */
+export async function decryptOwnerShareMeta(
+  metaKey: Uint8Array,
+  shareId: string,
+  encShareMetaB64: string,
+  crypto: ZkCryptoProvider = defaultCryptoProvider
+): Promise<OwnerShareMetaPlaintextV2> {
+  if (metaKey.byteLength !== 32) {
+    throw new ZkCryptoError(ZkErrorCode.INVALID_PARAMETER, 'metaKey deve essere di 32 byte.');
+  }
+  const raw = fromBase64Url(encShareMetaB64);
+  if (raw.byteLength < GCM_NONCE_LEN + GCM_TAG_LEN + 2) {
+    throw new ZkCryptoError(ZkErrorCode.TRUNCATED_BLOB, 'encShareMeta troppo corto.');
+  }
+  const nonce = raw.subarray(0, GCM_NONCE_LEN);
+  const ctAndTag = raw.subarray(GCM_NONCE_LEN);
+  const aad = utf8Encode(`owner-share-meta|${shareId.toLowerCase()}`);
+  const plaintext = await crypto.aes256GcmDecrypt(
+    metaKey,
+    nonce,
+    ctAndTag,
+    aad,
+    ZkErrorCode.AUTH_TAG_MISMATCH
+  );
+  const parsed = JSON.parse(utf8Decode(plaintext)) as OwnerShareMetaPlaintextV2;
+  if (!parsed || parsed.v !== 1 || typeof parsed.shareKeyB64u !== 'string') {
+    throw new ZkCryptoError(ZkErrorCode.MALFORMED_HEADER, 'Struttura encShareMeta non valida.');
+  }
+  return parsed;
 }
 
 /**

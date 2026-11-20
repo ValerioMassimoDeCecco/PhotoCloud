@@ -208,7 +208,12 @@ def main():
         r_sw = anon.get(f"{BASE_URL}/v2/sw-stream.js")
         assert r_sw.status_code == 200
         assert r_sw.headers.get("service-worker-allowed") == "/v2"
-        assert setup_token, "Expected setup_token printed once on stdout"
+        r_cfg = anon.get(f"{BASE_URL}/api/v2/auth/config")
+        assert r_cfg.status_code == 200, f"Auth config failed: {r_cfg.status_code} {r_cfg.text}"
+        cfg_json = r_cfg.json()
+        assert cfg_json.get("registrationOpen") is True
+        assert cfg_json.get("policy") == "open"
+        assert cfg_json.get("requiresInviteToken") is False
         print("    OK")
 
         # 4. Anti-enumeration fake salt on /api/v2/login/params & CSRF cross-site block
@@ -225,7 +230,7 @@ def main():
         assert r_csrf.status_code == 403
         print("    OK")
 
-        # 5. Registration with single-use setup token
+        # 5. Open self-hosted registration (no setupToken required when policy == open)
         print("[5] Testing POST /api/v2/register (client-generated opaque authSecret & wrappedVaultKey)...")
         client = HttpSession()
         username = "rust_zk_alice"
@@ -234,16 +239,19 @@ def main():
         wrapped_vk = b64u(os.urandom(60))
         kdf = {"algorithm": "Argon2id", "memoryKiB": 65536, "iterations": 3, "parallelism": 1}
 
+        reg_payload = {
+            "username": username,
+            "salt": user_salt,
+            "kdfParams": kdf,
+            "authSecret": auth_secret,
+            "wrappedVaultKey": wrapped_vk,
+        }
+        if setup_token:
+            reg_payload["setupToken"] = setup_token
+
         r_reg = client.post(
             f"{BASE_URL}/api/v2/register",
-            json_body={
-                "username": username,
-                "salt": user_salt,
-                "kdfParams": kdf,
-                "authSecret": auth_secret,
-                "wrappedVaultKey": wrapped_vk,
-                "setupToken": setup_token,
-            },
+            json_body=reg_payload,
         )
         assert r_reg.status_code == 201, f"Register failed: {r_reg.status_code} {r_reg.text}"
         set_cookie_hdr = r_reg.headers.get("set-cookie", "")
@@ -401,10 +409,13 @@ def main():
         assert r_rs.status_code == 200, f"Restore failed: {r_rs.status_code} {r_rs.text}"
 
         enc_manifest = b64u(os.urandom(96))
+        enc_owner_meta = b64u(os.urandom(80))
         r_sh = client.post(
             f"{BASE_URL}/api/v2/shares",
             json_body={
                 "shareManifest": enc_manifest,
+                "encShareMeta": enc_owner_meta,
+                "maxDownloads": 3,
                 "items": [{"blobId": blob_id, "wrappedFk": b64u(os.urandom(60))}],
             },
             headers=auth_headers,
@@ -412,9 +423,18 @@ def main():
         assert r_sh.status_code == 201, f"Share create failed: {r_sh.status_code} {r_sh.text}"
         share_id = r_sh.json()["shareId"]
 
-        # Public access without cookie
+        # Owner authenticated listing returns encShareMeta
+        r_sh_list = client.get(f"{BASE_URL}/api/v2/shares", headers={"Cookie": cookie_pair})
+        assert r_sh_list.status_code == 200, f"Share list failed: {r_sh_list.status_code} {r_sh_list.text}"
+        shares_arr = r_sh_list.json().get("shares", [])
+        assert len(shares_arr) == 1 and shares_arr[0]["shareId"] == share_id
+        assert shares_arr[0]["encShareMeta"] == enc_owner_meta
+        assert shares_arr[0]["maxDownloads"] == 3
+
+        # Public access without cookie (MUST NEVER expose encShareMeta!)
         r_sh_get = anon.get(f"{BASE_URL}/api/v2/shares/{share_id}")
         assert r_sh_get.status_code == 200 and r_sh_get.json()["shareManifest"] == enc_manifest
+        assert "encShareMeta" not in r_sh_get.json(), "Public share response must NEVER leak encShareMeta"
         r_sh_blob = anon.get(f"{BASE_URL}/api/v2/shares/{share_id}/blobs/{blob_id}")
         assert r_sh_blob.status_code == 200 and r_sh_blob.content == pczk_bytes
 

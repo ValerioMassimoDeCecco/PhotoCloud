@@ -521,10 +521,34 @@ fn parse_registration_policy_from_env() -> RegistrationPolicy {
     match std::env::var("REGISTRATION_ENABLED") {
         Ok(val) => match val.trim().to_lowercase().as_str() {
             "true" | "1" | "yes" | "open" => RegistrationPolicy::Open,
-            "false" | "0" | "no" | "disabled" => RegistrationPolicy::Disabled,
+            "false" | "0" | "no" | "disabled" | "never" => RegistrationPolicy::Disabled,
+            "setup_token_or_invite" | "invite" | "invite_only" | "token" | "first_user_only" => {
+                RegistrationPolicy::SetupTokenOrInvite
+            }
+            "" => {
+                if std::env::var("REGISTRATION_INVITE_TOKEN")
+                    .ok()
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+                {
+                    RegistrationPolicy::SetupTokenOrInvite
+                } else {
+                    RegistrationPolicy::Open
+                }
+            }
             _ => RegistrationPolicy::SetupTokenOrInvite,
         },
-        Err(_) => RegistrationPolicy::SetupTokenOrInvite,
+        Err(_) => {
+            if std::env::var("REGISTRATION_INVITE_TOKEN")
+                .ok()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
+            {
+                RegistrationPolicy::SetupTokenOrInvite
+            } else {
+                RegistrationPolicy::Open
+            }
+        }
     }
 }
 

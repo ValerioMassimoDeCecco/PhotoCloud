@@ -82,15 +82,32 @@ import kotlinx.coroutines.launch
 import java.io.File
 import javax.crypto.Cipher
 
+enum class ZkAuthMode {
+    LOGIN_KEYFILE,
+    REGISTER,
+    RECOVERY
+}
+
 @Immutable
 data class ZkV2LoginFormUiState(
     val serverUrl: String,
+    val authMode: ZkAuthMode = ZkAuthMode.LOGIN_KEYFILE,
     val useRecoveryCodeTab: Boolean = false,
+    val authConfig: V2AuthConfigResponse? = null,
     val selectedKeyFileName: String? = null,
     val hasKeyFileLoaded: Boolean = false,
+    val keyFileRequiresPassphrase: Boolean = true,
     val usernameInput: String = "",
     val recoveryCodeInput: String = "",
     val passphraseInput: String = "",
+    val regUsernameInput: String = "",
+    val regUsePassphrase: Boolean = false,
+    val regPassphraseInput: String = "",
+    val regConfirmPassphraseInput: String = "",
+    val regInviteTokenInput: String = "",
+    val showBiometricLockGate: Boolean = true,
+    val showBiometricEnrollDialog: Boolean = false,
+    val pendingKeyFileToExport: ZkKeyFileV2? = null,
     val isBusy: Boolean = false,
     val errorMessage: String? = null,
     val kdfWarning: KdfChangeWarning? = null,
@@ -108,11 +125,22 @@ data class ZkV2LoginFormUiState(
 )
 
 sealed interface ZkV2UiEvent {
+    data class SelectAuthMode(val mode: ZkAuthMode) : ZkV2UiEvent
     data class SelectAuthTab(val useRecoveryCode: Boolean) : ZkV2UiEvent
     data object PickKeyFile : ZkV2UiEvent
     data class UpdateUsername(val value: String) : ZkV2UiEvent
     data class UpdateRecoveryCode(val value: String) : ZkV2UiEvent
     data class UpdatePassphrase(val value: String) : ZkV2UiEvent
+    data class UpdateRegUsername(val value: String) : ZkV2UiEvent
+    data class ToggleRegUsePassphrase(val enabled: Boolean) : ZkV2UiEvent
+    data class UpdateRegPassphrase(val value: String) : ZkV2UiEvent
+    data class UpdateRegConfirmPassphrase(val value: String) : ZkV2UiEvent
+    data class UpdateRegInviteToken(val value: String) : ZkV2UiEvent
+    data object SubmitRegister : ZkV2UiEvent
+    data object ExportCurrentKeyFile : ZkV2UiEvent
+    data object DismissBiometricLockGate : ZkV2UiEvent
+    data object DismissBiometricEnrollDialog : ZkV2UiEvent
+    data object ConfirmBiometricEnrollDialog : ZkV2UiEvent
     data object SubmitLogin : ZkV2UiEvent
     data object UnlockWithBiometrics : ZkV2UiEvent
     data object ConfirmTofuCertificate : ZkV2UiEvent
@@ -249,6 +277,9 @@ fun ZkV2AuthCoordinator(
     }
 
     var keyFileJsonInMemory by remember { mutableStateOf<String?>(null) }
+    var pendingSaveKeyFileJson by remember { mutableStateOf<String?>(null) }
+    var hasAutoPromptedBiometrics by remember { mutableStateOf(false) }
+
     var formState by remember(serverUrl) {
         mutableStateOf(
             ZkV2LoginFormUiState(
@@ -258,6 +289,16 @@ fun ZkV2AuthCoordinator(
                 savedUsername = session.username
             )
         )
+    }
+
+    // Fetch server registration policy (/api/v2/auth/config) so Setup/Invite field is only shown if needed
+    LaunchedEffect(serverUrl) {
+        try {
+            val cfg = sessionManager.apiClient.fetchAuthConfig()
+            formState = formState.copy(authConfig = cfg)
+        } catch (_: Throwable) {
+            // Leave default null (treated as open) until user submits / confirms TOFU
+        }
     }
 
     // Keep session-derived flags synchronized cleanly
@@ -282,7 +323,9 @@ fun ZkV2AuthCoordinator(
             formState = formState.copy(
                 selectedKeyFileName = uri.lastPathSegment?.substringAfterLast('/') ?: "photocloud_v2_key.json",
                 hasKeyFileLoaded = true,
+                keyFileRequiresPassphrase = parsed.hasPassphrase,
                 usernameInput = parsed.username,
+                passphraseInput = if (!parsed.hasPassphrase) "" else formState.passphraseInput,
                 errorMessage = null
             )
         } catch (_: Throwable) {
@@ -295,9 +338,103 @@ fun ZkV2AuthCoordinator(
         }
     }
 
+    val safSaveKeyFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        val jsonPayload = pendingSaveKeyFileJson
+        if (uri != null && jsonPayload != null) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(jsonPayload.toByteArray(Charsets.UTF_8))
+                }
+                Toast.makeText(context, "File Chiave v2 salvato al sicuro.", Toast.LENGTH_LONG).show()
+            } catch (t: Throwable) {
+                Toast.makeText(context, "Errore salvataggio File Chiave: ${t.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+        pendingSaveKeyFileJson = null
+        val shouldOfferBio = canUseStrongBiometricsOnly(activity) &&
+            sessionManager.sessionState.value.keyProtectionStatus?.biometricEnrolled != true
+        formState = formState.copy(
+            pendingKeyFileToExport = null,
+            showBiometricEnrollDialog = shouldOfferBio
+        )
+    }
+
+    fun triggerKeyFileExport(keyFile: ZkKeyFileV2) {
+        pendingSaveKeyFileJson = ZkAccountCredentialsCodec.serializeKeyFileJson(keyFile)
+        val safeUser = keyFile.username.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        safSaveKeyFileLauncher.launch("photocloud_v2_key_${safeUser}.json")
+    }
+
+    fun executeRegister() {
+        val current = formState
+        val cleanUser = current.regUsernameInput.trim()
+        if (cleanUser.length < 3) {
+            formState = current.copy(errorMessage = "Inserisci uno username di almeno 3 caratteri.")
+            return
+        }
+        if (current.regUsePassphrase) {
+            if (current.regPassphraseInput.length < MIN_PASSPHRASE_LENGTH) {
+                formState = current.copy(
+                    errorMessage = "La passphrase deve contenere almeno $MIN_PASSPHRASE_LENGTH caratteri."
+                )
+                return
+            }
+            if (current.regPassphraseInput != current.regConfirmPassphraseInput) {
+                formState = current.copy(errorMessage = "Le due passphrase non corrispondono.")
+                return
+            }
+        }
+        formState = current.copy(isBusy = true, errorMessage = null, tofuChallenge = null, tofuMismatch = null)
+        scope.launch {
+            try {
+                val createdKeyFile = sessionManager.registerAccount(
+                    username = cleanUser,
+                    passphrase = if (current.regUsePassphrase) current.regPassphraseInput else null,
+                    setupOrInviteToken = current.regInviteTokenInput.ifBlank { null }
+                )
+                formState = formState.copy(
+                    isBusy = false,
+                    regPassphraseInput = "",
+                    regConfirmPassphraseInput = "",
+                    regInviteTokenInput = "",
+                    pendingKeyFileToExport = createdKeyFile,
+                    errorMessage = null
+                )
+                triggerKeyFileExport(createdKeyFile)
+            } catch (e: TofuConfirmationRequiredException) {
+                formState = formState.copy(isBusy = false, tofuChallenge = e.challenge)
+            } catch (e: TofuPinMismatchException) {
+                formState = formState.copy(isBusy = false, tofuMismatch = e.mismatch)
+            } catch (e: InsecureTransportException) {
+                formState = formState.copy(isBusy = false, errorMessage = e.message)
+            } catch (e: V2ApiHttpException) {
+                val msg = when (e.errorCode) {
+                    "REGISTRATION_DISABLED" -> "Registrazione protetta: inserisci il token di invito o setup."
+                    "REGISTRATION_CONFLICT" -> "Username già registrato. Scegli un altro nome."
+                    else -> e.message
+                }
+                formState = formState.copy(
+                    isBusy = false,
+                    errorMessage = msg,
+                    authConfig = if (e.errorCode == "REGISTRATION_DISABLED") {
+                        V2AuthConfigResponse(registrationOpen = true, requiresInviteToken = true, policy = "setup_token_or_invite")
+                    } else formState.authConfig
+                )
+            } catch (t: Throwable) {
+                formState = formState.copy(
+                    isBusy = false,
+                    errorMessage = t.message ?: "Errore registrazione account v2."
+                )
+            }
+        }
+    }
+
     fun executeLogin() {
         val current = formState
-        if (current.useRecoveryCodeTab) {
+        val isRecovery = current.authMode == ZkAuthMode.RECOVERY || current.useRecoveryCodeTab
+        if (isRecovery) {
             if (current.usernameInput.isBlank() || current.recoveryCodeInput.isBlank()) {
                 formState = current.copy(errorMessage = UNIFORM_AUTH_ERROR_MESSAGE)
                 return
@@ -310,7 +447,7 @@ fun ZkV2AuthCoordinator(
         formState = current.copy(isBusy = true, errorMessage = null, tofuChallenge = null, tofuMismatch = null)
         scope.launch {
             try {
-                if (current.useRecoveryCodeTab) {
+                if (isRecovery) {
                     sessionManager.loginWithRecoveryCode(
                         username = current.usernameInput,
                         recoveryCode = current.recoveryCodeInput,
@@ -319,10 +456,11 @@ fun ZkV2AuthCoordinator(
                 } else {
                     sessionManager.loginWithKeyFileJson(
                         keyFileJson = keyFileJsonInMemory!!,
-                        passphrase = current.passphraseInput
+                        passphrase = if (current.keyFileRequiresPassphrase) current.passphraseInput else ""
                     )
                 }
-                // Clear sensitive form text immediately upon login
+                val shouldOfferBio = canUseStrongBiometricsOnly(activity) &&
+                    sessionManager.sessionState.value.keyProtectionStatus?.biometricEnrolled != true
                 keyFileJsonInMemory = null
                 formState = formState.copy(
                     isBusy = false,
@@ -330,6 +468,7 @@ fun ZkV2AuthCoordinator(
                     recoveryCodeInput = "",
                     hasKeyFileLoaded = false,
                     selectedKeyFileName = null,
+                    showBiometricEnrollDialog = shouldOfferBio,
                     errorMessage = null
                 )
             } catch (e: TofuConfirmationRequiredException) {
@@ -366,19 +505,39 @@ fun ZkV2AuthCoordinator(
                 activity = activity,
                 cipher = bioSession.cipher,
                 title = "Sblocca Vault Zero-Knowledge",
-                subtitle = "Usa Biometria Forte per decifrare la Vault Key dall'AndroidKeyStore",
+                subtitle = "Usa Biometria Forte per sbloccare il tuo archivio cifrato",
                 onSuccess = { unlockedCipher ->
                     try {
                         sessionManager.completeBiometricUnlock(AndroidBiometricCryptoSession(unlockedCipher))
-                        formState = formState.copy(errorMessage = null)
+                        formState = formState.copy(isBusy = true, errorMessage = null)
+                        scope.launch {
+                            val sessionReady = try {
+                                sessionManager.ensureHttpSessionAfterBiometricUnlock()
+                            } catch (_: Throwable) {
+                                false
+                            }
+                            if (sessionReady) {
+                                formState = formState.copy(isBusy = false, errorMessage = null)
+                            } else {
+                                sessionManager.lock("Sessione server scaduta. Accedi una volta con il File Chiave per rinnovare lo sblocco biometrico.")
+                                formState = formState.copy(
+                                    isBusy = false,
+                                    showBiometricLockGate = false,
+                                    errorMessage = "Sessione scaduta: seleziona il File Chiave per riautenticarti."
+                                )
+                            }
+                        }
                     } catch (e: VaultKeyStore.KeyInvalidatedException) {
                         sessionManager.vaultKeyStore.clearBiometricWrappedVk()
                         formState = formState.copy(
+                            isBusy = false,
+                            showBiometricLockGate = false,
                             errorMessage = e.message
                         )
                     } catch (t: Throwable) {
                         formState = formState.copy(
-                            errorMessage = "Impossibile sbloccare con biometria: ${t.message ?: "usa passphrase"}"
+                            isBusy = false,
+                            errorMessage = "Impossibile sbloccare con biometria: ${t.message ?: "usa il File Chiave"}"
                         )
                     }
                 },
@@ -388,11 +547,28 @@ fun ZkV2AuthCoordinator(
             )
         } catch (e: VaultKeyStore.KeyInvalidatedException) {
             sessionManager.vaultKeyStore.clearBiometricWrappedVk()
-            formState = formState.copy(errorMessage = e.message)
+            formState = formState.copy(showBiometricLockGate = false, errorMessage = e.message)
         } catch (t: Throwable) {
             formState = formState.copy(
-                errorMessage = "Chiave biometrica non disponibile: effettua accesso con File Chiave o Recovery Code."
+                showBiometricLockGate = false,
+                errorMessage = "Chiave biometrica non disponibile: accedi con File Chiave o Recovery Code."
             )
+        }
+    }
+
+    // Auto-launch BiometricPrompt once on cold start when hardware-protected VK is enrolled
+    LaunchedEffect(session.isUnlocked, effectiveForm.hasBiometricSavedVk, effectiveForm.canUseStrongBiometrics) {
+        if (!session.isUnlocked &&
+            effectiveForm.hasBiometricSavedVk &&
+            effectiveForm.canUseStrongBiometrics &&
+            formState.showBiometricLockGate &&
+            !hasAutoPromptedBiometrics
+        ) {
+            hasAutoPromptedBiometrics = true
+            executeBiometricUnlock()
+        }
+        if (session.isUnlocked) {
+            hasAutoPromptedBiometrics = false
         }
     }
 
@@ -439,8 +615,19 @@ fun ZkV2AuthCoordinator(
 
     val handleEvent: (ZkV2UiEvent) -> Unit = { event ->
         when (event) {
+            is ZkV2UiEvent.SelectAuthMode -> {
+                formState = formState.copy(
+                    authMode = event.mode,
+                    useRecoveryCodeTab = event.mode == ZkAuthMode.RECOVERY,
+                    errorMessage = null
+                )
+            }
             is ZkV2UiEvent.SelectAuthTab -> {
-                formState = formState.copy(useRecoveryCodeTab = event.useRecoveryCode, errorMessage = null)
+                formState = formState.copy(
+                    authMode = if (event.useRecoveryCode) ZkAuthMode.RECOVERY else ZkAuthMode.LOGIN_KEYFILE,
+                    useRecoveryCodeTab = event.useRecoveryCode,
+                    errorMessage = null
+                )
             }
             ZkV2UiEvent.PickKeyFile -> {
                 safKeyFileLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
@@ -454,6 +641,45 @@ fun ZkV2AuthCoordinator(
             is ZkV2UiEvent.UpdatePassphrase -> {
                 formState = formState.copy(passphraseInput = event.value, errorMessage = null)
             }
+            is ZkV2UiEvent.UpdateRegUsername -> {
+                formState = formState.copy(regUsernameInput = event.value, errorMessage = null)
+            }
+            is ZkV2UiEvent.ToggleRegUsePassphrase -> {
+                formState = formState.copy(
+                    regUsePassphrase = event.enabled,
+                    regPassphraseInput = if (!event.enabled) "" else formState.regPassphraseInput,
+                    regConfirmPassphraseInput = if (!event.enabled) "" else formState.regConfirmPassphraseInput,
+                    errorMessage = null
+                )
+            }
+            is ZkV2UiEvent.UpdateRegPassphrase -> {
+                formState = formState.copy(regPassphraseInput = event.value, errorMessage = null)
+            }
+            is ZkV2UiEvent.UpdateRegConfirmPassphrase -> {
+                formState = formState.copy(regConfirmPassphraseInput = event.value, errorMessage = null)
+            }
+            is ZkV2UiEvent.UpdateRegInviteToken -> {
+                formState = formState.copy(regInviteTokenInput = event.value, errorMessage = null)
+            }
+            ZkV2UiEvent.SubmitRegister -> executeRegister()
+            ZkV2UiEvent.ExportCurrentKeyFile -> {
+                val kf = sessionManager.getCurrentUpdatedKeyFileOrNull()
+                if (kf != null) {
+                    triggerKeyFileExport(kf)
+                } else {
+                    Toast.makeText(context, "Effettua l'accesso con File Chiave per esportare la chiave.", Toast.LENGTH_SHORT).show()
+                }
+            }
+            ZkV2UiEvent.DismissBiometricLockGate -> {
+                formState = formState.copy(showBiometricLockGate = false, errorMessage = null)
+            }
+            ZkV2UiEvent.DismissBiometricEnrollDialog -> {
+                formState = formState.copy(showBiometricEnrollDialog = false)
+            }
+            ZkV2UiEvent.ConfirmBiometricEnrollDialog -> {
+                formState = formState.copy(showBiometricEnrollDialog = false)
+                executeBiometricEnroll()
+            }
             ZkV2UiEvent.SubmitLogin -> executeLogin()
             ZkV2UiEvent.UnlockWithBiometrics -> executeBiometricUnlock()
             ZkV2UiEvent.ConfirmTofuCertificate -> {
@@ -461,7 +687,7 @@ fun ZkV2AuthCoordinator(
                 if (challenge != null) {
                     sessionManager.apiClient.confirmTofuServer(challenge)
                     formState = formState.copy(tofuChallenge = null)
-                    executeLogin()
+                    if (formState.authMode == ZkAuthMode.REGISTER) executeRegister() else executeLogin()
                 }
             }
             ZkV2UiEvent.DismissTofuDialogs -> {
@@ -674,7 +900,13 @@ fun ZkV2AuthScreen(
 
                     Spacer(Modifier.height(16.dp))
 
-                    if (!session.isUnlocked) {
+                    if (!session.isUnlocked && form.hasBiometricSavedVk && form.canUseStrongBiometrics && form.showBiometricLockGate) {
+                        ZkV2BiometricLockGateCard(
+                            session = session,
+                            form = form,
+                            onEvent = onEvent
+                        )
+                    } else if (!session.isUnlocked) {
                         ZkV2LoginCard(
                             session = session,
                             form = form,
@@ -692,6 +924,30 @@ fun ZkV2AuthScreen(
                 }
             }
         }
+    }
+
+    if (session.isUnlocked && form.showBiometricEnrollDialog) {
+        AlertDialog(
+            onDismissRequest = { onEvent(ZkV2UiEvent.DismissBiometricEnrollDialog) },
+            icon = { Icon(Icons.Default.Fingerprint, contentDescription = null) },
+            title = { Text("Attiva sblocco biometrico?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    text = "Proteggi la tua Vault Key nell'hardware sicuro del dispositivo (AndroidKeyStore) per sbloccare l'app istantaneamente con impronta o volto, anche al riavvio.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            confirmButton = {
+                Button(onClick = { onEvent(ZkV2UiEvent.ConfirmBiometricEnrollDialog) }) {
+                    Text("Attiva Biometria")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { onEvent(ZkV2UiEvent.DismissBiometricEnrollDialog) }) {
+                    Text("Non ora")
+                }
+            }
+        )
     }
 
     if (form.tofuChallenge != null) {
@@ -883,6 +1139,84 @@ fun ZkV2AuthScreen(
 }
 
 @Composable
+private fun ZkV2BiometricLockGateCard(
+    session: ZkSessionSnapshot,
+    form: ZkV2LoginFormUiState,
+    onEvent: (ZkV2UiEvent) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 2.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .widthIn(max = 440.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Fingerprint,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(64.dp)
+            )
+            Text(
+                text = "Vault Protetto",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = form.savedUsername?.let { "Account: $it\nUsa la biometria per sbloccare le tue foto cifrate E2EE." }
+                    ?: "Usa la biometria del dispositivo per sbloccare il vault cifrato.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            if (session.lockReason != null) {
+                Text(
+                    text = session.lockReason,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center
+                )
+            }
+            if (form.errorMessage != null) {
+                Text(
+                    text = form.errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center
+                )
+            }
+            Button(
+                onClick = { onEvent(ZkV2UiEvent.UnlockWithBiometrics) },
+                enabled = !form.isBusy,
+                shape = CircleShape,
+                modifier = Modifier.fillMaxWidth().height(52.dp)
+            ) {
+                if (form.isBusy) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Default.Fingerprint, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Sblocca con Biometria", fontWeight = FontWeight.SemiBold)
+                }
+            }
+            TextButton(
+                onClick = { onEvent(ZkV2UiEvent.DismissBiometricLockGate) },
+                enabled = !form.isBusy
+            ) {
+                Text("Accedi con File Chiave o Registrati")
+            }
+        }
+    }
+}
+
+@Composable
 private fun ZkV2LoginCard(
     session: ZkSessionSnapshot,
     form: ZkV2LoginFormUiState,
@@ -910,14 +1244,14 @@ private fun ZkV2LoginCard(
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                text = "PhotoCloud Zero-Knowledge v2",
+                text = "PhotoCloud Zero-Knowledge",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "La registrazione dei nuovi account avviene esclusivamente dall'app Web (/v2).",
+                text = "Archivio foto privato cifrato end-to-end. Le tue chiavi non lasciano mai questo dispositivo.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -964,19 +1298,18 @@ private fun ZkV2LoginCard(
             }
 
             if (form.hasBiometricSavedVk && form.canUseStrongBiometrics) {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(14.dp))
                 FilledTonalButton(
                     onClick = { onEvent(ZkV2UiEvent.UnlockWithBiometrics) },
                     shape = CircleShape,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(50.dp)
+                        .height(48.dp)
                 ) {
                     Icon(Icons.Default.Fingerprint, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "Sblocca con Biometria Forte" +
-                            (form.savedUsername?.let { " ($it)" } ?: ""),
+                        text = "Sblocca con Biometria" + (form.savedUsername?.let { " ($it)" } ?: ""),
                         fontWeight = FontWeight.SemiBold
                     )
                 }
@@ -984,6 +1317,7 @@ private fun ZkV2LoginCard(
 
             Spacer(Modifier.height(16.dp))
 
+            // 3-Mode Switcher: Accedi | Registrati | Recovery
             Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -992,24 +1326,20 @@ private fun ZkV2LoginCard(
                     .height(44.dp)
             ) {
                 Row(modifier = Modifier.fillMaxSize().padding(4.dp)) {
-                    Surface(
-                        onClick = { onEvent(ZkV2UiEvent.SelectAuthTab(useRecoveryCode = false)) },
-                        shape = CircleShape,
-                        color = if (!form.useRecoveryCodeTab) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                        modifier = Modifier.weight(1f).fillMaxHeight()
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text("File Chiave", style = MaterialTheme.typography.labelLarge)
-                        }
-                    }
-                    Surface(
-                        onClick = { onEvent(ZkV2UiEvent.SelectAuthTab(useRecoveryCode = true)) },
-                        shape = CircleShape,
-                        color = if (form.useRecoveryCodeTab) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                        modifier = Modifier.weight(1f).fillMaxHeight()
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text("Recovery Code", style = MaterialTheme.typography.labelLarge)
+                    listOf(
+                        ZkAuthMode.LOGIN_KEYFILE to "Accedi",
+                        ZkAuthMode.REGISTER to "Registrati",
+                        ZkAuthMode.RECOVERY to "Recovery"
+                    ).forEach { (mode, label) ->
+                        Surface(
+                            onClick = { onEvent(ZkV2UiEvent.SelectAuthMode(mode)) },
+                            shape = CircleShape,
+                            color = if (form.authMode == mode) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            modifier = Modifier.weight(1f).fillMaxHeight()
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                            }
                         }
                     }
                 }
@@ -1045,103 +1375,263 @@ private fun ZkV2LoginCard(
                 }
             }
 
-            if (!form.useRecoveryCodeTab) {
-                Surface(
-                    onClick = { onEvent(ZkV2UiEvent.PickKeyFile) },
-                    shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(86.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 16.dp)
+            when (form.authMode) {
+                ZkAuthMode.REGISTER -> {
+                    OutlinedTextField(
+                        value = form.regUsernameInput,
+                        onValueChange = { onEvent(ZkV2UiEvent.UpdateRegUsername(it)) },
+                        label = { Text("Scegli uno username") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(12.dp))
+
+                    // V1-Simple Security Choice
+                    Surface(
+                        onClick = { onEvent(ZkV2UiEvent.ToggleRegUsePassphrase(false)) },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (!form.regUsePassphrase) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(
-                            imageVector = if (form.hasKeyFileLoaded) Icons.Default.CheckCircle else Icons.Default.UploadFile,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            text = form.selectedKeyFileName ?: "Seleziona File Chiave (.json) via SAF",
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = "Genera chiave sicura per me (Consigliato)",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Chiave a 256-bit salvata in un file .json. Accesso istantaneo in 1 tocco + biometria, nessuna password da ricordare.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
-                }
-                if (form.usernameInput.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "Account rilevato: ${form.usernameInput}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            } else {
-                OutlinedTextField(
-                    value = form.usernameInput,
-                    onValueChange = { onEvent(ZkV2UiEvent.UpdateUsername(it)) },
-                    label = { Text("Username") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = form.recoveryCodeInput,
-                    onValueChange = { onEvent(ZkV2UiEvent.UpdateRecoveryCode(it)) },
-                    label = { Text("Recovery Code (64 char hex)") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
+                    Surface(
+                        onClick = { onEvent(ZkV2UiEvent.ToggleRegUsePassphrase(true)) },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (form.regUsePassphrase) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = "Proteggi anche con passphrase personalizzata",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Doppia protezione opzionale: File Chiave + passphrase segreta (Argon2id 64 MiB).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
 
-            Spacer(Modifier.height(10.dp))
-            OutlinedTextField(
-                value = form.passphraseInput,
-                onValueChange = { onEvent(ZkV2UiEvent.UpdatePassphrase(it)) },
-                label = { Text("Passphrase") },
-                singleLine = true,
-                visualTransformation = if (showPassphrase) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = {
-                    IconButton(onClick = onToggleShowPassphrase) {
-                        Icon(
-                            imageVector = if (showPassphrase) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = if (showPassphrase) "Nascondi passphrase" else "Mostra passphrase"
+                    if (form.regUsePassphrase) {
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = form.regPassphraseInput,
+                            onValueChange = { onEvent(ZkV2UiEvent.UpdateRegPassphrase(it)) },
+                            label = { Text("Passphrase (min 12 caratteri)") },
+                            singleLine = true,
+                            visualTransformation = if (showPassphrase) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = onToggleShowPassphrase) {
+                                    Icon(
+                                        imageVector = if (showPassphrase) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = null
+                                    )
+                                }
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = form.regConfirmPassphraseInput,
+                            onValueChange = { onEvent(ZkV2UiEvent.UpdateRegConfirmPassphrase(it)) },
+                            label = { Text("Conferma passphrase") },
+                            singleLine = true,
+                            visualTransformation = if (showPassphrase) VisualTransformation.None else PasswordVisualTransformation(),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
-                },
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth()
-            )
 
-            Spacer(Modifier.height(18.dp))
+                    if (form.authConfig?.requiresInviteToken == true) {
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = form.regInviteTokenInput,
+                            onValueChange = { onEvent(ZkV2UiEvent.UpdateRegInviteToken(it)) },
+                            label = { Text("Token di invito / Setup Token") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
 
-            Button(
-                onClick = { onEvent(ZkV2UiEvent.SubmitLogin) },
-                enabled = !form.isBusy,
-                shape = CircleShape,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-            ) {
-                if (form.isBusy) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
+                    Spacer(Modifier.height(18.dp))
+                    Button(
+                        onClick = { onEvent(ZkV2UiEvent.SubmitRegister) },
+                        enabled = !form.isBusy,
+                        shape = CircleShape,
+                        modifier = Modifier.fillMaxWidth().height(50.dp)
+                    ) {
+                        if (form.isBusy) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Crea Account e Salva File Chiave", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+
+                ZkAuthMode.LOGIN_KEYFILE -> {
+                    Surface(
+                        onClick = { onEvent(ZkV2UiEvent.PickKeyFile) },
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(86.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (form.hasKeyFileLoaded) Icons.Default.CheckCircle else Icons.Default.UploadFile,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = form.selectedKeyFileName ?: "Seleziona File Chiave (.json)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    if (form.usernameInput.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = if (form.keyFileRequiresPassphrase) {
+                                "Account: ${form.usernameInput} (protetto da passphrase)"
+                            } else {
+                                "Account: ${form.usernameInput} (accesso istantaneo senza passphrase)"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    if (!form.hasKeyFileLoaded || form.keyFileRequiresPassphrase) {
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = form.passphraseInput,
+                            onValueChange = { onEvent(ZkV2UiEvent.UpdatePassphrase(it)) },
+                            label = { Text(if (form.hasKeyFileLoaded) "Passphrase" else "Passphrase (se impostata)") },
+                            singleLine = true,
+                            visualTransformation = if (showPassphrase) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = onToggleShowPassphrase) {
+                                    Icon(
+                                        imageVector = if (showPassphrase) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (showPassphrase) "Nascondi passphrase" else "Mostra passphrase"
+                                    )
+                                }
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    Spacer(Modifier.height(18.dp))
+                    Button(
+                        onClick = { onEvent(ZkV2UiEvent.SubmitLogin) },
+                        enabled = !form.isBusy,
+                        shape = CircleShape,
+                        modifier = Modifier.fillMaxWidth().height(50.dp)
+                    ) {
+                        if (form.isBusy) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Sblocca Vault", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+
+                ZkAuthMode.RECOVERY -> {
+                    OutlinedTextField(
+                        value = form.usernameInput,
+                        onValueChange = { onEvent(ZkV2UiEvent.UpdateUsername(it)) },
+                        label = { Text("Username") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
                     )
-                } else {
-                    Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Deriva Chiavi e Sblocca Vault", fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = form.recoveryCodeInput,
+                        onValueChange = { onEvent(ZkV2UiEvent.UpdateRecoveryCode(it)) },
+                        label = { Text("Recovery Code (64 char hex)") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = form.passphraseInput,
+                        onValueChange = { onEvent(ZkV2UiEvent.UpdatePassphrase(it)) },
+                        label = { Text("Passphrase (lascia vuoto se non impostata)") },
+                        singleLine = true,
+                        visualTransformation = if (showPassphrase) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = onToggleShowPassphrase) {
+                                Icon(
+                                    imageVector = if (showPassphrase) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = null
+                                )
+                            }
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    Button(
+                        onClick = { onEvent(ZkV2UiEvent.SubmitLogin) },
+                        enabled = !form.isBusy,
+                        shape = CircleShape,
+                        modifier = Modifier.fillMaxWidth().height(50.dp)
+                    ) {
+                        if (form.isBusy) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        } else {
+                            Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Recupera e Sblocca Vault", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
                 }
             }
         }

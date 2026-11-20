@@ -13,9 +13,13 @@ import android.view.SurfaceView
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,10 +56,14 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -64,6 +72,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestoreFromTrash
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Warning
@@ -105,7 +114,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -113,6 +125,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
+import com.valerio.photocloud.GalleryDragSelectionController
+import com.valerio.photocloud.GridCellBounds
+import com.valerio.photocloud.findCellAtPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -123,11 +138,12 @@ import java.util.UUID
 private enum class ZkVaultTab(val label: String) {
     GALLERY("Galleria"),
     ALBUMS("Album"),
-    TRASH("Cestino"),
+    MAP("Mappa"),
+    SHARES("Condivisi"),
     SECURITY("Sicurezza")
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ZkV2VaultScreen(
     session: ZkSessionSnapshot,
@@ -140,6 +156,8 @@ fun ZkV2VaultScreen(
     val scope = rememberCoroutineScope()
 
     var selectedTab by remember { mutableStateOf(ZkVaultTab.GALLERY) }
+    var showTrashView by remember { mutableStateOf(false) }
+    var mapFocusItemId by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var activeItems by remember { mutableStateOf<List<DecryptedZkItem>>(emptyList()) }
     var trashedItems by remember { mutableStateOf<List<DecryptedZkItem>>(emptyList()) }
@@ -149,10 +167,18 @@ fun ZkV2VaultScreen(
     var statusError by remember { mutableStateOf<String?>(null) }
 
     var viewerItem by remember { mutableStateOf<DecryptedZkItem?>(null) }
+    var editorItem by remember { mutableStateOf<DecryptedZkItem?>(null) }
+    var itemsForShareDialog by remember { mutableStateOf<List<DecryptedZkItem>?>(null) }
+    var showAddToAlbumDialog by remember { mutableStateOf(false) }
     var shareResult by remember { mutableStateOf<ZkShareCreationResult?>(null) }
     var showCreateAlbumDialog by remember { mutableStateOf(false) }
     var newAlbumName by remember { mutableStateOf("") }
     var selectedAlbumId by remember { mutableStateOf<String?>(null) }
+
+    // Multi-select & drag-select state (GalleryDragSelectionController)
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val dragController = remember { GalleryDragSelectionController<String>() }
+    val tileBounds = remember { mutableMapOf<String, GridCellBounds<String>>() }
 
     var backupConfig by remember { mutableStateOf(ZkAutoBackupPrefs.load(context)) }
     val transfers by transferManager.transfers.collectAsState()
@@ -209,6 +235,38 @@ fun ZkV2VaultScreen(
         }
     }
 
+    if (editorItem != null) {
+        ZkV2PhotoEditorDialog(
+            item = editorItem!!,
+            repository = repository,
+            onDismiss = { editorItem = null },
+            onSavedCopy = { created ->
+                editorItem = null
+                viewerItem = created
+                Toast.makeText(context, "Copia modificata cifrata salvata!", Toast.LENGTH_SHORT).show()
+                refreshAll()
+            },
+            onOverwritten = { updated ->
+                editorItem = null
+                viewerItem = updated
+                activeItems = activeItems.map { if (it.id == updated.id) updated else it }
+                Toast.makeText(context, "Foto sovrascritta in modo sicuro E2EE!", Toast.LENGTH_SHORT).show()
+                refreshAll()
+            }
+        )
+    }
+
+    if (itemsForShareDialog != null) {
+        ZkV2CreateShareDialog(
+            itemsToShare = itemsForShareDialog!!,
+            repository = repository,
+            onDismiss = { itemsForShareDialog = null },
+            onCreated = {
+                selectedIds = emptySet()
+            }
+        )
+    }
+
     if (viewerItem != null) {
         ZkV2ItemViewerScreen(
             item = viewerItem!!,
@@ -225,17 +283,17 @@ fun ZkV2VaultScreen(
                     }
                 }
             },
+            onEditPhoto = { item ->
+                editorItem = item
+            },
+            onOpenOnMap = { item ->
+                mapFocusItemId = item.id
+                viewerItem = null
+                showTrashView = false
+                selectedTab = ZkVaultTab.MAP
+            },
             onCreateShare = { item ->
-                scope.launch {
-                    try {
-                        shareResult = repository.createZeroKnowledgeShare(
-                            items = listOf(item),
-                            title = item.meta.name
-                        )
-                    } catch (t: Throwable) {
-                        Toast.makeText(context, t.message ?: "Errore creazione link", Toast.LENGTH_SHORT).show()
-                    }
-                }
+                itemsForShareDialog = listOf(item)
             },
             onOpenExternal = { item ->
                 scope.launch {
@@ -280,39 +338,79 @@ fun ZkV2VaultScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
+            if (selectedIds.isNotEmpty() && selectedTab == ZkVaultTab.GALLERY && !showTrashView) {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = { selectedIds = emptySet() }) {
+                            Icon(Icons.Default.Close, contentDescription = "Annulla selezione")
+                        }
+                    },
+                    title = {
                         Text(
-                            text = "PhotoCloud E2EE v2",
+                            text = "${selectedIds.size} selezionati",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        Text(
-                            text = session.username ?: "-",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    },
+                    actions = {
+                        IconButton(onClick = {
+                            selectedIds = if (selectedIds.size == activeItems.size) {
+                                emptySet()
+                            } else {
+                                activeItems.map { it.id }.toSet()
+                            }
+                        }) {
+                            Icon(Icons.Default.SelectAll, contentDescription = "Seleziona tutto")
+                        }
                     }
-                },
-                actions = {
-                    IconButton(onClick = { refreshAll() }, enabled = !isRefreshing) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Aggiorna")
+                )
+            } else {
+                TopAppBar(
+                    navigationIcon = {
+                        if (showTrashView) {
+                            IconButton(onClick = { showTrashView = false }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Torna alla Galleria")
+                            }
+                        }
+                    },
+                    title = {
+                        Column {
+                            Text(
+                                text = if (showTrashView) "Cestino Cifrato (${trashedItems.size})" else "PhotoCloud E2EE",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = session.username ?: "-",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    actions = {
+                        if (!showTrashView) {
+                            IconButton(onClick = { showTrashView = true }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Cestino")
+                            }
+                        }
+                        IconButton(onClick = { refreshAll() }, enabled = !isRefreshing) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Aggiorna")
+                        }
+                        IconButton(onClick = { onAuthEvent(ZkV2UiEvent.LockNow) }) {
+                            Icon(Icons.Default.Lock, contentDescription = "Blocca Vault")
+                        }
                     }
-                    IconButton(onClick = { onAuthEvent(ZkV2UiEvent.LockNow) }) {
-                        Icon(Icons.Default.Lock, contentDescription = "Blocca Vault")
-                    }
-                }
-            )
+                )
+            }
         },
         floatingActionButton = {
-            if (selectedTab == ZkVaultTab.GALLERY) {
+            if (!showTrashView && selectedTab == ZkVaultTab.GALLERY && selectedIds.isEmpty()) {
                 FloatingActionButton(
                     onClick = { mediaUploadPicker.launch(arrayOf("image/*", "video/*")) }
                 ) {
                     Icon(Icons.Default.Add, contentDescription = "Carica file cifrato")
                 }
-            } else if (selectedTab == ZkVaultTab.ALBUMS && selectedAlbumId == null) {
+            } else if (!showTrashView && selectedTab == ZkVaultTab.ALBUMS && selectedAlbumId == null) {
                 FloatingActionButton(
                     onClick = {
                         newAlbumName = ""
@@ -324,35 +422,207 @@ fun ZkV2VaultScreen(
             }
         },
         bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = selectedTab == ZkVaultTab.GALLERY,
-                    onClick = { selectedTab = ZkVaultTab.GALLERY },
-                    icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
-                    label = { Text(ZkVaultTab.GALLERY.label) }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == ZkVaultTab.ALBUMS,
-                    onClick = { selectedTab = ZkVaultTab.ALBUMS },
-                    icon = { Icon(Icons.Default.Collections, contentDescription = null) },
-                    label = { Text(ZkVaultTab.ALBUMS.label) }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == ZkVaultTab.TRASH,
-                    onClick = { selectedTab = ZkVaultTab.TRASH },
-                    icon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                    label = { Text(ZkVaultTab.TRASH.label) }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == ZkVaultTab.SECURITY,
-                    onClick = { selectedTab = ZkVaultTab.SECURITY },
-                    icon = { Icon(Icons.Default.Security, contentDescription = null) },
-                    label = { Text(ZkVaultTab.SECURITY.label) }
-                )
+            if (selectedIds.isNotEmpty() && selectedTab == ZkVaultTab.GALLERY && !showTrashView) {
+                val selectedItemsList = activeItems.filter { it.id in selectedIds }
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    tonalElevation = 6.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { showAddToAlbumDialog = true }) {
+                            Icon(Icons.Default.Collections, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Album")
+                        }
+                        TextButton(onClick = {
+                            if (selectedItemsList.isNotEmpty()) {
+                                itemsForShareDialog = selectedItemsList
+                            }
+                        }) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Condividi")
+                        }
+                        TextButton(onClick = {
+                            scope.launch {
+                                try {
+                                    for (it in selectedItemsList) {
+                                        if (!it.meta.isFavorite) repository.toggleFavorite(it)
+                                    }
+                                    selectedIds = emptySet()
+                                    refreshAll()
+                                    Toast.makeText(context, "Aggiunti ai preferiti", Toast.LENGTH_SHORT).show()
+                                } catch (t: Throwable) {
+                                    Toast.makeText(context, t.message ?: "Errore batch preferiti", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.Favorite, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Preferiti")
+                        }
+                        TextButton(onClick = {
+                            scope.launch {
+                                try {
+                                    repository.moveToTrash(selectedIds.toList())
+                                    selectedIds = emptySet()
+                                    refreshAll()
+                                    Toast.makeText(context, "Spostati nel cestino", Toast.LENGTH_SHORT).show()
+                                } catch (t: Throwable) {
+                                    Toast.makeText(context, t.message ?: "Errore cestino", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Cestina", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            } else {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = !showTrashView && selectedTab == ZkVaultTab.GALLERY,
+                        onClick = { showTrashView = false; selectedTab = ZkVaultTab.GALLERY },
+                        icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null) },
+                        label = { Text(ZkVaultTab.GALLERY.label) }
+                    )
+                    NavigationBarItem(
+                        selected = !showTrashView && selectedTab == ZkVaultTab.ALBUMS,
+                        onClick = { showTrashView = false; selectedTab = ZkVaultTab.ALBUMS },
+                        icon = { Icon(Icons.Default.Collections, contentDescription = null) },
+                        label = { Text(ZkVaultTab.ALBUMS.label) }
+                    )
+                    NavigationBarItem(
+                        selected = !showTrashView && selectedTab == ZkVaultTab.MAP,
+                        onClick = { showTrashView = false; selectedTab = ZkVaultTab.MAP },
+                        icon = { Icon(Icons.Default.LocationOn, contentDescription = null) },
+                        label = { Text(ZkVaultTab.MAP.label) }
+                    )
+                    NavigationBarItem(
+                        selected = !showTrashView && selectedTab == ZkVaultTab.SHARES,
+                        onClick = { showTrashView = false; selectedTab = ZkVaultTab.SHARES },
+                        icon = { Icon(Icons.Default.Link, contentDescription = null) },
+                        label = { Text(ZkVaultTab.SHARES.label) }
+                    )
+                    NavigationBarItem(
+                        selected = !showTrashView && selectedTab == ZkVaultTab.SECURITY,
+                        onClick = { showTrashView = false; selectedTab = ZkVaultTab.SECURITY },
+                        icon = { Icon(Icons.Default.Security, contentDescription = null) },
+                        label = { Text(ZkVaultTab.SECURITY.label) }
+                    )
+                }
             }
         }
     ) { innerPadding ->
-        when (selectedTab) {
+        if (showTrashView) {
+            LazyColumn(
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = innerPadding.calculateTopPadding() + 12.dp,
+                    bottom = innerPadding.calculateBottomPadding() + 24.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                if (trashedItems.isNotEmpty()) {
+                    item {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    try {
+                                        repository.emptyTrash()
+                                        refreshAll()
+                                    } catch (t: Throwable) {
+                                        Toast.makeText(context, t.message ?: "Errore svuotamento cestino", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.DeleteForever, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Svuota Cestino (${trashedItems.size})")
+                        }
+                    }
+                }
+                if (trashedItems.isEmpty()) {
+                    item {
+                        Text(
+                            text = "Il cestino cifrato è vuoto.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 24.dp)
+                        )
+                    }
+                } else {
+                    items(trashedItems, key = { it.id }) { item ->
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.padding(12.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = item.meta.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = formatBytesHuman(item.meta.size),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(onClick = {
+                                    scope.launch {
+                                        try {
+                                            repository.restoreFromTrash(listOf(item.id))
+                                            refreshAll()
+                                        } catch (t: Throwable) {
+                                            Toast.makeText(context, t.message ?: "Errore ripristino", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }) {
+                                    Icon(Icons.Default.RestoreFromTrash, contentDescription = "Ripristina")
+                                }
+                                IconButton(onClick = {
+                                    scope.launch {
+                                        try {
+                                            repository.deleteItemPermanently(item.id)
+                                            refreshAll()
+                                        } catch (t: Throwable) {
+                                            Toast.makeText(context, t.message ?: "Errore eliminazione", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }) {
+                                    Icon(
+                                        Icons.Default.DeleteForever,
+                                        contentDescription = "Elimina definitivamente",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else when (selectedTab) {
             ZkVaultTab.GALLERY -> {
                 val filtered = remember(activeItems, searchQuery) {
                     val q = searchQuery.trim().lowercase(Locale.ROOT)
@@ -362,6 +632,7 @@ fun ZkV2VaultScreen(
                             it.meta.mime.lowercase(Locale.ROOT).contains(q)
                     }
                 }
+                val orderedFilteredIds = remember(filtered) { filtered.map { it.id } }
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     contentPadding = PaddingValues(
@@ -372,7 +643,35 @@ fun ZkV2VaultScreen(
                     ),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(orderedFilteredIds, selectedIds) {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { startOffset ->
+                                    val hit = findCellAtPoint(tileBounds.values, startOffset.x, startOffset.y)
+                                    if (hit != null) {
+                                        selectedIds = dragController.startDragSelection(
+                                            anchorItem = hit.item,
+                                            orderedItems = orderedFilteredIds,
+                                            currentSelection = selectedIds
+                                        )
+                                    }
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    val pos = change.position
+                                    val hit = findCellAtPoint(tileBounds.values, pos.x, pos.y)
+                                    if (hit != null) {
+                                        selectedIds = dragController.updateDragTarget(
+                                            targetItem = hit.item,
+                                            orderedItems = orderedFilteredIds
+                                        )
+                                    }
+                                },
+                                onDragEnd = { dragController.endDragSelection() },
+                                onDragCancel = { dragController.endDragSelection() }
+                            )
+                        }
                 ) {
                     if (ZkTransferManager.requiresHttpsWarning(form.serverUrl)) {
                         item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
@@ -463,10 +762,25 @@ fun ZkV2VaultScreen(
                         }
                     } else {
                         items(filtered, key = { it.id }) { item ->
+                            val isSelected = item.id in selectedIds
                             ZkEncryptedThumbTile(
                                 item = item,
                                 repository = repository,
-                                onClick = { viewerItem = item }
+                                isSelectionMode = selectedIds.isNotEmpty(),
+                                isSelected = isSelected,
+                                onBoundsChanged = { bounds ->
+                                    tileBounds[item.id] = bounds
+                                },
+                                onClick = {
+                                    if (selectedIds.isNotEmpty()) {
+                                        selectedIds = if (isSelected) selectedIds - item.id else selectedIds + item.id
+                                    } else {
+                                        viewerItem = item
+                                    }
+                                },
+                                onLongClick = {
+                                    selectedIds = if (isSelected) selectedIds - item.id else selectedIds + item.id
+                                }
                             )
                         }
                     }
@@ -588,105 +902,28 @@ fun ZkV2VaultScreen(
                 }
             }
 
-            ZkVaultTab.TRASH -> {
-                LazyColumn(
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = innerPadding.calculateTopPadding() + 12.dp,
-                        bottom = innerPadding.calculateBottomPadding() + 24.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxSize()
+            ZkVaultTab.MAP -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
                 ) {
-                    if (trashedItems.isNotEmpty()) {
-                        item {
-                            OutlinedButton(
-                                onClick = {
-                                    scope.launch {
-                                        try {
-                                            repository.emptyTrash()
-                                            refreshAll()
-                                        } catch (t: Throwable) {
-                                            Toast.makeText(context, t.message ?: "Errore svuotamento cestino", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.DeleteForever, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Svuota Cestino (${trashedItems.size})")
-                            }
-                        }
-                    }
-                    if (trashedItems.isEmpty()) {
-                        item {
-                            Text(
-                                text = "Il cestino cifrato è vuoto.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 24.dp)
-                            )
-                        }
-                    } else {
-                        items(trashedItems, key = { it.id }) { item ->
-                            Surface(
-                                shape = RoundedCornerShape(14.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    modifier = Modifier.padding(12.dp)
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = item.meta.name,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.Medium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = formatBytesHuman(item.meta.size),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    IconButton(onClick = {
-                                        scope.launch {
-                                            try {
-                                                repository.restoreFromTrash(listOf(item.id))
-                                                refreshAll()
-                                            } catch (t: Throwable) {
-                                                Toast.makeText(context, t.message ?: "Errore ripristino", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    }) {
-                                        Icon(Icons.Default.RestoreFromTrash, contentDescription = "Ripristina")
-                                    }
-                                    IconButton(onClick = {
-                                        scope.launch {
-                                            try {
-                                                repository.deleteItemPermanently(item.id)
-                                                refreshAll()
-                                            } catch (t: Throwable) {
-                                                Toast.makeText(context, t.message ?: "Errore eliminazione", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    }) {
-                                        Icon(
-                                            Icons.Default.DeleteForever,
-                                            contentDescription = "Elimina definitivamente",
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    ZkV2GpsMapScreen(
+                        items = activeItems,
+                        repository = repository,
+                        focusItemId = mapFocusItemId,
+                        onOpenItem = { item -> viewerItem = item }
+                    )
+                }
+            }
+
+            ZkVaultTab.SHARES -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) {
+                    ZkV2SharesScreen(repository = repository)
                 }
             }
 
@@ -965,6 +1202,59 @@ fun ZkV2VaultScreen(
         )
     }
 
+    if (showAddToAlbumDialog && selectedIds.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { showAddToAlbumDialog = false },
+            title = { Text("Aggiungi ${selectedIds.size} foto ad Album") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (albumsState.document.albums.isEmpty()) {
+                        Text("Nessun album presente. Creane prima uno nella scheda Album.")
+                    } else {
+                        albumsState.document.albums.forEach { album ->
+                            Surface(
+                                onClick = {
+                                    scope.launch {
+                                        try {
+                                            val merged = (album.itemIds + selectedIds).distinct()
+                                            val updatedAlbums = albumsState.document.albums.map {
+                                                if (it.id == album.id) it.copy(itemIds = merged, updatedAt = System.currentTimeMillis()) else it
+                                            }
+                                            albumsState = repository.saveAlbums(
+                                                albumsState.document.copy(albums = updatedAlbums),
+                                                albumsState.revision,
+                                                albumsState.etag
+                                            )
+                                            showAddToAlbumDialog = false
+                                            selectedIds = emptySet()
+                                            Toast.makeText(context, "Aggiunti ad \"${album.name}\"", Toast.LENGTH_SHORT).show()
+                                        } catch (t: Throwable) {
+                                            Toast.makeText(context, t.message ?: "Errore aggiunta album", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "${album.name} (${album.itemIds.size})",
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showAddToAlbumDialog = false }) {
+                    Text("Chiudi")
+                }
+            }
+        )
+    }
+
     if (shareResult != null) {
         val sr = shareResult!!
         AlertDialog(
@@ -1100,11 +1390,16 @@ private fun ZkTransferQueueCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ZkEncryptedThumbTile(
     item: DecryptedZkItem,
     repository: ZkVaultRepository,
-    onClick: () -> Unit
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onBoundsChanged: ((GridCellBounds<String>) -> Unit)? = null,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
 ) {
     var bitmap by remember(item.blobId) { mutableStateOf<Bitmap?>(null) }
 
@@ -1131,9 +1426,22 @@ private fun ZkEncryptedThumbTile(
     Box(
         modifier = Modifier
             .aspectRatio(1f)
+            .onGloballyPositioned { coords ->
+                if (onBoundsChanged != null) {
+                    val r = coords.boundsInParent()
+                    onBoundsChanged(GridCellBounds(item.id, r.left, r.top, r.right, r.bottom))
+                }
+            }
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-            .clickable(onClick = onClick)
+            .then(
+                if (isSelected) Modifier.border(2.5.dp, Color(0xFF38BDF8), RoundedCornerShape(10.dp))
+                else Modifier
+            )
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
     ) {
         val bmp = bitmap
         if (bmp != null) {
@@ -1154,6 +1462,28 @@ private fun ZkEncryptedThumbTile(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+        }
+
+        if (isSelectionMode || isSelected) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .background(if (isSelected) Color(0xFF0284C7) else Color(0x88000000))
+                    .border(1.5.dp, Color.White, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isSelected) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "Selezionato",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
 
@@ -1190,6 +1520,8 @@ private fun ZkV2ItemViewerScreen(
     repository: ZkVaultRepository,
     onClose: () -> Unit,
     onToggleFavorite: (DecryptedZkItem) -> Unit,
+    onEditPhoto: (DecryptedZkItem) -> Unit,
+    onOpenOnMap: (DecryptedZkItem) -> Unit,
     onCreateShare: (DecryptedZkItem) -> Unit,
     onOpenExternal: (DecryptedZkItem) -> Unit,
     onMoveToTrash: (DecryptedZkItem) -> Unit
@@ -1220,6 +1552,8 @@ private fun ZkV2ItemViewerScreen(
         }
     }
 
+    val hasGps = item.meta.exifSubset?.lat != null && item.meta.exifSubset.lon != null
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1237,6 +1571,16 @@ private fun ZkV2ItemViewerScreen(
                     )
                 },
                 actions = {
+                    if (item.isImage) {
+                        IconButton(onClick = { onEditPhoto(item) }) {
+                            Icon(Icons.Default.Edit, contentDescription = "Modifica foto E2EE")
+                        }
+                    }
+                    if (hasGps) {
+                        IconButton(onClick = { onOpenOnMap(item) }) {
+                            Icon(Icons.Default.LocationOn, contentDescription = "Vedi sulla Mappa GPS")
+                        }
+                    }
                     IconButton(onClick = { onToggleFavorite(item) }) {
                         Icon(
                             imageVector = if (item.meta.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -1562,6 +1906,14 @@ private fun ZkV2SecurityControlsCard(
                         Spacer(Modifier.width(6.dp))
                         Text("Passphrase")
                     }
+                }
+                OutlinedButton(
+                    onClick = { onEvent(ZkV2UiEvent.ExportCurrentKeyFile) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Esporta Backup File Chiave (.json)")
                 }
             }
         }

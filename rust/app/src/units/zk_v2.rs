@@ -37,7 +37,7 @@ use crate::zk_v2_store::{
 
 pub const V2_API_CSP: &str = "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
-pub const V2_WEB_STRICT_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; worker-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+pub const V2_WEB_STRICT_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data: https://tile.openstreetmap.org https://*.tile.openstreetmap.org; media-src 'self' blob:; worker-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 const LOGIN_RATE_LIMIT_MAX: u32 = 30;
 const LOGIN_RATE_LIMIT_WINDOW_MS: i64 = 60_000;
@@ -48,6 +48,7 @@ const SHARE_RATE_LIMIT_WINDOW_MS: i64 = 60_000;
 pub fn v2_api_router(state: AppState) -> Router<AppState> {
     Router::new()
         // 1. Account endpoints + aliases
+        .route("/auth/config", get(get_auth_config))
         .route("/register", post(post_register))
         .route("/auth/register", post(post_register))
         .route("/login/params", post(post_login_params))
@@ -102,7 +103,7 @@ pub fn v2_api_router(state: AppState) -> Router<AppState> {
         // 7. Stats
         .route("/stats", get(get_stats))
         // 8. Shares
-        .route("/shares", post(post_shares))
+        .route("/shares", get(get_owner_shares).post(post_shares))
         .route("/shares/{shareId}", get(get_share).delete(delete_share))
         .route("/shares/{shareId}/blobs/{blobId}", get(get_share_blob))
         .layer(middleware::from_fn_with_state(state, v2_security_middleware))
@@ -623,6 +624,41 @@ fn clear_session_cookie(req_headers: &HeaderMap) -> String {
 // ============================================================================
 // 1. ACCOUNT ENDPOINTS
 // ============================================================================
+
+async fn get_auth_config(State(state): State<AppState>) -> Response {
+    let user_count: i64 = {
+        let conn = state.zk_v2.db.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM users_v2", [], |r| r.get(0))
+            .unwrap_or(0)
+    };
+    let has_invite = state
+        .zk_v2
+        .registration_invite_token
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let can_use_setup_token = {
+        let st = state.zk_v2.setup_token.lock().unwrap();
+        !st.consumed && user_count == 0 && st.active_token.is_some()
+    };
+
+    let (registration_open, requires_invite_token, policy) = match state.zk_v2.registration_policy {
+        RegistrationPolicy::Open => (true, false, "open"),
+        RegistrationPolicy::Disabled => (has_invite, true, "disabled"),
+        RegistrationPolicy::SetupTokenOrInvite => {
+            (can_use_setup_token || has_invite, true, "setup_token_or_invite")
+        }
+    };
+
+    v2_json(
+        StatusCode::OK,
+        serde_json::json!({
+            "registrationOpen": registration_open,
+            "requiresInviteToken": requires_invite_token,
+            "policy": policy,
+        }),
+    )
+}
 
 async fn post_register(
     State(state): State<AppState>,
@@ -3394,6 +3430,62 @@ async fn post_shares(
     )
 }
 
+async fn get_owner_shares(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let sess = match require_auth(&state, &headers) {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+
+    let mut shares_json = Vec::new();
+    {
+        let conn = state.zk_v2.db.lock().unwrap();
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT s.share_id,
+                    s.enc_share_meta,
+                    CASE WHEN s.password_wrap IS NOT NULL THEN 1 ELSE 0 END AS has_password,
+                    s.expires_at,
+                    s.max_downloads,
+                    s.download_count,
+                    s.created_at,
+                    (SELECT COUNT(*) FROM share_items_v2 si WHERE si.share_id = s.share_id) AS item_count
+             FROM shares_v2 s
+             WHERE s.owner_id = ?1
+             ORDER BY s.created_at DESC",
+        ) {
+            if let Ok(rows) = stmt.query_map(params![&sess.user_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, i64>(7)?,
+                ))
+            }) {
+                for r in rows.flatten() {
+                    shares_json.push(serde_json::json!({
+                        "shareId": r.0,
+                        "encShareMeta": r.1,
+                        "hasPassword": r.2 == 1,
+                        "expiresAt": r.3,
+                        "maxDownloads": r.4,
+                        "downloadCount": r.5,
+                        "createdAt": r.6,
+                        "itemCount": r.7,
+                    }));
+                }
+            }
+        }
+    }
+
+    v2_json(
+        StatusCode::OK,
+        serde_json::json!({ "shares": shares_json }),
+    )
+}
+
 async fn delete_share(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3554,14 +3646,16 @@ async fn get_share(
         );
     }
 
+    let _ = enc_share_meta;
     v2_json(
         StatusCode::OK,
         serde_json::json!({
             "shareId": sid,
-            "encShareMeta": enc_share_meta,
             "shareManifest": share_manifest,
             "passwordWrap": password_wrap,
             "expiresAt": expires_at,
+            "maxDownloads": max_downloads,
+            "downloadsCount": download_count,
             "createdAt": created_at,
             "items": items_json,
         }),

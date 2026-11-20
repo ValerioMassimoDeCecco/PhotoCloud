@@ -5,6 +5,7 @@ import com.valerio.photocloud.AutoBackupLogic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -104,6 +105,24 @@ data class ZkShareCreationResult(
     val maxDownloads: Int?
 )
 
+data class DecryptedOwnerShare(
+    val shareId: String,
+    val title: String,
+    val itemCount: Int,
+    val shareUrlWithFragment: String?,
+    val hasPassword: Boolean,
+    val expiresAt: Long?,
+    val maxDownloads: Int?,
+    val downloadsCount: Int,
+    val createdAt: Long
+) {
+    fun isExpired(nowMs: Long = System.currentTimeMillis()): Boolean =
+        expiresAt != null && expiresAt <= nowMs
+
+    fun isExhausted(): Boolean =
+        maxDownloads != null && downloadsCount >= maxDownloads
+}
+
 /**
  * Zero-Knowledge thumbnail cache (FASE 4D):
  * - Disk stores EXCLUSIVELY encrypted ciphertext blobs (`<blobId>_<variant>.enc`) with LRU eviction.
@@ -185,6 +204,24 @@ class EncryptedThumbDiskCache(
         val toDelete = AutoBackupLogic.planLruEvictions(entries, maxDiskBytes)
         for (name in toDelete) {
             File(diskDir, name).delete()
+        }
+    }
+
+    fun evictBlob(blobId: String) {
+        val prefix = "${blobId.lowercase()}_"
+        synchronized(ramLock) {
+            val iter = ramLru.entries.iterator()
+            while (iter.hasNext()) {
+                val e = iter.next()
+                if (e.key.startsWith(prefix)) {
+                    currentRamBytes -= e.value.size
+                    e.value.zeroize()
+                    iter.remove()
+                }
+            }
+        }
+        for (variant in listOf("320", "1280")) {
+            diskFile(blobId, variant).delete()
         }
     }
 
@@ -715,11 +752,14 @@ class ZkVaultRepository(
                 }
             }
 
+            val cleanTitle = title.ifBlank { "Condivisione PhotoCloud" }
+            val nowMs = System.currentTimeMillis()
             val manifestJson = JSONObject()
                 .put("v", 1)
-                .put("title", title.ifBlank { "Condivisione PhotoCloud" })
-                .put("createdAt", System.currentTimeMillis())
+                .put("title", cleanTitle)
+                .put("createdAt", nowMs)
                 .put("blobIds", manifestItemsArr)
+                .put("items", manifestItemsArr)
                 .toString()
 
             val encManifest = ZkCoreCrypto.encryptShareManifest(
@@ -729,25 +769,276 @@ class ZkVaultRepository(
                 cryptoProvider = cryptoProvider
             )
 
+            val shareKeyB64u = ZkCoreCrypto.toBase64Url(shareKey)
+            val ownerMetaJson = JSONObject()
+                .put("v", 1)
+                .put("title", cleanTitle)
+                .put("itemCount", items.size)
+                .put("shareKeyB64u", shareKeyB64u)
+                .put("hasPassword", false)
+                .put("createdAt", nowMs)
+                .toString()
+            val encOwnerShareMeta = ZkCoreCrypto.encryptOwnerShareMeta(
+                metaKey = subkeys.metaKey,
+                shareId = shareId,
+                plaintextJson = ownerMetaJson,
+                cryptoProvider = cryptoProvider
+            )
+
             val resp = apiClient.createShare(
                 shareId = shareId,
                 items = shareItems,
                 shareManifestB64u = ZkCoreCrypto.toBase64Url(encManifest),
+                encShareMetaB64u = ZkCoreCrypto.toBase64Url(encOwnerShareMeta),
                 expiresAt = expiresAtMs,
                 maxDownloads = maxDownloads
             )
 
-            val shareKeyB64u = ZkCoreCrypto.toBase64Url(shareKey)
             val base = apiClient.baseUrl.trim().removeSuffix("/")
             ZkShareCreationResult(
                 shareId = resp.shareId,
-                shareUrlWithFragment = "$base/v2/s/${resp.shareId}#$shareKeyB64u",
+                shareUrlWithFragment = "$base/v2/share/${resp.shareId}#$shareKeyB64u",
                 expiresAt = resp.expiresAt,
                 maxDownloads = resp.maxDownloads
             )
         } finally {
             shareKey.zeroize()
         }
+    }
+
+    suspend fun listDecryptedOwnerShares(): List<DecryptedOwnerShare> = withContext(Dispatchers.IO) {
+        val subkeys = requireSubkeys()
+        val rawShares = apiClient.listOwnerShares()
+        val base = apiClient.baseUrl.trim().removeSuffix("/")
+        rawShares.map { dto ->
+            var title = "Condivisione E2EE"
+            var shareUrl: String? = null
+            var hasPass = dto.hasPassword
+            if (!dto.encShareMetaB64u.isNullOrBlank()) {
+                try {
+                    val encBytes = ZkCoreCrypto.fromBase64Url(dto.encShareMetaB64u)
+                    val ptJson = ZkCoreCrypto.decryptOwnerShareMeta(
+                        metaKey = subkeys.metaKey,
+                        shareId = dto.shareId,
+                        encryptedOwnerMeta = encBytes,
+                        cryptoProvider = cryptoProvider
+                    )
+                    val obj = JSONObject(ptJson)
+                    title = obj.optString("title", title).ifBlank { title }
+                    val keyB64u = obj.optString("shareKeyB64u", "")
+                    if (keyB64u.isNotBlank()) {
+                        shareUrl = "$base/v2/share/${dto.shareId}#$keyB64u"
+                    }
+                    if (obj.has("hasPassword")) {
+                        hasPass = obj.optBoolean("hasPassword", hasPass)
+                    }
+                } catch (_: Throwable) {
+                    // Fallback to server-side non-secret metadata if undecryptable
+                }
+            }
+            DecryptedOwnerShare(
+                shareId = dto.shareId,
+                title = title,
+                itemCount = dto.itemCount,
+                shareUrlWithFragment = shareUrl,
+                hasPassword = hasPass,
+                expiresAt = dto.expiresAt,
+                maxDownloads = dto.maxDownloads,
+                downloadsCount = dto.downloadsCount,
+                createdAt = dto.createdAt
+            )
+        }.sortedByDescending { it.createdAt }
+    }
+
+    suspend fun revokeShare(shareId: String) = withContext(Dispatchers.IO) {
+        apiClient.revokeShare(shareId)
+    }
+
+    /**
+     * Overwrites an existing photo item with freshly edited bytes (client-side E2EE).
+     * Uploads new encrypted PCZK blob (`createItem = false`), atomically swaps via `/replace`
+     * with optimistic concurrency (`expectedVersion`), then uploads regenerated encrypted 320/1280 thumbnails.
+     */
+    suspend fun replaceItemWithEditedBytes(
+        item: DecryptedZkItem,
+        editedBytes: ByteArray,
+        newWidth: Int,
+        newHeight: Int,
+        mime: String = "image/jpeg",
+        thumb320Jpeg: ByteArray? = null,
+        thumb1280Jpeg: ByteArray? = null
+    ): DecryptedZkItem = withContext(Dispatchers.IO) {
+        val subkeys = requireSubkeys()
+        val newBlobId = UUID.randomUUID().toString().lowercase()
+        val ctOut = ByteArrayOutputStream(editedBytes.size + 4096)
+        val encStats = ZkCoreCrypto.encryptBlobStream(
+            input = editedBytes.inputStream(),
+            output = ctOut,
+            fkWrapKey = subkeys.fkWrapKey,
+            blobId = newBlobId,
+            cryptoProvider = cryptoProvider
+        )
+        val ciphertext = ctOut.toByteArray()
+        val sha256Hex = ZkCoreCrypto.toHex(
+            java.security.MessageDigest.getInstance("SHA-256").digest(ciphertext)
+        )
+        val dedupTagBytes = ZkCoreCrypto.computeDedupTag(
+            dedupKey = subkeys.dedupKey,
+            plaintext = editedBytes,
+            cryptoProvider = cryptoProvider
+        )
+        val dedupTagB64u = ZkCoreCrypto.toBase64Url(dedupTagBytes)
+
+        val updatedMeta = item.meta.copy(
+            mime = mime,
+            size = editedBytes.size.toLong(),
+            width = newWidth,
+            height = newHeight,
+            dedupTag = dedupTagB64u,
+            thumbs = ZkThumbsMeta(
+                sm = thumb320Jpeg?.let { ZkThumbVariantMeta(true, 320, 320, it.size) },
+                md = thumb1280Jpeg?.let { ZkThumbVariantMeta(true, 1280, 1280, it.size) }
+            )
+        )
+        val encMetaB64u = ZkCoreCrypto.toBase64Url(
+            ZkCoreCrypto.encryptMeta(
+                metaKey = subkeys.metaKey,
+                blobId = newBlobId,
+                plaintextJson = updatedMeta.toJsonString(),
+                cryptoProvider = cryptoProvider
+            )
+        )
+
+        val chunkSize = 256 * 1024
+        val totalChunks = ((ciphertext.size + chunkSize - 1) / chunkSize).coerceAtLeast(1)
+        val initResp = apiClient.initBlobUpload(
+            blobId = newBlobId,
+            totalSize = ciphertext.size.toLong(),
+            chunkSize = chunkSize,
+            totalChunks = totalChunks,
+            expectedSha256Hex = sha256Hex,
+            encMetaB64u = encMetaB64u,
+            dedupTag = dedupTagB64u
+        )
+        for (idx in 0 until totalChunks) {
+            val start = idx * chunkSize
+            val endExcl = min(ciphertext.size, start + chunkSize)
+            val body = ciphertext.toRequestBody(
+                PhotoCloudZkApiClientV2.OCTET_MEDIA_TYPE,
+                start,
+                endExcl - start
+            )
+            apiClient.uploadBlobChunk(initResp.uploadId, idx, body)
+        }
+        apiClient.completeBlobUpload(initResp.uploadId, createItem = false)
+
+        val replacedServerItem = apiClient.replaceItemBlob(
+            itemId = item.id,
+            expectedVersion = item.serverItem.version,
+            newBlobId = newBlobId,
+            encMetaB64u = encMetaB64u,
+            dedupTag = dedupTagB64u
+        )
+
+        if (thumb320Jpeg != null) {
+            val enc320 = ZkCoreCrypto.encryptThumbnail(subkeys.thumbKey, newBlobId, "320", thumb320Jpeg, cryptoProvider = cryptoProvider)
+            apiClient.uploadEncryptedThumbnail(newBlobId, "320", enc320)
+            thumbCache.putEncryptedOnDisk(newBlobId, "320", enc320)
+            thumbCache.putDecryptedInRam(newBlobId, "320", thumb320Jpeg)
+        }
+        if (thumb1280Jpeg != null) {
+            val enc1280 = ZkCoreCrypto.encryptThumbnail(subkeys.thumbKey, newBlobId, "1280", thumb1280Jpeg, cryptoProvider = cryptoProvider)
+            apiClient.uploadEncryptedThumbnail(newBlobId, "1280", enc1280)
+            thumbCache.putEncryptedOnDisk(newBlobId, "1280", enc1280)
+            thumbCache.putDecryptedInRam(newBlobId, "1280", thumb1280Jpeg)
+        }
+        thumbCache.evictBlob(item.blobId)
+        @Suppress("UNUSED_VARIABLE")
+        val unusedBytes = encStats.totalPlaintextBytes
+        DecryptedZkItem(serverItem = replacedServerItem, meta = updatedMeta)
+    }
+
+    /**
+     * Uploads an edited copy as a brand-new encrypted item (`createItem = true`) with regenerated 320/1280 thumbnails.
+     */
+    suspend fun uploadEditedCopyBytes(
+        name: String,
+        mime: String,
+        editedBytes: ByteArray,
+        width: Int,
+        height: Int,
+        takenAtMs: Long? = null,
+        exifSubset: ZkPlaintextExifSubset? = null,
+        thumb320Jpeg: ByteArray? = null,
+        thumb1280Jpeg: ByteArray? = null
+    ): DecryptedZkItem = withContext(Dispatchers.IO) {
+        val subkeys = requireSubkeys()
+        val newBlobId = UUID.randomUUID().toString().lowercase()
+        val ctOut = ByteArrayOutputStream(editedBytes.size + 4096)
+        ZkCoreCrypto.encryptBlobStream(
+            input = editedBytes.inputStream(),
+            output = ctOut,
+            fkWrapKey = subkeys.fkWrapKey,
+            blobId = newBlobId,
+            cryptoProvider = cryptoProvider
+        )
+        val ciphertext = ctOut.toByteArray()
+        val sha256Hex = ZkCoreCrypto.toHex(
+            java.security.MessageDigest.getInstance("SHA-256").digest(ciphertext)
+        )
+        val dedupTagB64u = ZkCoreCrypto.toBase64Url(
+            ZkCoreCrypto.computeDedupTag(
+                dedupKey = subkeys.dedupKey,
+                plaintext = editedBytes,
+                cryptoProvider = cryptoProvider
+            )
+        )
+        val meta = ZkBlobPlaintextMeta(
+            v = 1,
+            name = name,
+            mime = mime,
+            size = editedBytes.size.toLong(),
+            takenAt = takenAtMs,
+            createdAt = System.currentTimeMillis(),
+            width = width,
+            height = height,
+            isFavorite = false,
+            exifSubset = exifSubset,
+            dedupTag = dedupTagB64u,
+            thumbs = ZkThumbsMeta(
+                sm = thumb320Jpeg?.let { ZkThumbVariantMeta(true, 320, 320, it.size) },
+                md = thumb1280Jpeg?.let { ZkThumbVariantMeta(true, 1280, 1280, it.size) }
+            )
+        )
+        val encMetaB64u = ZkCoreCrypto.toBase64Url(
+            ZkCoreCrypto.encryptMeta(
+                metaKey = subkeys.metaKey,
+                blobId = newBlobId,
+                plaintextJson = meta.toJsonString(),
+                cryptoProvider = cryptoProvider
+            )
+        )
+        val serverItem = apiClient.uploadEncryptedBlobChunked(
+            blobId = newBlobId,
+            pczkCiphertext = ciphertext,
+            expectedSha256Hex = sha256Hex,
+            encMetaB64u = encMetaB64u,
+            chunkSize = 256 * 1024,
+            dedupTagB64u = dedupTagB64u
+        )
+        if (thumb320Jpeg != null) {
+            val enc320 = ZkCoreCrypto.encryptThumbnail(subkeys.thumbKey, newBlobId, "320", thumb320Jpeg, cryptoProvider = cryptoProvider)
+            apiClient.uploadEncryptedThumbnail(newBlobId, "320", enc320)
+            thumbCache.putEncryptedOnDisk(newBlobId, "320", enc320)
+            thumbCache.putDecryptedInRam(newBlobId, "320", thumb320Jpeg)
+        }
+        if (thumb1280Jpeg != null) {
+            val enc1280 = ZkCoreCrypto.encryptThumbnail(subkeys.thumbKey, newBlobId, "1280", thumb1280Jpeg, cryptoProvider = cryptoProvider)
+            apiClient.uploadEncryptedThumbnail(newBlobId, "1280", enc1280)
+            thumbCache.putEncryptedOnDisk(newBlobId, "1280", enc1280)
+            thumbCache.putDecryptedInRam(newBlobId, "1280", thumb1280Jpeg)
+        }
+        DecryptedZkItem(serverItem = serverItem, meta = meta)
     }
 
     fun onLockOrBackground() {

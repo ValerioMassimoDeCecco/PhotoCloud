@@ -68,12 +68,27 @@ data class V2KdfParamsDto(
     }
 }
 
+data class V2AuthConfigResponse(
+    val registrationOpen: Boolean,
+    val requiresInviteToken: Boolean,
+    val policy: String
+)
+
 data class V2LoginParamsResponse(
     val saltB64u: String,
     val kdfParams: V2KdfParamsDto
 )
 
 data class V2LoginResponse(
+    val userId: String,
+    val username: String,
+    val saltB64u: String,
+    val kdfParams: V2KdfParamsDto,
+    val wrappedVaultKeyB64u: String,
+    val csrfToken: String
+)
+
+data class V2RegisterResponse(
     val userId: String,
     val username: String,
     val saltB64u: String,
@@ -164,6 +179,17 @@ data class V2CreateShareResponse(
     val shareId: String,
     val expiresAt: Long?,
     val maxDownloads: Int?,
+    val createdAt: Long
+)
+
+data class V2OwnerShareDto(
+    val shareId: String,
+    val encShareMetaB64u: String?,
+    val hasPassword: Boolean,
+    val itemCount: Int,
+    val expiresAt: Long?,
+    val maxDownloads: Int?,
+    val downloadsCount: Int,
     val createdAt: Long
 )
 
@@ -362,6 +388,73 @@ class PhotoCloudZkApiClientV2(
             encMetaB64u = obj.getString("encMeta"),
             dedupTag = if (obj.isNull("dedupTag")) null else obj.getString("dedupTag"),
             thumbs = thumbs
+        )
+    }
+
+    suspend fun fetchAuthConfig(): V2AuthConfigResponse {
+        val url = buildV2EndpointUrl("/api/v2/auth/config")
+        val req = Request.Builder()
+            .url(url)
+            .get()
+            .build()
+        val (status, body) = executeJsonRequest(req)
+        if (status !in 200..299) {
+            return V2AuthConfigResponse(
+                registrationOpen = true,
+                requiresInviteToken = false,
+                policy = "open"
+            )
+        }
+        val json = JSONObject(body)
+        return V2AuthConfigResponse(
+            registrationOpen = json.optBoolean("registrationOpen", true),
+            requiresInviteToken = json.optBoolean("requiresInviteToken", false),
+            policy = json.optString("policy", "open")
+        )
+    }
+
+    suspend fun register(
+        username: String,
+        userId: String,
+        saltB64u: String,
+        kdfParams: V2KdfParamsDto,
+        authSecretB64u: String,
+        wrappedVaultKeyB64u: String,
+        setupTokenOrNull: String? = null,
+        inviteTokenOrNull: String? = null
+    ): V2RegisterResponse {
+        val url = buildV2EndpointUrl("/api/v2/register")
+        val payloadObj = JSONObject()
+            .put("username", username.trim())
+            .put("userId", userId.lowercase())
+            .put("salt", saltB64u)
+            .put("kdfParams", kdfParams.toJson())
+            .put("authSecret", authSecretB64u)
+            .put("wrappedVaultKey", wrappedVaultKeyB64u)
+        if (!setupTokenOrNull.isNullOrBlank()) {
+            payloadObj.put("setupToken", setupTokenOrNull.trim())
+        }
+        if (!inviteTokenOrNull.isNullOrBlank()) {
+            payloadObj.put("inviteToken", inviteTokenOrNull.trim())
+        }
+        val req = Request.Builder()
+            .url(url)
+            .post(payloadObj.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        val (status, body) = executeJsonRequest(req)
+        if (status !in 200..299) {
+            val code = parseErrorCode(body, "REGISTRATION_FAILED")
+            throw V2ApiHttpException(status, code, "Registrazione fallita ($status: $code).")
+        }
+        val json = JSONObject(body)
+        return V2RegisterResponse(
+            userId = json.getString("userId"),
+            username = json.getString("username"),
+            saltB64u = json.getString("salt"),
+            kdfParams = V2KdfParamsDto.fromJson(json.getJSONObject("kdfParams")),
+            wrappedVaultKeyB64u = json.getString("wrappedVaultKey"),
+            csrfToken = json.optString("csrfToken", "")
         )
     }
 
@@ -989,6 +1082,38 @@ class PhotoCloudZkApiClientV2(
             maxDownloads = if (json.isNull("maxDownloads")) null else json.optInt("maxDownloads"),
             createdAt = json.optLong("createdAt", System.currentTimeMillis())
         )
+    }
+
+    suspend fun listOwnerShares(): List<V2OwnerShareDto> {
+        val url = buildV2EndpointUrl("/api/v2/shares")
+        val req = Request.Builder()
+            .url(url)
+            .get()
+            .build()
+        val (status, respBody) = executeJsonRequest(req)
+        if (status !in 200..299) {
+            val code = parseErrorCode(respBody, "SHARES_LIST_FAILED")
+            throw V2ApiHttpException(status, code, "Caricamento condivisioni fallito ($status: $code).")
+        }
+        val json = JSONObject(respBody)
+        val arr = json.optJSONArray("shares") ?: JSONArray()
+        val result = ArrayList<V2OwnerShareDto>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            result.add(
+                V2OwnerShareDto(
+                    shareId = o.getString("shareId"),
+                    encShareMetaB64u = if (o.has("encShareMeta") && !o.isNull("encShareMeta")) o.optString("encShareMeta") else null,
+                    hasPassword = o.optBoolean("hasPassword", false),
+                    itemCount = o.optInt("itemCount", 0),
+                    expiresAt = if (o.has("expiresAt") && !o.isNull("expiresAt")) o.optLong("expiresAt") else null,
+                    maxDownloads = if (o.has("maxDownloads") && !o.isNull("maxDownloads")) o.optInt("maxDownloads") else null,
+                    downloadsCount = o.optInt("downloadsCount", o.optInt("downloadCount", 0)),
+                    createdAt = o.optLong("createdAt", 0L)
+                )
+            )
+        }
+        return result
     }
 
     suspend fun revokeShare(shareId: String) {

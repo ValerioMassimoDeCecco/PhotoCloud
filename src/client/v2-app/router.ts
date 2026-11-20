@@ -3,7 +3,7 @@ import path from 'node:path';
 import express, { type Request, type Response, type Router } from 'express';
 
 export const V2_STRICT_CSP =
-  "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; worker-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+  "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data: https://tile.openstreetmap.org https://*.tile.openstreetmap.org; media-src 'self' blob:; worker-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 export function renderZkV2HtmlShell(): string {
   return `<!DOCTYPE html>

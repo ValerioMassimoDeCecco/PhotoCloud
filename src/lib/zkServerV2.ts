@@ -822,7 +822,7 @@ export class ZkVaultStoreV2 {
 // Opzioni & Configurazione del Router v2
 // ============================================================================
 
-export type RegistrationPolicyV2 = boolean | 'setup_token_or_invite' | 'first_user_only';
+export type RegistrationPolicyV2 = boolean | 'open' | 'setup_token_or_invite' | 'first_user_only';
 
 export interface ZkV2ServerOptions {
   vaultV2Dir: string;
@@ -861,10 +861,11 @@ function parseRegistrationPolicyFromEnv(
   explicit?: RegistrationPolicyV2
 ): RegistrationPolicyV2 {
   if (explicit === 'first_user_only') return 'setup_token_or_invite';
+  if (explicit === 'open') return true;
   if (explicit !== undefined) return explicit;
   const raw = String(process.env.REGISTRATION_ENABLED ?? '').trim().toLowerCase();
-  if (raw === 'true' || raw === '1' || raw === 'yes') return true;
-  if (raw === 'never' || raw === 'disabled') return false;
+  if (raw === 'true' || raw === '1' || raw === 'yes' || raw === 'open') return true;
+  if (raw === 'false' || raw === '0' || raw === 'no' || raw === 'never' || raw === 'disabled') return false;
   return 'setup_token_or_invite';
 }
 
@@ -1302,8 +1303,39 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
   }
 
   // ==========================================================================
-  // 1. ACCOUNT ENDPOINTS (`/register`, `/login/params`, `/login`, `/logout`, `/account/rewrap`)
+  // 1. ACCOUNT ENDPOINTS (`/auth/config`, `/register`, `/login/params`, `/login`, `/logout`, `/account/rewrap`)
   // ==========================================================================
+
+  router.get('/auth/config', (_req: Request, res: Response) => {
+    const userCount = store.getUserCount();
+    const hasInviteConfigured = Boolean(
+      registrationInviteToken && registrationInviteToken.trim().length > 0
+    );
+    let registrationOpen = false;
+    let requiresInviteToken = false;
+    let policy: 'open' | 'setup_token_or_invite' | 'disabled' = 'setup_token_or_invite';
+
+    if (registrationPolicy === true) {
+      registrationOpen = true;
+      requiresInviteToken = false;
+      policy = 'open';
+    } else if (registrationPolicy === false) {
+      registrationOpen = hasInviteConfigured;
+      requiresInviteToken = true;
+      policy = 'disabled';
+    } else {
+      const canUseSetupToken = !setupTokenConsumed && userCount === 0 && activeSetupToken !== null;
+      registrationOpen = canUseSetupToken || hasInviteConfigured;
+      requiresInviteToken = true;
+      policy = 'setup_token_or_invite';
+    }
+
+    res.status(200).json({
+      registrationOpen,
+      requiresInviteToken,
+      policy,
+    });
+  });
 
   const handleRegister = async (req: Request, res: Response) => {
     if (!requireHttpsOrLocalhost(req, res)) return;
@@ -2837,8 +2869,51 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
   });
 
   // ==========================================================================
-  // 8. SHARE ENDPOINTS (Creazione/Revoca su blob del proprietario, GET pubblici rate-limited)
+  // 8. SHARE ENDPOINTS (Lista/Creazione/Revoca del proprietario, GET pubblici rate-limited)
   // ==========================================================================
+
+  router.get('/shares', (req: Request, res: Response) => {
+    const sess = requireAuth(req, res);
+    if (!sess) return;
+
+    const rows = store.db
+      .prepare(
+        `SELECT s.share_id,
+                s.enc_share_meta,
+                CASE WHEN s.password_wrap IS NOT NULL THEN 1 ELSE 0 END AS has_password,
+                s.expires_at,
+                s.max_downloads,
+                s.download_count,
+                s.created_at,
+                (SELECT COUNT(*) FROM share_items_v2 si WHERE si.share_id = s.share_id) AS item_count
+         FROM shares_v2 s
+         WHERE s.owner_id = ?
+         ORDER BY s.created_at DESC`
+      )
+      .all(sess.userId) as Array<{
+      share_id: string;
+      enc_share_meta: string | null;
+      has_password: number;
+      expires_at: number | null;
+      max_downloads: number | null;
+      download_count: number;
+      created_at: number;
+      item_count: number;
+    }>;
+
+    res.status(200).json({
+      shares: rows.map((r) => ({
+        shareId: r.share_id,
+        encShareMeta: r.enc_share_meta,
+        hasPassword: Number(r.has_password) === 1,
+        itemCount: Number(r.item_count),
+        expiresAt: r.expires_at !== null ? Number(r.expires_at) : null,
+        maxDownloads: r.max_downloads !== null ? Number(r.max_downloads) : null,
+        downloadCount: Number(r.download_count),
+        createdAt: Number(r.created_at),
+      })),
+    });
+  });
 
   router.post('/shares', (req: Request, res: Response) => {
     const sess = requireAuth(req, res);
@@ -3123,10 +3198,11 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
 
     res.status(200).json({
       shareId: shareRow.share_id,
-      encShareMeta: shareRow.enc_share_meta,
       shareManifest: shareRow.share_manifest ?? null,
       passwordWrap: shareRow.password_wrap,
       expiresAt: shareRow.expires_at,
+      maxDownloads: shareRow.max_downloads,
+      downloadsCount: Number(shareRow.download_count),
       createdAt: shareRow.created_at,
       items: itemRows.map((r) => ({
         blobId: r.blob_id,

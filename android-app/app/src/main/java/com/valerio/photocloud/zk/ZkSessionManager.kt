@@ -140,12 +140,16 @@ interface ZkAccountMetadataStore {
     fun getLastUserId(): String?
     fun getLastUsername(): String?
     fun saveLastAccount(userId: String, username: String)
+    fun getEncryptedBioSession(): String? = null
+    fun saveEncryptedBioSession(encryptedB64u: String) {}
+    fun clearEncryptedBioSession() {}
     fun clear()
 }
 
 class InMemoryZkAccountMetadataStore : ZkAccountMetadataStore {
     private var userId: String? = null
     private var username: String? = null
+    private var encryptedBioSession: String? = null
 
     override fun getLastUserId(): String? = userId
     override fun getLastUsername(): String? = username
@@ -154,15 +158,26 @@ class InMemoryZkAccountMetadataStore : ZkAccountMetadataStore {
         this.username = username
     }
 
+    override fun getEncryptedBioSession(): String? = encryptedBioSession
+    override fun saveEncryptedBioSession(encryptedB64u: String) {
+        this.encryptedBioSession = encryptedB64u
+    }
+
+    override fun clearEncryptedBioSession() {
+        this.encryptedBioSession = null
+    }
+
     override fun clear() {
         userId = null
         username = null
+        encryptedBioSession = null
     }
 }
 
 class PrefsZkAccountMetadataStore(context: Context) : ZkAccountMetadataStore {
     companion object {
         private const val PREFS_NAME = "photocloud_v2_account_meta"
+        private const val KEY_BIO_SESSION = "enc_bio_session_v1"
     }
 
     private val prefs: SharedPreferences =
@@ -175,6 +190,16 @@ class PrefsZkAccountMetadataStore(context: Context) : ZkAccountMetadataStore {
             .putString("user_id", userId)
             .putString("username", username)
             .apply()
+    }
+
+    override fun getEncryptedBioSession(): String? = prefs.getString(KEY_BIO_SESSION, null)
+
+    override fun saveEncryptedBioSession(encryptedB64u: String) {
+        prefs.edit().putString(KEY_BIO_SESSION, encryptedB64u).apply()
+    }
+
+    override fun clearEncryptedBioSession() {
+        prefs.edit().remove(KEY_BIO_SESSION).apply()
     }
 
     override fun clear() {
@@ -319,6 +344,7 @@ data class ZkSessionSnapshot(
     val isLockedWithSavedKeystore: Boolean = false,
     val userId: String? = null,
     val username: String? = null,
+    val hasPassphrase: Boolean = true,
     val canRewrapInMemory: Boolean = false,
     val keyProtectionStatus: VaultKeyStore.KeyProtectionStatus? = null,
     val lastKdfChangeWarning: KdfChangeWarning? = null,
@@ -388,6 +414,12 @@ class ZkSessionManager(
     private var userSalt: ByteArray? = null
 
     @Volatile
+    private var lastAuthSecretBytes: ByteArray? = null
+
+    @Volatile
+    private var currentHasPassphrase: Boolean = true
+
+    @Volatile
     private var currentKdfParams: V2KdfParamsDto? = null
 
     @Volatile
@@ -420,6 +452,8 @@ class ZkSessionManager(
 
     fun getUsername(): String? = currentUsername
 
+    fun isPassphraseProtected(): Boolean = currentHasPassphrase
+
     fun getSubkeysOrNull(): ZkCoreCrypto.VaultSubkeys? {
         if (!isUnlocked()) return null
         touchActivity()
@@ -436,6 +470,11 @@ class ZkSessionManager(
         return vk.copyOf()
     }
 
+    fun getCurrentRecoveryCodeOrNull(): String? {
+        val ak = accountKey ?: return null
+        return ZkAccountCredentialsCodec.formatRecoveryCode(ak)
+    }
+
     fun getCurrentUpdatedKeyFileOrNull(): ZkKeyFileV2? {
         val ak = accountKey ?: return null
         val user = currentUsername ?: return null
@@ -446,7 +485,7 @@ class ZkSessionManager(
             accountKeyB64u = ZkCoreCrypto.toBase64Url(ak),
             saltB64u = userSalt?.let { ZkCoreCrypto.toBase64Url(it) },
             kdfParams = currentKdfParams,
-            hasPassphrase = true,
+            hasPassphrase = currentHasPassphrase,
             createdAt = null
         )
     }
@@ -503,6 +542,7 @@ class ZkSessionManager(
             isLockedWithSavedKeystore = !isUnlocked() && vaultKeyStore.hasBiometricWrappedVk(),
             userId = currentUserId,
             username = currentUsername,
+            hasPassphrase = currentHasPassphrase,
             canRewrapInMemory = isUnlocked() && accountKey != null && userSalt != null,
             keyProtectionStatus = vaultKeyStore.getStatus(),
             lastKdfChangeWarning = lastKdfChangeWarning,
@@ -570,9 +610,132 @@ class ZkSessionManager(
         return saltBytes to warning
     }
 
+    /**
+     * Direct in-app Zero-Knowledge v2 registration (V1-simple UX):
+     * - When [passphrase] is null or empty, generates a 256-bit random `accountKey` (`hasPassphrase = false`)
+     *   for instant 1-click keyfile login (0ms Argon2id overhead) while preserving full E2EE.
+     * - When [passphrase] is provided, enforces >=12 characters and Argon2id 64 MiB (t=3, p=1) 2FA.
+     */
+    suspend fun registerAccount(
+        username: String,
+        passphrase: String? = null,
+        setupOrInviteToken: String? = null
+    ): ZkKeyFileV2 {
+        apiClient.validateBaseUrl()
+        val cleanUsername = username.trim()
+        val usernameRegex = Regex("^[a-zA-Z0-9._-]{3,64}$")
+        if (!usernameRegex.matches(cleanUsername)) {
+            throw ZkCryptoException(
+                ZkErrorCode.INVALID_PARAMETER,
+                "Username non valido (usa 3-64 caratteri: lettere, numeri, ., _, -)."
+            )
+        }
+        val cleanPassphrase = passphrase?.takeIf { it.isNotEmpty() }
+        if (cleanPassphrase != null) {
+            val strength = ZkAccountCredentialsCodec.evaluatePassphraseStrength(cleanPassphrase)
+            if (!strength.valid) {
+                throw ZkCryptoException(ZkErrorCode.INVALID_PARAMETER, strength.feedback)
+            }
+        }
+
+        val kdfParams = V2KdfParamsDto(
+            algorithm = "Argon2id",
+            memoryKiB = ZkArgon2id.MIN_ARGON2_MEMORY_KIB,
+            iterations = ZkArgon2id.MIN_ARGON2_ITERATIONS,
+            parallelism = ZkArgon2id.MIN_ARGON2_PARALLELISM
+        )
+        val userId = java.util.UUID.randomUUID().toString().lowercase(Locale.ROOT)
+        val newAccountKey = cryptoProvider.randomBytes(32)
+        val newSalt = cryptoProvider.randomBytes(16)
+        val newVk = cryptoProvider.randomBytes(32)
+        var root: ByteArray? = null
+        var kekAndAuth: ZkCoreCrypto.KekAndAuthSecret? = null
+        var wrappedVkBytes: ByteArray? = null
+
+        try {
+            root = ZkCoreCrypto.deriveRoot(
+                accountKey = newAccountKey,
+                userSalt = newSalt,
+                passphrase = cleanPassphrase,
+                argon2Params = kdfParams.toArgon2Params(),
+                cryptoProvider = cryptoProvider,
+                argon2Provider = argon2Provider
+            )
+            kekAndAuth = ZkCoreCrypto.deriveKekAndAuthSecret(root, cryptoProvider)
+            wrappedVkBytes = ZkCoreCrypto.wrapVaultKey(
+                kek = kekAndAuth.kek,
+                vaultKey = newVk,
+                userId = userId,
+                cryptoProvider = cryptoProvider
+            )
+            val saltB64u = ZkCoreCrypto.toBase64Url(newSalt)
+            val authSecretB64u = ZkCoreCrypto.toBase64Url(kekAndAuth.authSecret)
+            val wrappedVkB64u = ZkCoreCrypto.toBase64Url(wrappedVkBytes)
+            val tokenTrimmed = setupOrInviteToken?.trim()?.ifEmpty { null }
+
+            val regResp = apiClient.register(
+                username = cleanUsername,
+                userId = userId,
+                saltB64u = saltB64u,
+                kdfParams = kdfParams,
+                authSecretB64u = authSecretB64u,
+                wrappedVaultKeyB64u = wrappedVkB64u,
+                setupTokenOrNull = tokenTrimmed,
+                inviteTokenOrNull = tokenTrimmed
+            )
+
+            zeroizeInMemorySecrets()
+            val derivedSubkeys = ZkCoreCrypto.deriveSubkeys(newVk, cryptoProvider)
+            this.vaultKey = newVk.copyOf()
+            this.subkeys = derivedSubkeys
+            this.accountKey = newAccountKey.copyOf()
+            this.userSalt = newSalt.copyOf()
+            this.lastAuthSecretBytes = kekAndAuth.authSecret.copyOf()
+            this.currentHasPassphrase = cleanPassphrase != null
+            this.currentKdfParams = regResp.kdfParams
+            this.wrappedVaultKeyB64u = regResp.wrappedVaultKeyB64u
+            this.currentUserId = regResp.userId
+            this.currentUsername = regResp.username
+            this.lastKdfChangeWarning = null
+
+            kdfPinningStore.set(
+                PinnedKdfRecord(
+                    username = regResp.username,
+                    saltB64u = regResp.saltB64u,
+                    memoryKiB = regResp.kdfParams.memoryKiB,
+                    iterations = regResp.kdfParams.iterations,
+                    parallelism = regResp.kdfParams.parallelism,
+                    pinnedAtMs = clockMs()
+                )
+            )
+            metadataStore.saveLastAccount(regResp.userId, regResp.username)
+
+            touchActivity()
+            publishState(lockReason = null)
+
+            return ZkKeyFileV2(
+                formatVersion = 2,
+                username = regResp.username,
+                userId = regResp.userId,
+                accountKeyB64u = ZkCoreCrypto.toBase64Url(newAccountKey),
+                saltB64u = regResp.saltB64u,
+                kdfParams = regResp.kdfParams,
+                hasPassphrase = cleanPassphrase != null,
+                createdAt = java.time.Instant.ofEpochMilli(clockMs()).toString()
+            )
+        } finally {
+            newAccountKey.zeroize()
+            newSalt.zeroize()
+            newVk.zeroize()
+            root?.zeroize()
+            kekAndAuth?.zeroizeAll()
+            wrappedVkBytes?.zeroize()
+        }
+    }
+
     suspend fun loginWithKeyFileJson(
         keyFileJson: String,
-        passphrase: String
+        passphrase: String = ""
     ): KdfChangeWarning? {
         val parsed = try {
             ZkAccountCredentialsCodec.parseKeyFileJson(keyFileJson)
@@ -584,11 +747,12 @@ class ZkSessionManager(
         } catch (_: Throwable) {
             throw ZkUniformAuthException(UNIFORM_AUTH_ERROR_MESSAGE)
         }
+        val effectivePassphrase = if (!parsed.hasPassphrase && passphrase.isEmpty()) "" else passphrase
         return try {
             performLoginInternal(
                 username = parsed.username,
                 accountKeyBytes = akBytes,
-                passphrase = passphrase,
+                passphrase = effectivePassphrase,
                 keyFileHint = parsed
             )
         } finally {
@@ -701,6 +865,8 @@ class ZkSessionManager(
             this.subkeys = derivedSubkeys
             this.accountKey = accountKeyBytes.copyOf()
             this.userSalt = saltBytes.copyOf()
+            this.lastAuthSecretBytes = kekAndAuth.authSecret.copyOf()
+            this.currentHasPassphrase = passphrase.isNotEmpty()
             this.currentKdfParams = loginResp.kdfParams
             this.wrappedVaultKeyB64u = loginResp.wrappedVaultKeyB64u
             this.currentUserId = loginResp.userId
@@ -728,6 +894,26 @@ class ZkSessionManager(
         }
     }
 
+    private fun persistEncryptedBioSessionEnvelope(vk: ByteArray) {
+        val uid = currentUserId ?: return
+        val uname = currentUsername ?: return
+        val authBytes = lastAuthSecretBytes ?: return
+        val payloadJson = JSONObject()
+            .put("v", 1)
+            .put("userId", uid)
+            .put("username", uname)
+            .put("authSecretB64u", ZkCoreCrypto.toBase64Url(authBytes))
+            .put("hasPassphrase", currentHasPassphrase)
+            .toString()
+        val encBytes = ZkCoreCrypto.encryptBiometricSessionEnvelope(
+            vaultKey = vk,
+            userId = uid,
+            plaintextJson = payloadJson,
+            cryptoProvider = cryptoProvider
+        )
+        metadataStore.saveEncryptedBioSession(ZkCoreCrypto.toBase64Url(encBytes))
+    }
+
     fun prepareBiometricEnrollmentSession(): VaultKeyStore.BiometricCryptoSession {
         if (!isUnlocked()) throw IllegalStateException("Vault must be unlocked before enrolling biometrics.")
         touchActivity()
@@ -740,6 +926,7 @@ class ZkSessionManager(
         val vkCopy = copyVaultKeyForAuthorizedWrap()
         return try {
             val status = vaultKeyStore.finishBiometricWrap(vkCopy, unlockedSession)
+            persistEncryptedBioSessionEnvelope(vkCopy)
             publishState()
             status
         } finally {
@@ -779,13 +966,63 @@ class ZkSessionManager(
         publishState(lockReason = null)
     }
 
+    /**
+     * Renews the HTTP session cookie transparently after a cold biometric unlock.
+     * Decrypts the VK-protected `authSecret` envelope in RAM, calls `POST /api/v2/login`,
+     * and keeps the decrypted secret strictly in RAM until lock/logout.
+     * Returns `true` if a valid HTTP session is now active, `false` if full keyfile login is required.
+     */
+    suspend fun ensureHttpSessionAfterBiometricUnlock(): Boolean {
+        if (!isUnlocked()) return false
+        if (apiClient.hasActiveSessionCookie()) return true
+        val vk = vaultKey ?: return false
+        val uid = currentUserId ?: return false
+        val encEnvelopeB64u = metadataStore.getEncryptedBioSession() ?: return false
+
+        val encBytes = try {
+            ZkCoreCrypto.fromBase64Url(encEnvelopeB64u)
+        } catch (_: Throwable) {
+            return false
+        }
+        val decryptedJson = try {
+            ZkCoreCrypto.decryptBiometricSessionEnvelope(
+                vaultKey = vk,
+                userId = uid,
+                encryptedEnvelope = encBytes,
+                cryptoProvider = cryptoProvider
+            )
+        } catch (_: Throwable) {
+            return false
+        }
+        return try {
+            val obj = JSONObject(decryptedJson)
+            val username = obj.optString("username", "").trim()
+            val authSecretB64u = obj.optString("authSecretB64u", "").trim()
+            val hasPass = obj.optBoolean("hasPassphrase", true)
+            if (username.isEmpty() || authSecretB64u.isEmpty()) return false
+            val loginResp = apiClient.login(username, authSecretB64u)
+            this.currentUserId = loginResp.userId
+            this.currentUsername = loginResp.username
+            this.currentKdfParams = loginResp.kdfParams
+            this.wrappedVaultKeyB64u = loginResp.wrappedVaultKeyB64u
+            this.currentHasPassphrase = hasPass
+            this.lastAuthSecretBytes?.zeroize()
+            this.lastAuthSecretBytes = ZkCoreCrypto.fromBase64Url(authSecretB64u)
+            publishState(lockReason = null)
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     private fun handleBiometricKeyInvalidated() {
         autoLockJob?.cancel()
         autoLockJob = null
         zeroizeInMemorySecrets()
         vaultKeyStore.clearBiometricWrappedVk()
+        metadataStore.clearEncryptedBioSession()
         publishState(
-            lockReason = "Chiave biometrica invalidata (biometria modificata). Accedi con File Chiave + passphrase."
+            lockReason = "Chiave biometrica invalidata (biometria modificata). Accedi con File Chiave."
         )
     }
 
@@ -812,7 +1049,8 @@ class ZkSessionManager(
     suspend fun changePassphrase(
         oldPassphrase: String,
         newPassphrase: String,
-        recoveryCodeOrNull: String? = null
+        recoveryCodeOrNull: String? = null,
+        allowRemovePassphrase: Boolean = false
     ): V2RewrapResponse {
         val vk = vaultKey ?: throw IllegalStateException("Vault bloccato.")
         val userId = currentUserId ?: throw IllegalStateException("userId mancante.")
@@ -824,10 +1062,13 @@ class ZkSessionManager(
             else -> throw IllegalStateException("Inserisci il Recovery Code o effettua il login completo per cambiare passphrase.")
         }
 
-        val strength = ZkAccountCredentialsCodec.evaluatePassphraseStrength(newPassphrase)
-        if (!strength.valid) {
-            akToUse.zeroize()
-            throw ZkCryptoException(ZkErrorCode.INVALID_PARAMETER, strength.feedback)
+        val effectiveNewPassphrase = if (allowRemovePassphrase && newPassphrase.isEmpty()) null else newPassphrase
+        if (effectiveNewPassphrase != null) {
+            val strength = ZkAccountCredentialsCodec.evaluatePassphraseStrength(effectiveNewPassphrase)
+            if (!strength.valid) {
+                akToUse.zeroize()
+                throw ZkCryptoException(ZkErrorCode.INVALID_PARAMETER, strength.feedback)
+            }
         }
 
         val oldSalt = userSalt?.copyOf() ?: run {
@@ -865,7 +1106,6 @@ class ZkSessionManager(
             )
             oldKeys = ZkCoreCrypto.deriveKekAndAuthSecret(oldRoot, cryptoProvider)
 
-            // Verify current passphrase locally against wrappedVk before calling server if available
             val currentWrapped = wrappedVaultKeyB64u
             if (currentWrapped != null) {
                 val unwrappedCheck = try {
@@ -891,7 +1131,7 @@ class ZkSessionManager(
             newRoot = ZkCoreCrypto.deriveRoot(
                 accountKey = akToUse,
                 userSalt = newSalt,
-                passphrase = newPassphrase,
+                passphrase = effectiveNewPassphrase,
                 argon2Params = newKdfParams.toArgon2Params(),
                 cryptoProvider = cryptoProvider,
                 argon2Provider = argon2Provider
@@ -918,9 +1158,16 @@ class ZkSessionManager(
             this.accountKey = akToUse.copyOf()
             this.userSalt?.zeroize()
             this.userSalt = ZkCoreCrypto.fromBase64Url(resp.saltB64u)
+            this.lastAuthSecretBytes?.zeroize()
+            this.lastAuthSecretBytes = newKeys.authSecret.copyOf()
+            this.currentHasPassphrase = effectiveNewPassphrase != null
             this.currentKdfParams = resp.kdfParams
             this.wrappedVaultKeyB64u = resp.wrappedVaultKeyB64u
             this.lastKdfChangeWarning = null
+
+            if (vaultKeyStore.hasBiometricWrappedVk()) {
+                persistEncryptedBioSessionEnvelope(vk)
+            }
 
             kdfPinningStore.set(
                 PinnedKdfRecord(
@@ -983,5 +1230,7 @@ class ZkSessionManager(
         accountKey = null
         userSalt?.zeroize()
         userSalt = null
+        lastAuthSecretBytes?.zeroize()
+        lastAuthSecretBytes = null
     }
 }

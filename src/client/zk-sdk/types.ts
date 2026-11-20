@@ -28,7 +28,14 @@ export interface ZkKeyFileV2 {
   accountKey: string; // base64url 32B
   salt?: string; // base64url 16B
   kdfParams?: KdfParamsV2;
+  hasPassphrase?: boolean;
   createdAt: string;
+}
+
+export interface AuthConfigV2 {
+  registrationOpen: boolean;
+  requiresInviteToken: boolean;
+  policy: 'open' | 'setup_token_or_invite' | 'disabled';
 }
 
 export interface PreparedRegistrationV2 {
@@ -36,6 +43,7 @@ export interface PreparedRegistrationV2 {
   accountKey: Uint8Array;
   userSalt: Uint8Array;
   kdfParams: Argon2idParams;
+  hasPassphrase: boolean;
   recoveryCode: string;
 }
 
@@ -173,6 +181,28 @@ export interface CreateShareResultV2 {
   shareUrl: string;
   expiresAt: number | null;
   maxDownloads: number | null;
+}
+
+export interface OwnerShareMetaPlaintextV2 {
+  v: 1;
+  title?: string;
+  itemCount: number;
+  shareKeyB64u: string;
+  hasPassword: boolean;
+}
+
+export interface OwnerShareSummaryV2 {
+  shareId: string;
+  title: string;
+  itemCount: number;
+  hasPassword: boolean;
+  expiresAt: number | null;
+  maxDownloads: number | null;
+  downloadCount: number;
+  createdAt: number;
+  shareKeyBase64Url: string | null;
+  shareUrl: string | null;
+  status: 'active' | 'expired' | 'limit_reached';
 }
 
 export interface ServerSharePublicResponseV2 {
