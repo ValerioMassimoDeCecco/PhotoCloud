@@ -430,9 +430,6 @@ class ZkAutoBackupWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val mainPrefs = applicationContext.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE)
-        if (!mainPrefs.getBoolean("zk_v2_enabled", true)) {
-            return@withContext Result.success()
-        }
         val config = ZkAutoBackupPrefs.load(applicationContext)
         if (!config.enabled || config.paused) {
             return@withContext Result.success()

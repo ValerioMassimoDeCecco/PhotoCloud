@@ -28,19 +28,6 @@ pub fn json_response(status: StatusCode, body: impl Into<String>) -> Response {
     resp
 }
 
-pub fn html_response(status: StatusCode, body: impl Into<String>) -> Response {
-    let mut resp = (
-        status,
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        body.into(),
-    )
-        .into_response();
-    for (k, v) in standard_headers() {
-        resp.headers_mut().insert(k, v.parse().unwrap());
-    }
-    resp
-}
-
 pub fn access_denied() -> Response {
     json_response(StatusCode::FORBIDDEN, r#"{"error":"Accesso negato"}"#)
 }

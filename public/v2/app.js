@@ -8354,11 +8354,6 @@
       brandGroup.appendChild(badge);
       header.appendChild(brandGroup);
       const actions = el("div", "header-actions");
-      const backV1Link = el("a", "btn btn-ghost", "PhotoCloud Classico");
-      backV1Link.id = "btn-back-v1";
-      backV1Link.href = "/";
-      backV1Link.title = "Torna a PhotoCloud Classico (v1)";
-      actions.appendChild(backV1Link);
       if (client.isUnlocked()) {
         const userLabel = el("span", "media-card-meta user-chip", `Utente: ${client.getUsername() ?? ""}`);
         actions.appendChild(userLabel);

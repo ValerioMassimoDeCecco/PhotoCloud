@@ -844,20 +844,14 @@ fun PhotoCloudNativeApp(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val prefs = remember { context.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE) }
 
     var serverUrl by remember { mutableStateOf(initialServerUrl) }
     var showServerDialog by remember { mutableStateOf(false) }
     var tempServerInput by remember { mutableStateOf(serverUrl) }
 
-    val defaultZkV2 = remember(serverUrl) { !apiClient.hasActiveSessionCookie() }
-    var zkV2ModeEnabled by remember {
-        mutableStateOf(prefs.getBoolean("zk_v2_enabled", defaultZkV2))
-    }
-
     val zkV2Gate = remember {
         ZkV2FeatureGate(
-            isEnabledProvider = { prefs.getBoolean("zk_v2_enabled", defaultZkV2) },
+            isEnabledProvider = { true },
             factory = {
                 val allowLoopbackHttp = BuildConfig.DEBUG
                 val v2Client = PhotoCloudZkApiClientV2(
@@ -877,252 +871,47 @@ fun PhotoCloudNativeApp(
         )
     }
 
-    val activeZkSessionManager = if (zkV2ModeEnabled) zkV2Gate.getOrNull() else null
+    val activeZkSessionManager = zkV2Gate.getOrNull()!!
 
-    LaunchedEffect(zkV2ModeEnabled, serverUrl) {
-        if (zkV2ModeEnabled) {
-            zkV2Gate.getOrNull()?.apiClient?.baseUrl = serverUrl
-        }
+    LaunchedEffect(serverUrl) {
+        activeZkSessionManager.apiClient.baseUrl = serverUrl
+        // Ensure any deprecated legacy v1 WorkManager jobs are cancelled
+        AutoBackupWorker.cancelAllBackupWork(context)
+        apiClient.clearCookies()
+        AppAutoUpdater.checkForUpdatesOnLaunch(context, serverUrl)
     }
 
-    fun setZkV2Mode(enabled: Boolean) {
-        prefs.edit().putBoolean("zk_v2_enabled", enabled).apply()
-        zkV2ModeEnabled = enabled
-        if (!enabled) {
-            zkV2Gate.clearOnDisable { it.lock("Modalità v2 disattivata.") }
-        }
-    }
-
-    // 0ms Instant Startup Hydration: synchronously read cookie presence and cached metadata
-    var isAuthenticated by remember(serverUrl) {
-        mutableStateOf(apiClient.hasActiveSessionCookie())
-    }
-    var isBiometricLocked by remember(serverUrl) {
-        mutableStateOf(
-            apiClient.hasActiveSessionCookie() &&
-                custom.biometricEnabled &&
-                activity.canUseBiometrics()
-        )
-    }
-
-    DisposableEffect(zkV2ModeEnabled, isAuthenticated, custom.lockOnBackground, custom.biometricEnabled) {
+    DisposableEffect(activeZkSessionManager) {
         activity.setOnBackgroundLockListener {
-            if (zkV2ModeEnabled) {
-                zkV2Gate.onBackgrounded { it.onAppBackgrounded() }
-            } else if (isAuthenticated && custom.lockOnBackground && custom.biometricEnabled && activity.canUseBiometrics()) {
-                isBiometricLocked = true
-            }
+            zkV2Gate.onBackgrounded { it.onAppBackgrounded() }
         }
         onDispose {
             activity.setOnBackgroundLockListener(null)
         }
     }
 
-    var savedKeyBytes by remember {
-        mutableStateOf<ByteArray?>(
-            prefs.getString("saved_auth_key_b64", null)?.let {
-                try {
-                    Base64.decode(it, Base64.DEFAULT)
-                } catch (_: Exception) {
-                    null
-                }
-            }
-        )
-    }
-
-    var galleryItems by remember(serverUrl) {
-        mutableStateOf(apiClient.getCachedGalleryItems())
-    }
-    var trashItems by remember(serverUrl) {
-        mutableStateOf(apiClient.getCachedTrashItems())
-    }
-    var albumsList by remember(serverUrl) {
-        mutableStateOf(apiClient.getCachedAlbums())
-    }
-    var favoriteFilenames by remember(serverUrl) {
-        mutableStateOf(apiClient.getCachedFavorites())
-    }
-    var infoDialogMessage by remember { mutableStateOf<String?>(null) }
-
-    fun saveKeyForBiometrics(bytes: ByteArray) {
-        savedKeyBytes = bytes
-        val b64 = Base64.encodeToString(bytes, Base64.DEFAULT)
-        prefs.edit().putString("saved_auth_key_b64", b64).apply()
-    }
-
-    fun refreshLocalCacheOnly() {
-        galleryItems = apiClient.getCachedGalleryItems()
-        trashItems = apiClient.getCachedTrashItems()
-        albumsList = apiClient.getCachedAlbums()
-    }
-
-    fun refreshVaultSilently() {
-        scope.launch {
-            when (val syncResult = apiClient.syncGallerySession()) {
-                is GallerySyncResult.Authenticated -> {
-                    isAuthenticated = true
-                    galleryItems = syncResult.items
-                    albumsList = apiClient.getCachedAlbums()
-                    trashItems = apiClient.fetchTrashItems()
-                    favoriteFilenames = apiClient.fetchFavorites()
-                }
-                is GallerySyncResult.Unauthenticated -> {
-                    apiClient.clearCookies()
-                    isAuthenticated = false
-                    isBiometricLocked = false
-                    galleryItems = emptyList()
-                    trashItems = emptyList()
-                    albumsList = emptyList()
-                }
-                is GallerySyncResult.NetworkError -> {
-                    // Keep showing cached items without interrupting the user
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(isAuthenticated, isBiometricLocked) {
-        if (isAuthenticated && isBiometricLocked) {
-            activity.showBiometricPrompt(
-                onSuccess = { isBiometricLocked = false },
-                onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
-            )
-        }
-    }
-
     val appUpdateState by AppAutoUpdater.state.collectAsState()
 
-    LaunchedEffect(isAuthenticated, serverUrl) {
-        if (isAuthenticated) {
-            AutoBackupWorker.syncScheduleFromPrefs(context)
-        } else {
-            AutoBackupWorker.cancelAllBackupWork(context)
+    ZkV2AuthCoordinator(
+        activity = activity,
+        sessionManager = activeZkSessionManager,
+        serverUrl = serverUrl,
+        onOpenServerConfig = {
+            tempServerInput = serverUrl
+            showServerDialog = true
         }
-    }
-
-    LaunchedEffect(serverUrl) {
-        if (apiClient.hasActiveSessionCookie()) {
-            refreshVaultSilently()
-        }
-        AppAutoUpdater.checkForUpdatesOnLaunch(context, serverUrl)
-    }
-
-    if (zkV2ModeEnabled && activeZkSessionManager != null) {
-        ZkV2AuthCoordinator(
-            activity = activity,
-            sessionManager = activeZkSessionManager,
-            serverUrl = serverUrl,
-            onOpenServerConfig = {
-                tempServerInput = serverUrl
-                showServerDialog = true
-            },
-            onExitV2Mode = {
-                setZkV2Mode(false)
-            }
-        )
-    } else if (isAuthenticated && isBiometricLocked) {
-        NativeBiometricLockScreen(
-            monochromeIcon = custom.monochromeAppIcon,
-            onUnlockClick = {
-                activity.showBiometricPrompt(
-                    onSuccess = { isBiometricLocked = false },
-                    onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
-                )
-            },
-            onSwitchAccount = {
-                scope.launch {
-                    AutoBackupWorker.cancelAllBackupWork(context)
-                    apiClient.logout()
-                    isAuthenticated = false
-                    isBiometricLocked = false
-                }
-            }
-        )
-    } else if (!isAuthenticated) {
-        NativeAuthScreen(
-            activity = activity,
-            apiClient = apiClient,
-            serverUrl = serverUrl,
-            monochromeIcon = custom.monochromeAppIcon,
-            savedKeyBytes = savedKeyBytes,
-            onSaveKeyForBiometrics = { saveKeyForBiometrics(it) },
-            onOpenServerConfig = {
-                tempServerInput = serverUrl
-                showServerDialog = true
-            },
-            onLoginSuccess = {
-                isAuthenticated = true
-                isBiometricLocked = false
-                refreshLocalCacheOnly()
-                refreshVaultSilently()
-            },
-            onShowInfo = { msg ->
-                infoDialogMessage = msg
-            },
-            onSwitchToV2Mode = {
-                setZkV2Mode(true)
-            }
-        )
-    } else {
-        NativeVaultScreen(
-            activity = activity,
-            apiClient = apiClient,
-            serverUrl = serverUrl,
-            galleryItems = galleryItems,
-            trashItems = trashItems,
-            albumsList = albumsList,
-            custom = custom,
-            isDarkTheme = isDarkTheme,
-            favoriteFilenames = favoriteFilenames,
-            onToggleFavorite = { fn ->
-                scope.launch {
-                    val updated = apiClient.toggleFavorite(fn)
-                    if (updated != null) {
-                        favoriteFilenames = updated
-                        infoDialogMessage = if (updated.contains(fn)) "⭐ Aggiunto ai Preferiti" else "Rimosso dai Preferiti"
-                    }
-                }
-            },
-            onUpdateCustom = onUpdateCustom,
-            onLockNow = {
-                if (activity.canUseBiometrics()) {
-                    isBiometricLocked = true
-                } else {
-                    Toast.makeText(context, "Biometria non configurata sul dispositivo", Toast.LENGTH_SHORT).show()
-                }
-            },
-            onRefresh = { refreshVaultSilently() },
-            onLocalAlbumsChanged = { refreshLocalCacheOnly() },
-            onOpenServerConfig = {
-                tempServerInput = serverUrl
-                showServerDialog = true
-            },
-            onLogout = {
-                scope.launch {
-                    AutoBackupWorker.cancelAllBackupWork(context)
-                    apiClient.logout()
-                    isAuthenticated = false
-                    galleryItems = emptyList()
-                    trashItems = emptyList()
-                    albumsList = emptyList()
-                }
-            },
-            onShowInfo = { msg ->
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-            }
-        )
-    }
+    )
 
     if (showServerDialog) {
         AlertDialog(
             onDismissRequest = { showServerDialog = false },
             shape = RoundedCornerShape(28.dp),
-            title = { Text("Server PhotoCloud Locale", fontWeight = FontWeight.SemiBold) },
+            title = { Text("Server PhotoCloud Zero-Knowledge", fontWeight = FontWeight.SemiBold) },
             text = {
                 OutlinedTextField(
                     value = tempServerInput,
                     onValueChange = { tempServerInput = it },
-                    label = { Text("Indirizzo (es. http://192.168.1.100:5000)") },
+                    label = { Text("Indirizzo (es. https://vault.esempio.it)") },
                     singleLine = true,
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -1145,20 +934,6 @@ fun PhotoCloudNativeApp(
             dismissButton = {
                 TextButton(onClick = { showServerDialog = false }) {
                     Text("Annulla")
-                }
-            }
-        )
-    }
-
-    if (infoDialogMessage != null) {
-        AlertDialog(
-            onDismissRequest = { infoDialogMessage = null },
-            shape = RoundedCornerShape(28.dp),
-            title = { Text("PhotoCloud", fontWeight = FontWeight.SemiBold) },
-            text = { Text(infoDialogMessage ?: "") },
-            confirmButton = {
-                FilledTonalButton(onClick = { infoDialogMessage = null }) {
-                    Text("OK")
                 }
             }
         )

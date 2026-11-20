@@ -1,108 +1,56 @@
-import express, { Request, Response, NextFunction } from 'express';
-import multer from 'multer';
+/**
+ * PhotoCloud — Pure Zero-Knowledge End-to-End Encrypted Server (v2 Only)
+ *
+ * Architettura 100% Zero-Knowledge:
+ * - Tutta la crittografia (Argon2id, HKDF-SHA256, AES-256-GCM PCZK v1) avviene ESCLUSIVAMENTE sul client.
+ * - Questo server non importa né esegue alcuna cifra/decifra simmetrica su dati utente e non riceve mai
+ *   passphrase, chiavi o contenuti in chiaro.
+ * - Tutte le rotte legacy v1 con cifratura lato server sono state rimosse definitivamente (HTTP 410 Gone).
+ */
+import express, { type NextFunction, type Request, type Response } from 'express';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import JSZip from 'jszip';
-import {
-  generateApiKey,
-  hashKey,
-  verifyKey,
-  encryptFile,
-  encryptFileAsync,
-  encryptFileStream,
-  decryptFile,
-  decryptFileAsync,
-  encryptedPlaintextSize,
-  calculateBufferHash,
-  findDuplicateGroups,
-} from './src/lib/crypto';
-import { cleanupOrphanTempFiles, normalizeSha256Hex, vaultHashIndex } from './src/lib/hashIndex';
-import {
-  renderLoginTemplate,
-  renderGalleryTemplate,
-  renderTrashTemplate,
-  computeCloudStorageStats,
-  formatFileSize,
-} from './src/lib/templateRenderer';
-import {
-  MAX_CLIENT_THUMB_UPLOAD_BYTES,
-  parsePreviewVariant,
-  THUMB_CLIENT_CACHE_MAX_AGE_SEC,
-  thumbCache,
-} from './src/lib/thumbCache';
-import {
-  resolveFileViewerSpec,
-  parseDocumentBuffer,
-} from './src/lib/documentEngine';
-import {
-  computePHashHex,
-  groupSimilarByHash,
-  hammingDistanceHex,
-  isPHashSupportedFilename,
-} from './src/lib/phash';
-import { parseNaturalQuery, mediaItemMatchesQuery } from './src/lib/nlSearch';
-import {
-  parseExifFromJpeg,
-  isExifParseableFilename,
-  emptyExifMetadata,
-  ExifMetadata,
-} from './src/lib/exif';
-import { renderMapPage } from './src/lib/mapPage';
-import {
-  getOrCreateServerSecret,
-  readJsonFile,
-  unwrapSecret,
-  writeJsonAtomic,
-} from './src/lib/vaultStorage';
-import {
-  PublicShareRecord,
-  SHARE_TOKEN_REGEX,
-  createPublicShare,
-  deleteAlbumSharesForAlbum,
-  incrementShareDownloadCount,
-  loadAlbumShares,
-  loadPublicShares,
-  resolveShareByToken,
-  saveAlbumShares,
-  savePublicShares,
-  upsertAlbumShare,
-  verifySharePassword,
-} from './src/lib/sharing';
+import { getOrCreateServerSecret } from './src/lib/vaultStorage';
 import { parseTrustProxyConfig } from './src/lib/trustProxy';
 import {
   addUserSubscription,
   getVapidPublicKey,
   initPushService,
   removeUserSubscription,
-  sendPushToUser,
 } from './src/lib/pushService';
-import {
-  renderShareErrorPage,
-  renderSharePage,
-  renderSharePasswordPage,
-} from './src/lib/sharePage';
-import { FileCategory, MediaItem, AndroidBuildConfig, AndroidReleaseArtifact } from './src/types';
+import type { AndroidBuildConfig, AndroidReleaseArtifact } from './src/types';
 import {
   validateAndroidConfig,
   generateAndroidManifestXml,
   generateAppBuildGradleKts,
   generateMainActivityKt,
 } from './src/lib/androidBuilder';
-import { createZkV2Router } from './src/lib/zkServerV2';
+import {
+  V2_SESSION_COOKIE_NAME,
+  createZkV2Router,
+  parseHttpRangeHeader,
+} from './src/lib/zkServerV2';
 import { createZkV2WebRouter } from './src/client/v2-app/router';
 
-const APP_ROOT = process.cwd();
-const UPLOAD_FOLDER = path.resolve(APP_ROOT, 'user_media');
-const VAULT_V2_FOLDER = path.resolve(APP_ROOT, process.env.VAULT_V2_DIR || 'vault_v2');
-const TEMP_UPLOAD_DIR = path.resolve(APP_ROOT, process.env.TEMP_UPLOAD_DIR || 'temp_uploads');
-const RELEASE_DIR = path.resolve(process.cwd(), 'release');
+type ZkV2RouterHandle = ReturnType<typeof createZkV2Router>;
 
-/**
- * Versione dell'app Android dichiarata in `android-app/app/build.gradle.kts`.
- * Unica fonte di verità: il manifest di update ed i nomi degli APK derivano da qui,
- * così non si può più annunciare una versione diversa da quella realmente compilata.
- */
+const APP_ROOT = process.cwd();
+const DEFAULT_VAULT_V2_FOLDER = path.resolve(APP_ROOT, process.env.VAULT_V2_DIR || 'vault_v2');
+const DEFAULT_TEMP_UPLOAD_DIR = path.resolve(APP_ROOT, process.env.TEMP_UPLOAD_DIR || 'temp_uploads');
+const RELEASE_DIR = path.resolve(APP_ROOT, 'release');
+const STATIC_DIR = path.resolve(APP_ROOT, 'static');
+const RELEASE_BUILDS_DIR = path.resolve(APP_ROOT, 'release_builds');
+
+const MAX_UPLOAD_MB_ENV = Number(process.env.MAX_UPLOAD_MB);
+const MAX_UPLOAD_MB =
+  Number.isFinite(MAX_UPLOAD_MB_ENV) && MAX_UPLOAD_MB_ENV >= 50 && MAX_UPLOAD_MB_ENV <= 16384
+    ? Math.floor(MAX_UPLOAD_MB_ENV)
+    : 2048;
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+
 function readAndroidAppVersion(): { versionName: string; versionCode: number } {
   const fallback = { versionName: '1.5.1', versionCode: 33 };
   try {
@@ -119,667 +67,109 @@ function readAndroidAppVersion(): { versionName: string; versionCode: number } {
   }
 }
 
-/**
- * Risolve l'APK firmato da servire per una data versione annunciata.
- *
- * Regola: si serve SOLO un APK realmente presente in `/release`. Se manca l'APK della versione
- * annunciata si usa quello indicato dal manifest (o null): mai un file di una release diversa
- * scelta "a caso", che produrrebbe un aggiornamento fantasma (il bug v1.2.6 → v1.2.5).
- */
-function resolveReleaseApk(preferredVersionName?: string, manifestApkFilename?: string): string | null {
-  const isUsableApk = (name: string): boolean => {
-    if (!/^photocloud-release-v[0-9][0-9a-zA-Z.\-]*-signed\.apk$/.test(name)) return false;
-    const fullPath = path.join(RELEASE_DIR, name);
-    try {
-      return fs.existsSync(fullPath) && fs.statSync(fullPath).size > 100_000;
-    } catch {
-      return false;
-    }
-  };
-
-  if (preferredVersionName) {
-    const exact = `photocloud-release-v${preferredVersionName}-signed.apk`;
-    if (isUsableApk(exact)) return exact;
-  }
-  if (manifestApkFilename && isValidVaultFilename(manifestApkFilename) && isUsableApk(manifestApkFilename)) {
-    return manifestApkFilename;
-  }
-  return null;
-}
-
-/** Estrae la versione dal nome di un APK di release (`photocloud-release-v1.3.0-signed.apk` → `1.3.0`). */
 function versionNameFromApkFilename(filename: string): string {
-  const match = filename.match(/photocloud-release-v([0-9][0-9a-zA-Z.\-]*)-signed\.apk$/);
+  const match = filename.match(/^photocloud-release-v([0-9]+(?:\.[0-9]+)*)-signed\.apk$/i);
   return match ? match[1] : '';
 }
 
 function compareVersionStrings(a: string, b: string): number {
-  const pa = a.split(/[^0-9]+/).filter(Boolean).map(Number);
-  const pb = b.split(/[^0-9]+/).filter(Boolean).map(Number);
+  const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
   const len = Math.max(pa.length, pb.length);
-  for (let i = 0; i < len; i += 1) {
-    const na = pa[i] ?? 0;
-    const nb = pb[i] ?? 0;
-    if (na !== nb) return na - nb;
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
   }
   return 0;
 }
 
-const RELEASE_BUILDS_DIR = path.resolve(process.cwd(), 'release_builds');
-const USERS_FILE = path.resolve(process.cwd(), 'users.txt');
-const STATIC_DIR = path.resolve(process.cwd(), 'static');
-
-fs.mkdirSync(UPLOAD_FOLDER, { recursive: true });
-fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
-fs.mkdirSync(RELEASE_DIR, { recursive: true });
-fs.mkdirSync(RELEASE_BUILDS_DIR, { recursive: true });
-if (!fs.existsSync(USERS_FILE)) {
-  fs.writeFileSync(USERS_FILE, '', 'utf-8');
+function resolveReleaseApk(preferredVersionName: string, manifestApkFilename?: string): string | null {
+  if (!fs.existsSync(RELEASE_DIR)) return null;
+  const exact = `photocloud-release-v${preferredVersionName}-signed.apk`;
+  if (fs.existsSync(path.join(RELEASE_DIR, exact))) return exact;
+  if (
+    manifestApkFilename &&
+    isValidSafeFilename(manifestApkFilename) &&
+    fs.existsSync(path.join(RELEASE_DIR, manifestApkFilename))
+  ) {
+    return manifestApkFilename;
+  }
+  const apks = fs
+    .readdirSync(RELEASE_DIR)
+    .filter((f) => /^photocloud-release-v[0-9]+(?:\.[0-9]+)*-signed\.apk$/i.test(f));
+  if (apks.length === 0) return null;
+  apks.sort((x, y) => compareVersionStrings(versionNameFromApkFilename(y), versionNameFromApkFilename(x)));
+  return apks[0];
 }
 
-interface SessionData {
-  username: string;
-  apiKey: string;
-  expiresAt: number;
-}
-
-interface UserAlbumsData {
-  albums: string[];
-  fileAlbums: Record<string, string>;
-}
-
-const SESSIONS = new Map<string, SessionData>();
-const LOGIN_ATTEMPTS = new Map<string, { count: number; resetAt: number }>();
-const REGISTER_ATTEMPTS = new Map<string, { count: number; resetAt: number }>();
-const DUMMY_KEY_HASH = hashKey('PhotoCloud_Constant_Time_Dummy_Key_2026!@#');
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const FORBIDDEN_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-
-export function isValidVaultFilename(name: unknown): name is string {
-  if (typeof name !== 'string') return false;
-  if (name.length < 1 || name.length > 255) return false;
-  if (FORBIDDEN_OBJECT_KEYS.has(name)) return false;
+function isValidSafeFilename(name: string): boolean {
+  if (!name || typeof name !== 'string' || name.length > 255) return false;
+  if (name.includes('/') || name.includes('\\') || name.includes('..') || name.includes('\0')) return false;
   if (name.startsWith('.')) return false;
-  if (name !== path.basename(name)) return false;
-  if (/[\/\\:\x00-\x1f\x7f]/.test(name)) return false;
   return true;
 }
 
-function isValidAlbumName(name: unknown): name is string {
-  if (typeof name !== 'string') return false;
-  const trimmed = name.trim();
-  if (trimmed.length < 1 || trimmed.length > 128) return false;
-  if (FORBIDDEN_OBJECT_KEYS.has(trimmed)) return false;
-  if (/[\x00-\x1f\x7f]/.test(trimmed)) return false;
-  return true;
-}
-
-// Periodic cleanup of expired sessions and rate-limit records
-const sessionCleanupTimer = setInterval(() => {
-  const now = Date.now();
-  for (const [sid, sess] of SESSIONS.entries()) {
-    if (sess.expiresAt <= now) {
-      SESSIONS.delete(sid);
-    }
-  }
-  for (const [key, entry] of LOGIN_ATTEMPTS.entries()) {
-    if (entry.resetAt <= now) {
-      LOGIN_ATTEMPTS.delete(key);
-    }
-  }
-  for (const [key, entry] of REGISTER_ATTEMPTS.entries()) {
-    if (entry.resetAt <= now) {
-      REGISTER_ATTEMPTS.delete(key);
-    }
-  }
-}, 5 * 60 * 1000);
-sessionCleanupTimer.unref();
-
-const ZIP_TASKS = new Map<
-  string,
-  {
-    owner: string;
-    zipPath?: string;
-    buffer?: Buffer;
-    status: 'starting' | 'processing' | 'complete' | 'error';
-    progress: number;
-    filename: string | null;
-    totalBytes?: number;
-    processedBytes?: number;
-    error?: string;
-  }
->();
-
-function parseCookies(cookieHeader?: string): Record<string, string> {
-  const list: Record<string, string> = Object.create(null);
-  if (!cookieHeader) return list;
-  cookieHeader.split(';').forEach((cookie) => {
-    const parts = cookie.split('=');
-    const key = parts.shift()?.trim();
-    if (key && !FORBIDDEN_OBJECT_KEYS.has(key)) {
-      try {
-        list[key] = decodeURIComponent(parts.join('='));
-      } catch {
-        list[key] = parts.join('=');
-      }
-    }
-  });
-  return list;
-}
-
-function getSession(req: Request): SessionData | null {
-  const cookies = parseCookies(req.headers.cookie);
-  const rawHeaderSid = typeof req.headers['x-session-id'] === 'string' ? req.headers['x-session-id'].trim() : '';
-  const sid = cookies['photocloud_sid'] || rawHeaderSid;
-  if (!sid || !UUID_REGEX.test(sid)) return null;
-  const session = SESSIONS.get(sid);
-  if (session && session.expiresAt <= Date.now()) {
-    SESSIONS.delete(sid);
-    return null;
-  }
-  return session ?? null;
-}
-
-function findUser(username: string): string | null {
-  if (!fs.existsSync(USERS_FILE)) return null;
-  const lines = fs.readFileSync(USERS_FILE, 'utf-8').split('\n');
-  for (const line of lines) {
-    if (line.startsWith(username + ':')) {
-      return line.split(':')[1]?.trim() ?? null;
+function parseCookieValue(req: Request, cookieName: string): string | null {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const part of raw.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const k = part.slice(0, idx).trim();
+    if (k === cookieName) {
+      return decodeURIComponent(part.slice(idx + 1).trim());
     }
   }
   return null;
 }
 
-function saveUser(username: string, keyHash: string): void {
-  const current = fs.existsSync(USERS_FILE) ? fs.readFileSync(USERS_FILE, 'utf-8') : '';
-  const prefix = current.length > 0 && !current.endsWith('\n') ? `${current}\n` : current;
-  const nextContent = `${prefix}${username}:${keyHash}\n`;
-  const tmpFile = `${USERS_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  fs.writeFileSync(tmpFile, nextContent, 'utf-8');
-  fs.renameSync(tmpFile, USERS_FILE);
+function getAuthenticatedV2User(
+  req: Request,
+  zkV2: ZkV2RouterHandle
+): { userId: string; username: string } | null {
+  const rawSid = parseCookieValue(req, V2_SESSION_COOKIE_NAME);
+  if (!rawSid || rawSid.length < 32) return null;
+  const sidHash = crypto.createHash('sha256').update(rawSid, 'utf8').digest();
+  const row = zkV2.store.db
+    .prepare(
+      `SELECT s.user_id, s.expires_at, u.username
+       FROM sessions_v2 s
+       JOIN users_v2 u ON u.id = s.user_id
+       WHERE s.sid_hash = ?`
+    )
+    .get(sidHash) as { user_id: string; expires_at: number; username: string } | undefined;
+  if (!row || Date.now() >= row.expires_at) return null;
+  return { userId: row.user_id, username: row.username };
 }
 
-const MEDIA_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.heic', '.avif', '.mp4', '.mov', '.webm', '.mkv']);
-const DOC_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.rtf', '.txt', '.md', '.csv', '.tsv']);
-const ARCHIVE_EXTENSIONS = new Set(['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.apk', '.iso', '.dmg', '.exe']);
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus']);
-const CODE_EXTENSIONS = new Set(['.json', '.xml', '.yaml', '.yml', '.js', '.ts', '.tsx', '.jsx', '.py', '.kt', '.java', '.c', '.cpp', '.h', '.html', '.htm', '.css', '.sql', '.sh', '.ini', '.conf', '.log']);
-
-export function classifyFileExtension(filename: string): { isMedia: boolean; category: FileCategory } {
-  const ext = path.extname(filename).toLowerCase();
-  if (MEDIA_EXTENSIONS.has(ext)) return { isMedia: true, category: 'media' };
-  if (DOC_EXTENSIONS.has(ext)) return { isMedia: false, category: 'document' };
-  if (ARCHIVE_EXTENSIONS.has(ext)) return { isMedia: false, category: 'archive' };
-  if (AUDIO_EXTENSIONS.has(ext)) return { isMedia: false, category: 'audio' };
-  if (CODE_EXTENSIONS.has(ext)) return { isMedia: false, category: 'code' };
-  return { isMedia: false, category: 'other' };
+export interface PhotoCloudServerOptions {
+  vaultV2Dir?: string;
+  tempUploadDir?: string;
+  onSetupTokenGenerated?: (token: string) => void;
 }
 
-function getAlbumsFilePath(username: string): string {
-  return path.join(UPLOAD_FOLDER, username, '.albums.json');
-}
+export function createPhotoCloudApp(options: PhotoCloudServerOptions = {}): {
+  app: express.Express;
+  zkV2: ZkV2RouterHandle;
+  vaultV2Dir: string;
+  tempUploadDir: string;
+} {
+  const vaultV2Dir = path.resolve(options.vaultV2Dir || DEFAULT_VAULT_V2_FOLDER);
+  const tempUploadDir = path.resolve(options.tempUploadDir || DEFAULT_TEMP_UPLOAD_DIR);
 
-function loadUserAlbums(username: string): UserAlbumsData {
-  const p = getAlbumsFilePath(username);
-  const emptyFileAlbums: Record<string, string> = Object.create(null);
-  if (!fs.existsSync(p)) {
-    return { albums: [], fileAlbums: emptyFileAlbums };
-  }
-  try {
-    const raw = JSON.parse(fs.readFileSync(p, 'utf-8')) as Partial<UserAlbumsData>;
-    const safeAlbums = Array.isArray(raw.albums)
-      ? raw.albums.filter((a): a is string => isValidAlbumName(a)).map((a) => a.trim())
-      : [];
-    const safeFileAlbums: Record<string, string> = Object.create(null);
-    if (raw.fileAlbums && typeof raw.fileAlbums === 'object') {
-      for (const [k, v] of Object.entries(raw.fileAlbums)) {
-        if (isValidVaultFilename(k) && isValidAlbumName(v)) {
-          safeFileAlbums[k] = v.trim();
-        }
-      }
-    }
-    return {
-      albums: safeAlbums,
-      fileAlbums: safeFileAlbums,
-    };
-  } catch {
-    return { albums: [], fileAlbums: emptyFileAlbums };
-  }
-}
+  fs.mkdirSync(vaultV2Dir, { recursive: true });
+  fs.mkdirSync(tempUploadDir, { recursive: true });
+  fs.mkdirSync(RELEASE_BUILDS_DIR, { recursive: true });
 
-function saveUserAlbums(username: string, data: UserAlbumsData): void {
-  const userFolder = path.join(UPLOAD_FOLDER, username);
-  fs.mkdirSync(userFolder, { recursive: true });
-  const targetPath = getAlbumsFilePath(username);
-  const tmpPath = `${targetPath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
-  fs.renameSync(tmpPath, targetPath);
-}
-
-// ---------------------------------------------------------------------------
-// v1.4.0 — Preferiti persistenti per utente (`user_media/<user>/.favorites.json`)
-// ---------------------------------------------------------------------------
-interface UserFavoritesFile {
-  version: 1;
-  favorites: string[];
-}
-
-function getFavoritesFilePath(username: string): string {
-  return path.join(UPLOAD_FOLDER, username, '.favorites.json');
-}
-
-function loadUserFavorites(username: string): Set<string> {
-  const data = readJsonFile<UserFavoritesFile>(getFavoritesFilePath(username), {
-    version: 1,
-    favorites: [],
-  });
-  const set = new Set<string>();
-  if (Array.isArray(data.favorites)) {
-    for (const f of data.favorites) {
-      if (typeof f === 'string' && isValidVaultFilename(f)) set.add(f);
-    }
-  }
-  return set;
-}
-
-function saveUserFavorites(username: string, favorites: ReadonlySet<string>): void {
-  const userFolder = path.join(UPLOAD_FOLDER, username);
-  fs.mkdirSync(userFolder, { recursive: true });
-  writeJsonAtomic(getFavoritesFilePath(username), {
-    version: 1,
-    favorites: [...favorites].sort((a, b) => a.localeCompare(b, 'it')).slice(0, 20000),
-  });
-}
-
-// ---------------------------------------------------------------------------
-// v1.4.0 — Cache pHash per utente (`user_media/<user>/.phash.json`)
-// ---------------------------------------------------------------------------
-interface PHashCacheFile {
-  version: 1;
-  entries: Record<string, { phash: string; mtimeMs: number }>;
-}
-
-function getPHashCachePath(username: string): string {
-  return path.join(UPLOAD_FOLDER, username, '.phash.json');
-}
-
-function loadPHashCache(username: string): PHashCacheFile {
-  const data = readJsonFile<PHashCacheFile>(getPHashCachePath(username), {
-    version: 1,
-    entries: Object.create(null),
-  });
-  if (!data.entries || typeof data.entries !== 'object') {
-    data.entries = Object.create(null);
-  }
-  return data;
-}
-
-function savePHashCache(username: string, cache: PHashCacheFile): void {
-  writeJsonAtomic(getPHashCachePath(username), cache);
-}
-
-// ---------------------------------------------------------------------------
-// v1.4.1 — Cache metadati EXIF per utente (`user_media/<user>/.exif.json`)
-// ---------------------------------------------------------------------------
-interface ExifCacheFile {
-  version: 1;
-  entries: Record<string, { exif: ExifMetadata; mtimeMs: number }>;
-}
-
-function getExifCachePath(username: string): string {
-  return path.join(UPLOAD_FOLDER, username, '.exif.json');
-}
-
-function loadExifCache(username: string): ExifCacheFile {
-  const data = readJsonFile<ExifCacheFile>(getExifCachePath(username), {
-    version: 1,
-    entries: Object.create(null),
-  });
-  if (!data.entries || typeof data.entries !== 'object') {
-    data.entries = Object.create(null);
-  }
-  return data;
-}
-
-function saveExifCache(username: string, cache: ExifCacheFile): void {
-  writeJsonAtomic(getExifCachePath(username), cache);
-}
-
-/**
- * Legge (con cache mtime-keyed) i metadati EXIF di un file JPEG del vault,
- * decifrando il file in memoria solo quando serve. Mai lancia eccezioni.
- */
-async function getExifForVaultFile(
-  username: string,
-  filename: string,
-  apiKey: string
-): Promise<ExifMetadata | null> {
-  try {
-    const userFolder = path.join(UPLOAD_FOLDER, username);
-    const fullPath = path.join(userFolder, filename);
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(fullPath);
-    } catch {
-      return null;
-    }
-    const cache = loadExifCache(username);
-    const cached = cache.entries[filename];
-    if (cached && cached.exif && Math.abs(cached.mtimeMs - stat.mtimeMs) < 1) {
-      return cached.exif;
-    }
-    const encrypted = await fs.promises.readFile(fullPath);
-    const decrypted = await decryptFileAsync(encrypted, apiKey);
-    const exif = parseExifFromJpeg(decrypted);
-    cache.entries[filename] = { exif, mtimeMs: stat.mtimeMs };
-    saveExifCache(username, cache);
-    return exif;
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// v1.4.0 — Rate limiting per lo sblocco password dei link pubblici di condivisione
-// ---------------------------------------------------------------------------
-const SHARE_UNLOCK_ATTEMPTS = new Map<string, { count: number; resetAt: number }>();
-
-function isShareUnlockRateLimited(clientIp: string): boolean {
-  const now = Date.now();
-  const entry = SHARE_UNLOCK_ATTEMPTS.get(clientIp);
-  if (entry && entry.resetAt > now && entry.count >= 10) return true;
-  SHARE_UNLOCK_ATTEMPTS.set(clientIp, {
-    count: entry && entry.resetAt > now ? entry.count + 1 : 1,
-    resetAt: entry && entry.resetAt > now ? entry.resetAt : now + 10 * 60 * 1000,
-  });
-  return false;
-}
-
-/**
- * Genera (o valida) il cookie di sblocco per condivisioni protette da password:
- * HMAC del token con il segreto server, a prova di manomissione e revocabile
- * eliminando la condivisione.
- */
-function shareUnlockCookieValue(token: string): string {
-  return crypto
-    .createHmac('sha256', getServerSecret())
-    .update(`photocloud-share-unlock:${token}`)
-    .digest('hex');
-}
-
-let cachedServerSecret: Buffer | null = null;
-function getServerSecret(): Buffer {
-  if (!cachedServerSecret) {
-    cachedServerSecret = getOrCreateServerSecret(UPLOAD_FOLDER);
-  }
-  return cachedServerSecret;
-}
-
-/**
- * Restituisce i filename di un utente che appartengono ad un album condiviso
- * (`source` = record di condivisione album multi-utente).
- */
-function listAlbumSharedFiles(sourceOwner: string, albumName: string): MediaItem[] {
-  const userFolder = path.join(UPLOAD_FOLDER, sourceOwner);
-  const albumsData = loadUserAlbums(sourceOwner);
-  return listMediaFiles(userFolder, sourceOwner).filter(
-    (m) => albumsData.fileAlbums[m.filename] === albumName
-  );
-}
-
-function getEncryptedFilePlaintextSize(fullPath: string, stat?: fs.Stats): number {
-  try {
-    const s = stat ?? fs.statSync(fullPath);
-    const fd = fs.openSync(fullPath, 'r');
-    const header = Buffer.alloc(Math.min(s.size, 18));
-    try {
-      fs.readSync(fd, header, 0, header.length, 0);
-    } finally {
-      fs.closeSync(fd);
-    }
-    const overhead = header.equals(Buffer.from('PhotoCloud-GCM-v1\0')) ? 62 : 32;
-    return Math.max(0, s.size - overhead);
-  } catch {
-    return 0;
-  }
-}
-
-function listMediaFiles(folderPath: string, username?: string): MediaItem[] {
-  if (!fs.existsSync(folderPath)) return [];
-  const files = fs.readdirSync(folderPath);
-  const albumsData = username ? loadUserAlbums(username) : { albums: [], fileAlbums: Object.create(null) };
-  const isTrashFolder = path.basename(folderPath) === 'trash';
-  const thumbSet = !isTrashFolder ? thumbCache.listFilesWithThumb(folderPath, 'thumb') : null;
-  const details: MediaItem[] = [];
-  for (const f of files) {
-    if (f.startsWith('.') || !isValidVaultFilename(f)) continue; // skip .albums.json, .thumbs and hidden files
-    const full = path.join(folderPath, f);
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(full);
-    } catch {
-      continue;
-    }
-    if (stat.isFile()) {
-      const { isMedia, category } = classifyFileExtension(f);
-      const originalApproxSize = getEncryptedFilePlaintextSize(full, stat);
-      details.push({
-        filename: f,
-        timestamp: stat.mtimeMs / 1000,
-        size: originalApproxSize,
-        isMedia,
-        category,
-        album: albumsData.fileAlbums[f] || '',
-        hasThumb: thumbSet ? thumbSet.has(f) : undefined,
-      });
-    }
-  }
-  details.sort((a, b) => b.timestamp - a.timestamp);
-  return details;
-}
-
-/**
- * Parses an HTTP `Range: bytes=...` header according to RFC 9110.
- * Supports explicit ranges (`start-end`), open-ended ranges (`start-`),
- * and suffix ranges (`-suffixLength`).
- */
-export function parseHttpByteRange(
-  rangeHeader: string | undefined,
-  totalLength: number
-): { status: 'none' } | { status: 'invalid' } | { status: 'ok'; start: number; end: number } {
-  if (!rangeHeader || rangeHeader.trim() === '') {
-    return { status: 'none' };
-  }
-  if (!rangeHeader.startsWith('bytes=')) {
-    return { status: 'none' };
-  }
-  if (totalLength <= 0) {
-    return { status: 'invalid' };
-  }
-  const rawSpec = rangeHeader.slice('bytes='.length).trim();
-  if (!rawSpec || rawSpec.includes(',')) {
-    return { status: 'invalid' };
-  }
-  const spec = rawSpec;
-  const dashIdx = spec.indexOf('-');
-  if (dashIdx === -1) {
-    return { status: 'invalid' };
-  }
-  const startStr = spec.slice(0, dashIdx).trim();
-  const endStr = spec.slice(dashIdx + 1).trim();
-
-  if (startStr === '') {
-    // Suffix byte-range-spec: bytes=-N (last N bytes)
-    if (!/^[0-9]+$/.test(endStr)) return { status: 'invalid' };
-    const suffixLength = parseInt(endStr, 10);
-    if (Number.isNaN(suffixLength) || suffixLength <= 0) {
-      return { status: 'invalid' };
-    }
-    const start = Math.max(0, totalLength - suffixLength);
-    const end = totalLength - 1;
-    return { status: 'ok', start, end };
-  }
-
-  if (!/^[0-9]+$/.test(startStr)) return { status: 'invalid' };
-  const start = parseInt(startStr, 10);
-  if (Number.isNaN(start) || start < 0 || start >= totalLength) {
-    return { status: 'invalid' };
-  }
-
-  let end = totalLength - 1;
-  if (endStr !== '') {
-    if (!/^[0-9]+$/.test(endStr)) return { status: 'invalid' };
-    const parsedEnd = parseInt(endStr, 10);
-    if (Number.isNaN(parsedEnd) || parsedEnd < start) {
-      return { status: 'invalid' };
-    }
-    end = Math.min(totalLength - 1, parsedEnd);
-  }
-
-  return { status: 'ok', start, end };
-}
-
-const MAX_UPLOAD_MB = Math.min(16384, Math.max(50, Number(process.env.MAX_UPLOAD_MB || 2048) || 2048));
-const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
-const MAX_CHUNKED_PART_BYTES = 16 * 1024 * 1024;
-const DEFAULT_CHUNKED_PART_BYTES = 8 * 1024 * 1024;
-const CHUNKED_UPLOAD_TTL_MS = 2 * 60 * 60 * 1000;
-
-interface ChunkedUploadSession {
-  id: string;
-  owner: string;
-  filename: string;
-  totalSize: number;
-  chunkSizeBytes: number;
-  expectedTotalChunks: number;
-  receivedChunks: Set<number>;
-  tempPartPath: string;
-  timestampMs?: number;
-  album: string;
-  expectedSha256?: string;
-  isAutoBackup: boolean;
-  expiresAt: number;
-}
-
-const CHUNKED_UPLOADS = new Map<string, ChunkedUploadSession>();
-
-const chunkCleanupTimer = setInterval(() => {
-  const now = Date.now();
-  for (const [id, s] of CHUNKED_UPLOADS.entries()) {
-    if (s.expiresAt <= now) {
-      CHUNKED_UPLOADS.delete(id);
-      try {
-        if (fs.existsSync(s.tempPartPath)) fs.unlinkSync(s.tempPartPath);
-      } catch {
-        // ignore cleanup error
-      }
-    }
-  }
-  const activeParts = new Set(Array.from(CHUNKED_UPLOADS.values()).map((s) => path.resolve(s.tempPartPath)));
-  cleanupOrphanTempFiles(TEMP_UPLOAD_DIR, {
-    activePartPaths: activeParts,
-    cleanAllChunkedParts: false,
-    staleTempMaxAgeMs: CHUNKED_UPLOAD_TTL_MS,
-    nowMs: now,
-  });
-}, 5 * 60 * 1000);
-chunkCleanupTimer.unref();
-
-function allocateUniqueVaultFilename(userFolder: string, rawOrigName: string): { filename: string; filepath: string; isMedia: boolean } {
-  const rawOrig = path.basename(rawOrigName || `file_${Date.now()}`);
-  const ext = path.extname(rawOrig) || '.bin';
-  const baseClean =
-    path
-      .basename(rawOrig, ext)
-      .replace(/[^a-zA-Z0-9._-]/g, '_')
-      .slice(0, 64)
-      .replace(/^\.+/, '') || 'file';
-
-  const { isMedia } = classifyFileExtension(rawOrig);
-  let filename = '';
-  let filepath = '';
-
-  if (!isMedia) {
-    const candidate = `${baseClean}${ext}`;
-    if (!fs.existsSync(path.join(userFolder, candidate))) {
-      filename = candidate;
-      filepath = path.join(userFolder, candidate);
-    }
-  }
-
-  if (!filename) {
-    while (true) {
-      const suffix = crypto.randomBytes(4).toString('hex');
-      filename = isMedia ? `${crypto.randomBytes(8).toString('hex')}${ext}` : `${baseClean}_${suffix}${ext}`;
-      filepath = path.join(userFolder, filename);
-      if (!fs.existsSync(filepath)) break;
-    }
-  }
-
-  return { filename, filepath, isMedia };
-}
-
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => {
-      fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
-      cb(null, TEMP_UPLOAD_DIR);
-    },
-    filename: (_req, _file, cb) => {
-      cb(null, `upload_${Date.now()}_${crypto.randomBytes(8).toString('hex')}.tmp`);
-    },
-  }),
-  limits: {
-    fileSize: MAX_UPLOAD_BYTES,
-    files: 500, // Support large multi-file batches without LIMIT_FILE_COUNT crash
-    fieldSize: 25 * 1024 * 1024,
-  },
-});
-
-function readUploadedFileBuffer(file: Express.Multer.File): Buffer {
-  if (file.buffer && file.buffer.length > 0) {
-    return file.buffer;
-  }
-  if (file.path && fs.existsSync(file.path)) {
-    return fs.readFileSync(file.path);
-  }
-  return Buffer.alloc(0);
-}
-
-function cleanupUploadedFiles(req: Request): void {
-  const single = req.file;
-  if (single?.path) {
-    try {
-      if (fs.existsSync(single.path)) fs.unlinkSync(single.path);
-    } catch {
-      // ignore cleanup error
-    }
-  }
-  const multi = req.files;
-  if (Array.isArray(multi)) {
-    for (const f of multi) {
-      if (f?.path) {
-        try {
-          if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
-        } catch {
-          // ignore cleanup error
-        }
-      }
-    }
-  }
-}
-
-async function startServer() {
   const app = express();
   app.disable('x-powered-by');
-  const trustProxyConfig = parseTrustProxyConfig(process.env.TRUST_PROXY);
-  if (trustProxyConfig !== false) {
-    app.set('trust proxy', trustProxyConfig);
-  }
+
+  const trustProxy = parseTrustProxyConfig(process.env.TRUST_PROXY);
+  app.set('trust proxy', trustProxy);
+  void initPushService(vaultV2Dir);
 
   // Global Security Headers & CSRF Origin Defense Middleware
-  app.use((req: Request, res: Response, next) => {
+  app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -787,7 +177,7 @@ async function startServer() {
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+      "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
     );
 
     if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
@@ -835,7 +225,8 @@ async function startServer() {
           }
 
           if (rawTargetHost) {
-            const effectiveProto = rawForwardedProto === 'http' || rawForwardedProto === 'https' ? rawForwardedProto : originProto;
+            const effectiveProto =
+              rawForwardedProto === 'http' || rawForwardedProto === 'https' ? rawForwardedProto : originProto;
             const normalizedTargetHost = new URL(`${effectiveProto}://${rawTargetHost}`).host.toLowerCase();
             if (originHost !== normalizedTargetHost) {
               res.status(403).json({ error: 'Richiesta cross-origin bloccata (CSRF protection).' });
@@ -854,482 +245,71 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+  // 1. Mount Zero-Knowledge v2 API & Web App (ONLY encryption mode in PhotoCloud)
   const zkV2 = createZkV2Router({
-    vaultV2Dir: VAULT_V2_FOLDER,
-    tempUploadDir: TEMP_UPLOAD_DIR,
-    serverSecret: getOrCreateServerSecret(UPLOAD_FOLDER),
+    vaultV2Dir,
+    tempUploadDir,
+    serverSecret: getOrCreateServerSecret(vaultV2Dir),
     maxUploadBytes: MAX_UPLOAD_BYTES,
-    onSetupTokenGenerated: (token) => {
-      console.log(
-        `[PhotoCloud v2 Setup] First-registration single-use setup token (printed once): ${token}`
-      );
-    },
+    onSetupTokenGenerated:
+      options.onSetupTokenGenerated ||
+      ((token) => {
+        console.log(
+          `[PhotoCloud v2 Setup] First-registration single-use setup token (printed once): ${token}`
+        );
+      }),
   });
   app.use('/api/v2', zkV2.router);
   app.use('/v2', createZkV2WebRouter(APP_ROOT));
 
-  const zkOnlyMode = ['1', 'true', 'yes'].includes(
-    String(process.env.PHOTOCLOUD_ZK_ONLY || '').trim().toLowerCase()
-  );
-  if (zkOnlyMode) {
-    app.use((req: Request, res: Response, next: NextFunction) => {
-      const p = req.path;
-      if (p === '/' && (req.method === 'GET' || req.method === 'HEAD')) {
-        res.redirect(302, '/v2');
-        return;
-      }
-      const allowedInZkOnly =
-        p === '/v2' ||
-        p.startsWith('/v2/') ||
-        p.startsWith('/api/v2/') ||
-        p.startsWith('/api/android/') ||
-        p.startsWith('/api/ai-model/') ||
-        p.startsWith('/api/push/') ||
-        p.startsWith('/static/') ||
-        p.startsWith('/release/') ||
-        p === '/register-pwa.js' ||
-        p === '/service-worker.js' ||
-        p === '/manifest.webmanifest' ||
-        p === '/favicon.ico' ||
-        p === '/icon.svg' ||
-        p === '/apple-touch-icon.png' ||
-        p === '/pwa-192x192.png' ||
-        p === '/pwa-512x512.png' ||
-        p === '/pwa-maskable-512x512.png';
-      if (allowedInZkOnly) {
-        next();
-        return;
-      }
-      res.status(410).json({
-        error: 'LEGACY_V1_DISABLED_ZK_ONLY',
-        message: 'Modalità Zero-Knowledge esclusiva attiva. Usa /v2 e /api/v2/*.',
-        v2Url: '/v2',
-      });
+  // 2. Root & legacy UI entry points redirect permanently/directly to Zero-Knowledge v2
+  for (const legacyPage of ['/', '/login', '/trash', '/map']) {
+    app.get(legacyPage, (_req: Request, res: Response) => {
+      res.redirect(302, '/v2');
     });
   }
 
+  // 3. Static PWA & public release assets
   app.use('/static', express.static(STATIC_DIR));
-  app.use(express.static(path.resolve(process.cwd(), 'public'), { index: false }));
+  app.use(express.static(path.resolve(APP_ROOT, 'public'), { index: false }));
   app.use('/release', express.static(RELEASE_DIR));
 
-  // --- ORIGINAL WEB APP ROUTES + CLOUD FILE MANAGER & ALBUMS ---
-  app.get('/', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(renderLoginTemplate());
-      return;
+  // 4. Web Push VAPID notifications (authenticated via V2 Zero-Knowledge session, never transmits user plaintext)
+  app.get('/api/push/vapid-key', async (_req: Request, res: Response) => {
+    let publicKey = getVapidPublicKey();
+    if (!publicKey) {
+      const initialized = await initPushService(vaultV2Dir);
+      publicKey = initialized?.publicKey ?? null;
     }
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const trashFolder = path.join(userFolder, 'trash');
-    fs.mkdirSync(userFolder, { recursive: true });
-    fs.mkdirSync(trashFolder, { recursive: true });
-    const allFiles = listMediaFiles(userFolder, sess.username);
-    const trashedFiles = listMediaFiles(trashFolder, sess.username);
-    const albumsData = loadUserAlbums(sess.username);
-    const favorites = [...loadUserFavorites(sess.username)];
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderGalleryTemplate(allFiles, albumsData.albums, trashedFiles, favorites));
-  });
-
-  app.get('/login', (_req: Request, res: Response) => {
-    res.redirect('/');
-  });
-
-  app.get('/trash', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.redirect('/');
-      return;
-    }
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const trashFolder = path.join(userFolder, 'trash');
-    fs.mkdirSync(userFolder, { recursive: true });
-    fs.mkdirSync(trashFolder, { recursive: true });
-    const activeFiles = listMediaFiles(userFolder, sess.username);
-    const trashedFiles = listMediaFiles(trashFolder, sess.username);
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderTrashTemplate(trashedFiles, activeFiles));
-  });
-
-  // --- SESSION & ALBUMS API (Used by Web & Native Android APK Client) ---
-  app.get('/api/session', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.json({ authenticated: false });
-      return;
-    }
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const trashFolder = path.join(userFolder, 'trash');
-    const albumsData = loadUserAlbums(sess.username);
-    const activeMediaFiles = listMediaFiles(userFolder, sess.username);
-    const trashedMediaFiles = listMediaFiles(trashFolder, sess.username);
-    const favorites = [...loadUserFavorites(sess.username)].filter(
-      (f) =>
-        activeMediaFiles.some((m) => m.filename === f) || trashedMediaFiles.some((m) => m.filename === f)
-    );
-    res.json({
-      authenticated: true,
-      username: sess.username,
-      media: activeMediaFiles,
-      mediaFiles: activeMediaFiles,
-      trashedFiles: trashedMediaFiles,
-      albums: albumsData.albums,
-      fileAlbums: albumsData.fileAlbums,
-      favorites,
-      storageStats: computeCloudStorageStats(
-        activeMediaFiles,
-        trashedMediaFiles,
-        thumbCache.getUserStats(userFolder).diskBytes
-      ),
-    });
-  });
-
-  app.get('/api/albums', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    res.json(loadUserAlbums(sess.username));
-  });
-
-  app.post('/api/albums/create', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const rawName = String(req.body?.name || '').trim();
-    if (!isValidAlbumName(rawName)) {
-      res.status(400).json({ error: 'Nome album non valido' });
-      return;
-    }
-    const data = loadUserAlbums(sess.username);
-    if (!data.albums.includes(rawName)) {
-      data.albums.push(rawName);
-      data.albums.sort((a, b) => a.localeCompare(b, 'it'));
-      saveUserAlbums(sess.username, data);
-    }
-    res.json({ success: true, ...data });
-  });
-
-  app.post('/api/albums/assign', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const filenames: unknown[] = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
-    const albumName = String(req.body?.album || '').trim();
-    if (albumName && !isValidAlbumName(albumName)) {
-      res.status(400).json({ error: 'Nome album non valido' });
-      return;
-    }
-    const data = loadUserAlbums(sess.username);
-
-    if (albumName && !data.albums.includes(albumName)) {
-      data.albums.push(albumName);
-      data.albums.sort((a, b) => a.localeCompare(b, 'it'));
-    }
-
-    for (const fn of filenames) {
-      if (!isValidVaultFilename(fn)) continue;
-      if (albumName) {
-        data.fileAlbums[fn] = albumName;
-      } else {
-        delete data.fileAlbums[fn];
-      }
-    }
-    saveUserAlbums(sess.username, data);
-    res.json({ success: true, ...data });
-  });
-
-  app.post('/api/albums/delete', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const albumName = String(req.body?.name || '').trim();
-    if (!isValidAlbumName(albumName)) {
-      res.status(400).json({ error: 'Nome album non valido' });
-      return;
-    }
-    const data = loadUserAlbums(sess.username);
-    data.albums = data.albums.filter((a) => a !== albumName);
-    for (const [fn, alb] of Object.entries(data.fileAlbums)) {
-      if (alb === albumName) {
-        delete data.fileAlbums[fn];
-      }
-    }
-    saveUserAlbums(sess.username, data);
-    deleteAlbumSharesForAlbum(UPLOAD_FOLDER, sess.username, albumName);
-    res.json({ success: true, ...data });
-  });
-
-  // ==========================================================================
-  // v1.4.0 — FAVORITI (⭐) persistenti per utente
-  // ==========================================================================
-  app.get('/api/favorites', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    res.json({ favorites: [...loadUserFavorites(sess.username)] });
-  });
-
-  app.post('/api/favorites/toggle', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const filename = String(req.body?.filename || '');
-    if (!isValidVaultFilename(filename)) {
-      res.status(400).json({ error: 'Nome file non valido' });
-      return;
-    }
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const trashFolder = path.join(userFolder, 'trash');
-    const existsActive = fs.existsSync(path.join(userFolder, filename));
-    const existsTrash = fs.existsSync(path.join(trashFolder, filename));
-    if (!existsActive && !existsTrash) {
-      res.status(404).json({ error: 'File non trovato' });
-      return;
-    }
-    const favorites = loadUserFavorites(sess.username);
-    let isFavorite: boolean;
-    if (favorites.has(filename)) {
-      favorites.delete(filename);
-      isFavorite = false;
-    } else {
-      favorites.add(filename);
-      isFavorite = true;
-    }
-    saveUserFavorites(sess.username, favorites);
-    res.json({ success: true, isFavorite, favorites: [...favorites] });
-  });
-
-  app.post('/api/favorites/set-many', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const filenames: unknown[] = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
-    const makeFavorite = req.body?.favorite === true;
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const favorites = loadUserFavorites(sess.username);
-    for (const fn of filenames) {
-      if (!isValidVaultFilename(fn)) continue;
-      if (!fs.existsSync(path.join(userFolder, fn))) continue;
-      if (makeFavorite) favorites.add(fn);
-      else favorites.delete(fn);
-    }
-    saveUserFavorites(sess.username, favorites);
-    res.json({ success: true, favorites: [...favorites] });
-  });
-
-  // ==========================================================================
-  // v1.4.0 — RICORDI ("In questo giorno"): media scattati nello stesso
-  // giorno/mese degli anni passati, in base al timestamp originale del file.
-  // ==========================================================================
-  app.get('/api/memories', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth();
-    const currentDay = now.getDate();
-
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const allFiles = listMediaFiles(userFolder, sess.username);
-
-    const onThisDay = allFiles
-      .filter((m) => {
-        if (!m.isMedia) return false;
-        const d = new Date(m.timestamp * 1000);
-        return d.getMonth() === currentMonth && d.getDate() === currentDay && d.getFullYear() < currentYear;
-      })
-      .sort((a, b) => b.timestamp - a.timestamp);
-
-    // Raggruppa per anno per le sezioni "N anni fa"
-    const byYear = new Map<number, MediaItem[]>();
-    for (const item of onThisDay) {
-      const year = new Date(item.timestamp * 1000).getFullYear();
-      if (!byYear.has(year)) byYear.set(year, []);
-      byYear.get(year)!.push(item);
-    }
-    const sections = [...byYear.entries()]
-      .sort((a, b) => b[0] - a[0])
-      .map(([year, items]) => ({
-        year,
-        yearsAgo: currentYear - year,
-        items,
-      }));
-
-    res.json({
-      date: `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(currentDay).padStart(2, '0')}`,
-      count: onThisDay.length,
-      sections,
-    });
-  });
-
-  // ==========================================================================
-  // v1.4.0 — RICERCA IN LINGUAGGIO NATURALE (IT/EN)
-  // ==========================================================================
-  app.get('/api/search', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const rawQuery = String(req.query.q || '').slice(0, 200);
-    if (!rawQuery.trim()) {
-      res.json({ query: rawQuery, explanation: [], results: [] });
-      return;
-    }
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const favorites = loadUserFavorites(sess.username);
-    const allFiles = listMediaFiles(userFolder, sess.username);
-    const parsed = parseNaturalQuery(rawQuery);
-    const results = allFiles.filter((item) =>
-      mediaItemMatchesQuery(
-        { filename: item.filename, timestamp: item.timestamp, isMedia: item.isMedia === true, album: item.album },
-        parsed,
-        favorites
-      )
-    );
-    res.json({
-      query: rawQuery,
-      explanation: parsed.explanation,
-      count: results.length,
-      results,
-    });
-  });
-
-  // ==========================================================================
-  // v1.4.0 — DUPLICATI QUASI IDENTICI (perceptual hash DCT 64-bit)
-  // ==========================================================================
-  app.post('/api/similar_duplicates', async (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const thresholdRaw = Number(req.body?.threshold);
-    const maxDistance =
-      Number.isFinite(thresholdRaw) && thresholdRaw >= 0 ? Math.min(20, Math.floor(thresholdRaw)) : 8;
-
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    if (!fs.existsSync(userFolder)) {
-      res.json({ groups: [], scanned: 0, cached: 0 });
-      return;
-    }
-    const mediaFiles = listMediaFiles(userFolder, sess.username).filter((m) =>
-      isPHashSupportedFilename(m.filename)
-    );
-
-    const cache = loadPHashCache(sess.username);
-    const entries: Array<{ filename: string; phash: string }> = [];
-    let recomputed = 0;
-    let cacheHits = 0;
-
-    for (const m of mediaFiles) {
-      const fullPath = path.join(userFolder, m.filename);
-      let stat: fs.Stats;
-      try {
-        stat = fs.statSync(fullPath);
-      } catch {
-        continue;
-      }
-      const cached = cache.entries[m.filename];
-      if (cached && typeof cached.phash === 'string' && Math.abs(cached.mtimeMs - stat.mtimeMs) < 1) {
-        entries.push({ filename: m.filename, phash: cached.phash });
-        cacheHits++;
-        continue;
-      }
-      try {
-        const enc = await fs.promises.readFile(fullPath);
-        const dec = await decryptFileAsync(enc, sess.apiKey);
-        const phash = await computePHashHex(dec);
-        cache.entries[m.filename] = { phash, mtimeMs: stat.mtimeMs };
-        entries.push({ filename: m.filename, phash });
-        recomputed++;
-      } catch {
-        // immagine non decodificabile (es. HEIC): ignorata dalla scansione
-      }
-    }
-
-    // Ripulisci la cache dai file non più presenti nel vault attivo
-    const activeSet = new Set(mediaFiles.map((m) => m.filename));
-    for (const key of Object.keys(cache.entries)) {
-      if (!activeSet.has(key)) delete cache.entries[key];
-    }
-    savePHashCache(sess.username, cache);
-
-    const grouped = groupSimilarByHash(entries, maxDistance).map((group) => {
-      const sorted = [...group].sort((a, b) => a.filename.localeCompare(b.filename, 'it'));
-      return {
-        filenames: sorted.map((g) => g.filename),
-        distances: sorted.map((g) => hammingDistanceHex(sorted[0].phash, g.phash)),
-      };
-    });
-
-    res.json({
-      groups: grouped,
-      scanned: recomputed,
-      cached: cacheHits,
-      total: entries.length,
-      threshold: maxDistance,
-    });
-  });
-
-  // ==========================================================================
-  // v1.4.0 — NOTIFICHE PUSH WEB (VAPID): iscrizione/disicrizione dispositivi
-  // ==========================================================================
-  app.get('/api/push/vapid-key', (_req: Request, res: Response) => {
-    const key = getVapidPublicKey();
-    if (!key) {
-      res.status(503).json({ error: 'Notifiche push non disponibili sul server' });
-      return;
-    }
-    res.json({ publicKey: key });
+    res.json({ publicKey });
   });
 
   app.post('/api/push/subscribe', (req: Request, res: Response) => {
-    const sess = getSession(req);
+    const sess = getAuthenticatedV2User(req, zkV2);
     if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
+      res.status(401).json({ error: 'UNAUTHENTICATED' });
       return;
     }
-    const sub = req.body?.subscription;
-    const endpoint = typeof sub?.endpoint === 'string' ? sub.endpoint : '';
-    const p256dh = typeof sub?.keys?.p256dh === 'string' ? sub.keys.p256dh : '';
-    const auth = typeof sub?.keys?.auth === 'string' ? sub.keys.auth : '';
-    if (!/^https:\/\/.{10,2000}$/.test(endpoint) || !p256dh || !auth) {
-      res.status(400).json({ error: 'Subscription push non valida' });
+    const sub = req.body;
+    if (!sub || typeof sub.endpoint !== 'string' || !sub.keys?.p256dh || !sub.keys?.auth) {
+      res.status(400).json({ error: 'Sottoscrizione push non valida' });
       return;
     }
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const total = addUserSubscription(userFolder, {
-      endpoint,
-      keys: { p256dh, auth },
+    const userPushDir = path.join(vaultV2Dir, 'push', sess.userId);
+    fs.mkdirSync(userPushDir, { recursive: true });
+    addUserSubscription(userPushDir, {
+      endpoint: sub.endpoint,
+      keys: { p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth) },
       userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
       createdAt: Date.now(),
     });
-    res.json({ success: true, subscriptions: total });
+    res.json({ success: true });
   });
 
   app.post('/api/push/unsubscribe', (req: Request, res: Response) => {
-    const sess = getSession(req);
+    const sess = getAuthenticatedV2User(req, zkV2);
     if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
+      res.status(401).json({ error: 'UNAUTHENTICATED' });
       return;
     }
     const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint : '';
@@ -1337,2481 +317,12 @@ async function startServer() {
       res.status(400).json({ error: 'Endpoint mancante' });
       return;
     }
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const remaining = removeUserSubscription(userFolder, endpoint);
-    res.json({ success: true, subscriptions: remaining });
-  });
-
-  /** Notifica broadcast all'utente (fire-and-forget, mai bloccante). */
-  function notifyUserAsync(username: string, title: string, body: string, tag?: string): void {
-    const userFolder = path.join(UPLOAD_FOLDER, username);
-    void sendPushToUser(userFolder, { title, body, tag });
-  }
-
-  // ==========================================================================
-  // v1.4.1 — METADATI EXIF (fotocamera, apertura, ISO, data originale, GPS)
-  // ==========================================================================
-  app.get('/api/exif/:filename', async (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const filename = String(req.params.filename || '');
-    if (!isValidVaultFilename(filename)) {
-      res.status(400).json({ error: 'Nome file non valido' });
-      return;
-    }
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const fullPath = path.join(userFolder, filename);
-    const trashPath = path.join(userFolder, 'trash', filename);
-    if (!fs.existsSync(fullPath) && !fs.existsSync(trashPath)) {
-      res.status(404).json({ error: 'File non trovato' });
-      return;
-    }
-    if (!isExifParseableFilename(filename)) {
-      // Forma di risposta stabile: EXIF vuoto per formati non-JPEG
-      res.json({ filename, exif: emptyExifMetadata(), supported: false });
-      return;
-    }
-    const exif = await getExifForVaultFile(sess.username, filename, sess.apiKey);
-    if (!exif) {
-      res.status(404).json({ error: 'File non trovato' });
-      return;
-    }
-    res.json({ filename, exif, supported: true });
-  });
-
-  // ==========================================================================
-  // v1.4.1 — MAPPA FOTO GPS: elenco dei media con coordinate EXIF
-  // ==========================================================================
-  app.get('/api/map-photos', async (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    fs.mkdirSync(userFolder, { recursive: true });
-    const mediaItems = listMediaFiles(userFolder, sess.username);
-    const items: Array<{
-      filename: string;
-      lat: number;
-      lon: number;
-      timestamp: number;
-      album: string;
-    }> = [];
-    let processed = 0;
-    let cacheHits = 0;
-    const cacheBefore = loadExifCache(sess.username);
-    for (const m of mediaItems) {
-      if (!m.isMedia || !isExifParseableFilename(m.filename)) continue;
-      const hadCache = Boolean(cacheBefore.entries[m.filename]);
-      const exif = await getExifForVaultFile(sess.username, m.filename, sess.apiKey);
-      processed++;
-      if (!exif) continue;
-      if (hadCache) cacheHits++;
-      if (exif.hasGps && exif.latitude !== null && exif.longitude !== null) {
-        items.push({
-          filename: m.filename,
-          lat: exif.latitude,
-          lon: exif.longitude,
-          timestamp: exif.dateTimeOriginalMs ? exif.dateTimeOriginalMs / 1000 : m.timestamp,
-          album: m.album || '',
-        });
-      }
-    }
-    res.json({ count: items.length, processed, cacheHits, items });
-  });
-
-  // Pagina dedicata: mappa interattiva (tile pubbliche OpenStreetMap)
-  app.get('/map', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.redirect('/');
-      return;
-    }
-    res.setHeader(
-      'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
-    );
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(renderMapPage(sess.username));
-  });
-
-  // ==========================================================================
-  // v1.4.0 — CONDIVISIONI PUBBLICHE TEMPORANEE (link opachi, revocabili)
-  // ==========================================================================
-  app.post('/api/shares/create', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const rawFilenames: unknown[] = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const filenames = rawFilenames
-      .filter((f): f is string => isValidVaultFilename(f))
-      .filter((f) => fs.existsSync(path.join(userFolder, f)))
-      .slice(0, 500);
-    if (filenames.length === 0) {
-      res.status(400).json({ error: 'Nessun file valido selezionato' });
-      return;
-    }
-    const expiresInHoursRaw = Number(req.body?.expiresInHours);
-    const expiresInHours =
-      Number.isFinite(expiresInHoursRaw) && expiresInHoursRaw > 0
-        ? Math.min(expiresInHoursRaw, 24 * 365)
-        : 72;
-    const maxDownloadsRaw = Number(req.body?.maxDownloads);
-    const maxDownloads =
-      Number.isFinite(maxDownloadsRaw) && maxDownloadsRaw > 0 ? Math.min(maxDownloadsRaw, 100000) : null;
-    const password = typeof req.body?.password === 'string' ? req.body.password.slice(0, 128) : '';
-
-    const { token, record } = createPublicShare(UPLOAD_FOLDER, getServerSecret(), {
-      owner: sess.username,
-      ownerApiKey: sess.apiKey,
-      filenames,
-      label: typeof req.body?.label === 'string' ? req.body.label : '',
-      expiresInHours,
-      password,
-      maxDownloads,
-    });
-
-    res.json({
-      success: true,
-      url: `/share/${token}`,
-      expiresAt: record.expiresAt,
-      count: record.filenames.length,
-    });
-  });
-
-  app.get('/api/shares', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const all = loadPublicShares(UPLOAD_FOLDER);
-    const mine = Object.values(all)
-      .filter((s) => s.owner === sess.username)
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .map((s) => ({
-        id: s.id,
-        filenames: s.filenames,
-        label: s.label,
-        createdAt: s.createdAt,
-        expiresAt: s.expiresAt,
-        expired: s.expiresAt > 0 && s.expiresAt <= Date.now(),
-        hasPassword: !!s.passwordHash,
-        maxDownloads: s.maxDownloads,
-        downloadCount: s.downloadCount,
-      }));
-    res.json({ shares: mine });
-  });
-
-  app.post('/api/shares/delete', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const id = String(req.body?.id || '');
-    if (!/^[0-9a-f]{64}$/.test(id)) {
-      res.status(400).json({ error: 'ID condivisione non valido' });
-      return;
-    }
-    const all = loadPublicShares(UPLOAD_FOLDER);
-    const rec = all[id];
-    if (!rec || rec.owner !== sess.username) {
-      res.status(404).json({ error: 'Condivisione non trovata' });
-      return;
-    }
-    delete all[id];
-    savePublicShares(UPLOAD_FOLDER, all);
-    evictSharePreviewCache(id);
-    evictSharePlaybackGrants(id);
+    const userPushDir = path.join(vaultV2Dir, 'push', sess.userId);
+    removeUserSubscription(userPushDir, endpoint);
     res.json({ success: true });
   });
 
-  // ==========================================================================
-  // v1.4.0 — PAGINE PUBBLICHE DI CONDIVISIONE (senza autenticazione)
-  // ==========================================================================
-  function isShareUnlocked(req: Request, record: PublicShareRecord): boolean {
-    if (!record.passwordHash) return true;
-    const cookies = parseCookies(req.headers.cookie);
-    return cookies[`pc_share_${record.id.slice(0, 16)}`] === shareUnlockCookieValue(
-      // Il client conosce solo il token; ricostruiamo il check dal token in URL
-      String(req.params.token || '')
-    );
-  }
-
-  const SHARE_IP_RATE_WINDOW_MS = 60 * 1000;
-  const SHARE_IP_RATE_MAX = Math.max(10, Number(process.env.SHARE_RATE_LIMIT_MAX || 600));
-  const shareIpRateBuckets = new Map<string, { count: number; resetAt: number }>();
-
-  app.use('/share', (req: Request, res: Response, next: NextFunction) => {
-    const now = Date.now();
-    if (shareIpRateBuckets.size > 500) {
-      for (const [k, v] of shareIpRateBuckets.entries()) {
-        if (now >= v.resetAt) shareIpRateBuckets.delete(k);
-      }
-    }
-    const clientIp = String(req.ip || req.socket.remoteAddress || 'unknown');
-    let bucket = shareIpRateBuckets.get(clientIp);
-    if (!bucket || now >= bucket.resetAt) {
-      bucket = { count: 0, resetAt: now + SHARE_IP_RATE_WINDOW_MS };
-      shareIpRateBuckets.set(clientIp, bucket);
-    }
-    bucket.count += 1;
-    if (bucket.count > SHARE_IP_RATE_MAX) {
-      const retryAfterSec = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
-      res.status(429).setHeader('Retry-After', String(retryAfterSec)).send('Troppe richieste su /share. Riprova tra poco.');
-      return;
-    }
-    next();
-  });
-
-  app.get('/share/:token', (req: Request, res: Response) => {
-    const token = String(req.params.token || '');
-    if (!SHARE_TOKEN_REGEX.test(token)) {
-      res.status(404).setHeader('Content-Type', 'text/html; charset=utf-8').send(renderShareErrorPage('invalid'));
-      return;
-    }
-    const resolved = resolveShareByToken(UPLOAD_FOLDER, token);
-    if ('error' in resolved) {
-      res
-        .status(resolved.error === 'expired' ? 410 : resolved.error === 'exhausted' ? 410 : 404)
-        .setHeader('Content-Type', 'text/html; charset=utf-8')
-        .send(renderShareErrorPage(resolved.error));
-      return;
-    }
-    const { record } = resolved;
-    if (record.passwordHash && !isShareUnlocked(req, record)) {
-      res.status(401).setHeader('Content-Type', 'text/html; charset=utf-8').send(renderSharePasswordPage(token));
-      return;
-    }
-    record.filenames = record.filenames.filter((f) =>
-      fs.existsSync(path.join(UPLOAD_FOLDER, record.owner, f))
-    );
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(
-      renderSharePage({
-        token,
-        filenames: record.filenames,
-        label: record.label,
-        owner: record.owner,
-        expiresAt: record.expiresAt,
-        maxDownloads: record.maxDownloads,
-      })
-    );
-  });
-
-  app.post('/share/:token/unlock', (req: Request, res: Response) => {
-    const token = String(req.params.token || '');
-    if (!SHARE_TOKEN_REGEX.test(token)) {
-      res.status(404).setHeader('Content-Type', 'text/html; charset=utf-8').send(renderShareErrorPage('invalid'));
-      return;
-    }
-    const clientIp = String(req.ip || req.socket.remoteAddress || 'unknown');
-    if (isShareUnlockRateLimited(clientIp)) {
-      res
-        .status(429)
-        .setHeader('Content-Type', 'text/html; charset=utf-8')
-        .send(renderSharePasswordPage(token, 'Troppi tentativi. Riprova tra qualche minuto.'));
-      return;
-    }
-    const resolved = resolveShareByToken(UPLOAD_FOLDER, token);
-    if ('error' in resolved) {
-      res.status(410).setHeader('Content-Type', 'text/html; charset=utf-8').send(renderShareErrorPage(resolved.error));
-      return;
-    }
-    const password = typeof req.body?.password === 'string' ? req.body.password.slice(0, 128) : '';
-    if (!verifySharePassword(resolved.record, password)) {
-      res
-        .status(401)
-        .setHeader('Content-Type', 'text/html; charset=utf-8')
-        .send(renderSharePasswordPage(token, 'Password errata.'));
-      return;
-    }
-    res.setHeader(
-      'Set-Cookie',
-      `pc_share_${resolved.id.slice(0, 16)}=${shareUnlockCookieValue(token)}; Path=/share/${token}; HttpOnly; SameSite=Lax; Max-Age=86400${req.secure ? '; Secure' : ''}`
-    );
-    res.redirect(`/share/${token}`);
-  });
-
-  const SHARE_PLAYBACK_WINDOW_MS = 2 * 60 * 60 * 1000;
-  const SHARE_PLAYBACK_BUDGET_FACTOR = 1.5;
-  interface SharePlaybackGrant {
-    grantedAt: number;
-    bytesUsed: number;
-    maxBytes: number;
-  }
-  const SHARE_PLAYBACK_GRANTS = new Map<string, SharePlaybackGrant>();
-
-  function pruneSharePlaybackGrants(now: number): void {
-    for (const [k, grant] of SHARE_PLAYBACK_GRANTS.entries()) {
-      if (now - grant.grantedAt > SHARE_PLAYBACK_WINDOW_MS) {
-        SHARE_PLAYBACK_GRANTS.delete(k);
-      }
-    }
-  }
-
-  function evictSharePlaybackGrants(shareId: string): void {
-    const prefix = `${shareId}:`;
-    for (const key of SHARE_PLAYBACK_GRANTS.keys()) {
-      if (key.startsWith(prefix)) {
-        SHARE_PLAYBACK_GRANTS.delete(key);
-      }
-    }
-  }
-
-  const MAX_SHARE_PREVIEW_CACHE_ENTRIES = 120;
-  const MAX_CONCURRENT_JIMP_PREVIEWS = 2;
-  const MAX_JIMP_PREVIEW_QUEUE_LENGTH = Math.max(1, Number(process.env.MAX_JIMP_PREVIEW_QUEUE || 32));
-  const MAX_JIMP_QUEUE_WAIT_MS = Math.max(50, Number(process.env.MAX_JIMP_QUEUE_WAIT_MS || 10000));
-  const SHARE_PREVIEW_CACHE = new Map<string, { buffer: Buffer; etag: string }>();
-  const SHARE_PREVIEW_INFLIGHT = new Map<string, Promise<{ buffer: Buffer; etag: string }>>();
-  let activeJimpPreviews = 0;
-  const jimpPreviewQueue: Array<() => void> = [];
-
-  function evictSharePreviewCache(shareId: string): void {
-    const prefix = `${shareId}:`;
-    for (const key of SHARE_PREVIEW_CACHE.keys()) {
-      if (key.startsWith(prefix)) {
-        SHARE_PREVIEW_CACHE.delete(key);
-      }
-    }
-    for (const key of SHARE_PREVIEW_INFLIGHT.keys()) {
-      if (key.startsWith(prefix)) {
-        SHARE_PREVIEW_INFLIGHT.delete(key);
-      }
-    }
-  }
-
-  function runWithJimpConcurrency<T>(task: () => Promise<T>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      let waitTimer: ReturnType<typeof setTimeout> | null = null;
-      const execute = () => {
-        if (waitTimer) {
-          clearTimeout(waitTimer);
-          waitTimer = null;
-        }
-        activeJimpPreviews++;
-        task()
-          .then(resolve, reject)
-          .finally(() => {
-            activeJimpPreviews--;
-            const next = jimpPreviewQueue.shift();
-            if (next) next();
-          });
-      };
-      if (activeJimpPreviews < MAX_CONCURRENT_JIMP_PREVIEWS) {
-        execute();
-      } else if (jimpPreviewQueue.length >= MAX_JIMP_PREVIEW_QUEUE_LENGTH) {
-        reject(new Error('JIMP_QUEUE_FULL'));
-      } else {
-        waitTimer = setTimeout(() => {
-          const idx = jimpPreviewQueue.indexOf(execute);
-          if (idx >= 0) {
-            jimpPreviewQueue.splice(idx, 1);
-          }
-          reject(new Error('JIMP_QUEUE_TIMEOUT'));
-        }, MAX_JIMP_QUEUE_WAIT_MS);
-        jimpPreviewQueue.push(execute);
-      }
-    });
-  }
-
-  function escapeSvgText(raw: string): string {
-    return String(raw)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  app.get('/share/:token/media/:filename', async (req: Request, res: Response) => {
-    const token = String(req.params.token || '');
-    if (!SHARE_TOKEN_REGEX.test(token)) {
-      res.status(404).send('Link non valido');
-      return;
-    }
-    const resolved = resolveShareByToken(UPLOAD_FOLDER, token);
-    if ('error' in resolved && resolved.error !== 'exhausted') {
-      evictSharePreviewCache(crypto.createHash('sha256').update(token).digest('hex'));
-      res.status(410).send('Link scaduto o non valido');
-      return;
-    }
-    const { id, record } = resolved;
-    if (record.passwordHash && !isShareUnlocked(req, record)) {
-      res.status(401).send('Password richiesta');
-      return;
-    }
-    const filename = String(req.params.filename);
-    if (!isValidVaultFilename(filename) || !record.filenames.includes(filename)) {
-      res.status(404).send('File non condiviso');
-      return;
-    }
-    const ownerFolder = path.join(UPLOAD_FOLDER, record.owner);
-    const safeFilepath = path.resolve(ownerFolder, filename);
-    if (!safeFilepath.startsWith(path.resolve(ownerFolder) + path.sep) || !fs.existsSync(safeFilepath)) {
-      res.status(404).send('File non trovato');
-      return;
-    }
-    const apiKey = unwrapSecret(getServerSecret(), record.keyWrap);
-    if (!apiKey) {
-      res.status(500).send('Condivisione non decifrabile');
-      return;
-    }
-    try {
-      const spec = resolveFileViewerSpec(filename);
-      const isExplicitDownload = req.query.download === '1' || req.query.download === 'true';
-      const rawPreview = String(req.query.preview || '').trim().toLowerCase();
-      const previewVariant: 'thumb' | 'large' | null =
-        !isExplicitDownload && (rawPreview === '1' || rawPreview === 'true' || rawPreview === 'thumb')
-          ? 'thumb'
-          : !isExplicitDownload && rawPreview === 'large'
-          ? 'large'
-          : null;
-      const isDangerousExt = ACTIVE_SCRIPT_EXTS.has(spec.extension);
-
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader(
-        'Content-Security-Policy',
-        "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox"
-      );
-
-      if (previewVariant !== null) {
-        if ('error' in resolved) {
-          evictSharePreviewCache(id);
-          res.status(410).send('Limite download raggiunto');
-          return;
-        }
-        const stat = await fs.promises.stat(safeFilepath);
-        const maxDim = previewVariant === 'large' ? 1280 : 360;
-        const jpegQuality = previewVariant === 'large' ? 75 : 68;
-        const cacheKey = `${id}:${filename}:${stat.mtimeMs}:${previewVariant}`;
-
-        if (isPHashSupportedFilename(filename)) {
-          try {
-            let cached = SHARE_PREVIEW_CACHE.get(cacheKey);
-            if (!cached) {
-              let inflight = SHARE_PREVIEW_INFLIGHT.get(cacheKey);
-              if (!inflight) {
-                inflight = runWithJimpConcurrency(async () => {
-                  const encryptedBuf = await fs.promises.readFile(safeFilepath);
-                  const decryptedBuf = await decryptFileAsync(encryptedBuf, apiKey);
-                  const { Jimp } = await import('jimp');
-                  const image = await Jimp.fromBuffer(decryptedBuf);
-                  const srcW = Math.max(1, image.bitmap.width || 64);
-                  const srcH = Math.max(1, image.bitmap.height || 64);
-                  const scale = Math.max(srcW, srcH) > maxDim ? maxDim / Math.max(srcW, srcH) : 1;
-                  const targetW = Math.max(1, Math.round(srcW * scale));
-                  const targetH = Math.max(1, Math.round(srcH * scale));
-                  if (scale !== 1) {
-                    image.resize({ w: targetW, h: targetH });
-                  }
-                  const previewJpeg = Buffer.from(await image.getBuffer('image/jpeg', { quality: jpegQuality }));
-                  const etag = `"prev-${id.slice(0, 12)}-${previewVariant}-${crypto.createHash('sha256').update(previewJpeg).digest('hex').slice(0, 24)}"`;
-                  return { buffer: previewJpeg, etag };
-                });
-                SHARE_PREVIEW_INFLIGHT.set(cacheKey, inflight);
-              }
-              try {
-                cached = await inflight;
-                if (SHARE_PREVIEW_CACHE.size >= MAX_SHARE_PREVIEW_CACHE_ENTRIES) {
-                  const oldestKey = SHARE_PREVIEW_CACHE.keys().next().value;
-                  if (oldestKey) SHARE_PREVIEW_CACHE.delete(oldestKey);
-                }
-                SHARE_PREVIEW_CACHE.set(cacheKey, cached);
-              } finally {
-                SHARE_PREVIEW_INFLIGHT.delete(cacheKey);
-              }
-            }
-
-            res.setHeader('ETag', cached.etag);
-            res.setHeader('Cache-Control', 'private, no-cache');
-            if (req.headers['if-none-match'] === cached.etag) {
-              res.status(304).end();
-              return;
-            }
-            res.setHeader('Content-Type', 'image/jpeg');
-            res.setHeader('Content-Disposition', `inline; filename="preview_${encodeURIComponent(filename)}.jpg"`);
-            res.setHeader('Content-Length', String(cached.buffer.length));
-            res.send(cached.buffer);
-            return;
-          } catch (jimpErr) {
-            if (
-              jimpErr instanceof Error &&
-              (jimpErr.message === 'JIMP_QUEUE_FULL' || jimpErr.message === 'JIMP_QUEUE_TIMEOUT')
-            ) {
-              res.status(503).setHeader('Retry-After', '2').send('Servizio anteprime temporaneamente sovraccarico');
-              return;
-            }
-            // fallback to SVG poster below
-          }
-        }
-        const extLabel = (spec.extension || 'FILE').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'MEDIA';
-        const safeSvgName = escapeSvgText(filename.slice(0, 48));
-        const svgPoster = Buffer.from(
-          `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240"><title>${safeSvgName}</title><rect width="240" height="240" fill="#111a2e"/><circle cx="120" cy="104" r="34" fill="rgba(79,140,255,0.18)" stroke="#4f8cff" stroke-width="2"/><polygon points="112,88 112,120 138,104" fill="#9dbbff"/><text x="120" y="168" text-anchor="middle" fill="#9dbbff" font-family="sans-serif" font-size="14" font-weight="bold">${extLabel}</text><text x="120" y="192" text-anchor="middle" fill="#8ca0c6" font-family="sans-serif" font-size="11">${safeSvgName}</text></svg>`,
-          'utf-8'
-        );
-        const posterEtag = `"svg-${id.slice(0, 12)}-${crypto.createHash('sha256').update(svgPoster).digest('hex').slice(0, 24)}"`;
-        res.setHeader('ETag', posterEtag);
-        res.setHeader('Cache-Control', 'private, no-cache');
-        if (req.headers['if-none-match'] === posterEtag) {
-          res.status(304).end();
-          return;
-        }
-        res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
-        res.setHeader('Content-Disposition', 'inline; filename="poster.svg"');
-        res.setHeader('Content-Length', String(svgPoster.length));
-        res.send(svgPoster);
-        return;
-      }
-
-      const encrypted = fs.readFileSync(safeFilepath);
-      const plaintextSize = encryptedPlaintextSize(encrypted);
-
-      const parsedRange = parseHttpByteRange(req.headers.range, plaintextSize);
-      if (parsedRange.status === 'invalid') {
-        res.status(416).setHeader('Content-Range', `bytes */${plaintextSize}`).end();
-        return;
-      }
-
-      const isAudioOrVideo = spec.mimeType.startsWith('video/') || spec.mimeType.startsWith('audio/');
-      const now = Date.now();
-      pruneSharePlaybackGrants(now);
-      const cookies = parseCookies(req.headers.cookie);
-      const rawVisitorToken = String(cookies['pc_pb'] || req.query.pt || req.headers['x-playback-token'] || '').trim();
-      const validVisitorToken = /^[0-9a-f]{32}$/.test(rawVisitorToken) ? rawVisitorToken : '';
-      const responseBytes =
-        parsedRange.status === 'ok' ? parsedRange.end - parsedRange.start + 1 : plaintextSize;
-      const maxGrantBytes = Math.max(1, Math.floor(plaintextSize * SHARE_PLAYBACK_BUDGET_FACTOR));
-
-      // Prenotazione sincrona dei byte PRIMA di decryptFileAsync e invio (fail-closed in caso di disconnessione a metà)
-      let shouldCountDownload = true;
-      if (
-        isAudioOrVideo &&
-        !isExplicitDownload &&
-        parsedRange.status === 'ok' &&
-        validVisitorToken
-      ) {
-        const grantKey = `${id}:${validVisitorToken}:${filename}`;
-        const grant = SHARE_PLAYBACK_GRANTS.get(grantKey);
-        if (
-          grant !== undefined &&
-          now - grant.grantedAt <= SHARE_PLAYBACK_WINDOW_MS &&
-          grant.bytesUsed + responseBytes <= grant.maxBytes
-        ) {
-          grant.bytesUsed += responseBytes;
-          shouldCountDownload = false;
-        }
-      }
-
-      let newlyIssuedVisitorToken = '';
-      if (shouldCountDownload) {
-        if (!incrementShareDownloadCount(UPLOAD_FOLDER, id)) {
-          res.status(410).send('Limite download raggiunto');
-          return;
-        }
-        if (isAudioOrVideo && !isExplicitDownload && responseBytes <= maxGrantBytes) {
-          const visitorToken = validVisitorToken || crypto.randomBytes(16).toString('hex');
-          SHARE_PLAYBACK_GRANTS.set(`${id}:${visitorToken}:${filename}`, {
-            grantedAt: now,
-            bytesUsed: responseBytes,
-            maxBytes: maxGrantBytes,
-          });
-          if (!validVisitorToken) {
-            newlyIssuedVisitorToken = visitorToken;
-          }
-        }
-      }
-
-      const decrypted = await decryptFileAsync(encrypted, apiKey);
-      if (req.destroyed || res.destroyed || res.writableEnded) {
-        return;
-      }
-
-      res.setHeader('Accept-Ranges', 'bytes');
-      const mime = isDangerousExt && !isExplicitDownload ? 'text/plain; charset=utf-8' : spec.mimeType;
-      res.setHeader('Content-Type', mime);
-      res.setHeader(
-        'Content-Disposition',
-        `${isExplicitDownload || isDangerousExt ? 'attachment' : 'inline'}; filename="${encodeURIComponent(filename)}"`
-      );
-      if (newlyIssuedVisitorToken) {
-        res.append(
-          'Set-Cookie',
-          `pc_pb=${newlyIssuedVisitorToken}; Path=/share/${token}; HttpOnly; SameSite=Lax; Max-Age=7200${req.secure ? '; Secure' : ''}`
-        );
-      }
-
-      if (parsedRange.status === 'ok') {
-        const chunk = decrypted.subarray(parsedRange.start, parsedRange.end + 1);
-        res.status(206);
-        res.setHeader('Content-Range', `bytes ${parsedRange.start}-${parsedRange.end}/${decrypted.length}`);
-        res.setHeader('Content-Length', String(chunk.length));
-        res.send(chunk);
-        return;
-      }
-      res.setHeader('Content-Length', String(decrypted.length));
-      res.send(decrypted);
-    } catch {
-      res.status(500).send('Errore durante la decrittografia.');
-    }
-  });
-
-  // ==========================================================================
-  // v1.4.0 — ALBUM MULTI-UTENTE (condivisione tra utenti registrati)
-  // ==========================================================================
-  app.post('/api/albums/share', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const albumName = String(req.body?.album || '').trim();
-    const targetUser = String(req.body?.username || '').trim();
-    const role = req.body?.role === 'contributor' ? 'contributor' : 'viewer';
-    if (!isValidAlbumName(albumName)) {
-      res.status(400).json({ error: 'Nome album non valido' });
-      return;
-    }
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(targetUser) || targetUser === sess.username) {
-      res.status(400).json({ error: 'Utente destinatario non valido' });
-      return;
-    }
-    if (!findUser(targetUser)) {
-      res.status(404).json({ error: `Utente "${targetUser}" inesistente su questo server` });
-      return;
-    }
-    const data = loadUserAlbums(sess.username);
-    if (!data.albums.includes(albumName)) {
-      res.status(404).json({ error: 'Album non trovato' });
-      return;
-    }
-    const record = upsertAlbumShare(
-      UPLOAD_FOLDER,
-      getServerSecret(),
-      sess.username,
-      albumName,
-      sess.apiKey,
-      targetUser,
-      role
-    );
-    notifyUserAsync(
-      targetUser,
-      '📁 Album condiviso con te',
-      `${sess.username} ha condiviso l'album "${albumName}" (${role === 'contributor' ? 'puoi anche caricare' : 'sola lettura'}).`,
-      'photocloud-album-share'
-    );
-    res.json({ success: true, shareId: record.id, participants: record.participants });
-  });
-
-  app.post('/api/albums/unshare', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const albumName = String(req.body?.album || '').trim();
-    const targetUser = String(req.body?.username || '').trim();
-    const all = loadAlbumShares(UPLOAD_FOLDER);
-    let changed = false;
-    for (const rec of Object.values(all)) {
-      if (rec.owner !== sess.username || rec.album !== albumName) continue;
-      if (targetUser) {
-        if (delete rec.participants[targetUser]) changed = true;
-      } else {
-        delete all[rec.id];
-        changed = true;
-      }
-    }
-    if (changed) saveAlbumShares(UPLOAD_FOLDER, all);
-    res.json({ success: changed });
-  });
-
-  app.get('/api/albums/shared', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const all = loadAlbumShares(UPLOAD_FOLDER);
-    const ownedByMe: Array<Record<string, unknown>> = [];
-    const sharedWithMe: Array<Record<string, unknown>> = [];
-    for (const rec of Object.values(all)) {
-      if (rec.owner === sess.username) {
-        const albumsData = loadUserAlbums(rec.owner);
-        if (!albumsData.albums.includes(rec.album)) continue;
-        ownedByMe.push({
-          id: rec.id,
-          album: rec.album,
-          participants: rec.participants,
-          createdAt: rec.createdAt,
-          itemCount: listAlbumSharedFiles(rec.owner, rec.album).length,
-        });
-      } else if (rec.participants[sess.username]) {
-        const albumsData = loadUserAlbums(rec.owner);
-        if (!albumsData.albums.includes(rec.album)) continue;
-        sharedWithMe.push({
-          id: rec.id,
-          owner: rec.owner,
-          album: rec.album,
-          role: rec.participants[sess.username],
-          createdAt: rec.createdAt,
-          itemCount: listAlbumSharedFiles(rec.owner, rec.album).length,
-        });
-      }
-    }
-    res.json({ ownedByMe, sharedWithMe });
-  });
-
-  function resolveAlbumShareForUser(
-    req: Request,
-    sess: SessionData
-  ): { record: ReturnType<typeof loadAlbumShares>[string]; role: 'owner' | 'viewer' | 'contributor' } | null {
-    const shareId = String(req.params.shareId || '');
-    if (!/^[0-9a-f]{32,64}$/.test(shareId)) return null;
-    const all = loadAlbumShares(UPLOAD_FOLDER);
-    const record = all[shareId];
-    if (!record) return null;
-    const albumsData = loadUserAlbums(record.owner);
-    if (!albumsData.albums.includes(record.album)) return null;
-    if (record.owner === sess.username) return { record, role: 'owner' };
-    const role = record.participants[sess.username];
-    if (!role) return null;
-    return { record, role };
-  }
-
-  app.get('/api/shared-albums/:shareId/media', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const resolved = resolveAlbumShareForUser(req, sess);
-    if (!resolved) {
-      res.status(404).json({ error: 'Album condiviso non trovato o accesso negato' });
-      return;
-    }
-    const { record, role } = resolved;
-    res.json({
-      id: record.id,
-      owner: record.owner,
-      album: record.album,
-      role,
-      items: listAlbumSharedFiles(record.owner, record.album),
-    });
-  });
-
-  app.get('/api/shared-albums/:shareId/file/:filename', async (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).send('Accesso negato');
-      return;
-    }
-    const resolved = resolveAlbumShareForUser(req, sess);
-    if (!resolved) {
-      res.status(404).send('Album condiviso non trovato o accesso negato');
-      return;
-    }
-    const { record } = resolved;
-    const filename = String(req.params.filename);
-    if (!isValidVaultFilename(filename)) {
-      res.status(403).send('Accesso non autorizzato.');
-      return;
-    }
-    const albumsData = loadUserAlbums(record.owner);
-    if (albumsData.fileAlbums[filename] !== record.album) {
-      res.status(403).send('File non appartenente a questo album condiviso');
-      return;
-    }
-    const ownerFolder = path.resolve(UPLOAD_FOLDER, record.owner);
-    const safeFilepath = path.resolve(ownerFolder, filename);
-    if (!safeFilepath.startsWith(ownerFolder + path.sep) || !fs.existsSync(safeFilepath)) {
-      res.status(404).send('File non trovato');
-      return;
-    }
-    const apiKey = unwrapSecret(getServerSecret(), record.keyWrap);
-    if (!apiKey) {
-      res.status(500).send('Album condiviso non decifrabile');
-      return;
-    }
-    try {
-      const encrypted = await fs.promises.readFile(safeFilepath);
-      const decrypted = await decryptFileAsync(encrypted, apiKey);
-      const spec = resolveFileViewerSpec(filename);
-      const isDangerousExt = ACTIVE_SCRIPT_EXTS.has(spec.extension);
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader(
-        'Content-Security-Policy',
-        "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox"
-      );
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Content-Type', isDangerousExt ? 'text/plain; charset=utf-8' : spec.mimeType);
-      res.setHeader(
-        'Content-Disposition',
-        `${isDangerousExt ? 'attachment' : 'inline'}; filename="${encodeURIComponent(filename)}"`
-      );
-      const parsedRange = parseHttpByteRange(req.headers.range, decrypted.length);
-      if (parsedRange.status === 'invalid') {
-        res.status(416).setHeader('Content-Range', `bytes */${decrypted.length}`).end();
-        return;
-      }
-      if (parsedRange.status === 'ok') {
-        const chunk = decrypted.subarray(parsedRange.start, parsedRange.end + 1);
-        res.status(206);
-        res.setHeader('Content-Range', `bytes ${parsedRange.start}-${parsedRange.end}/${decrypted.length}`);
-        res.setHeader('Content-Length', String(chunk.length));
-        res.send(chunk);
-        return;
-      }
-      res.setHeader('Content-Length', String(decrypted.length));
-      res.send(decrypted);
-    } catch {
-      res.status(500).send('Errore durante la decrittografia.');
-    }
-  });
-
-  app.post(
-    '/api/shared-albums/:shareId/upload',
-    (req: Request, res: Response, next: NextFunction) => {
-      const sess = getSession(req);
-      if (!sess) {
-        res.status(403).json({ error: 'Accesso negato' });
-        return;
-      }
-      upload.array('file[]')(req, res, (err: unknown) => {
-        if (err) {
-          cleanupUploadedFiles(req);
-          res.status(400).json({ error: 'Upload non valido' });
-          return;
-        }
-        next();
-      });
-    },
-    async (req: Request, res: Response) => {
-      try {
-        const sess = getSession(req);
-        if (!sess) {
-          res.status(403).json({ error: 'Accesso negato' });
-          return;
-        }
-        const resolved = resolveAlbumShareForUser(req, sess);
-        if (!resolved || resolved.role !== 'contributor') {
-          res.status(403).json({ error: 'Solo i collaboratori possono caricare in questo album' });
-          return;
-        }
-        const files = req.files as Express.Multer.File[] | undefined;
-        if (!files || files.length === 0) {
-          res.status(400).json({ error: 'Nessun file' });
-          return;
-        }
-        const { record } = resolved;
-        const apiKey = unwrapSecret(getServerSecret(), record.keyWrap);
-        if (!apiKey) {
-          res.status(500).json({ error: 'Album condiviso non decifrabile' });
-          return;
-        }
-        const ownerFolder = path.join(UPLOAD_FOLDER, record.owner);
-        const uploadedFilenames: string[] = [];
-        for (const file of files) {
-          const rawOrig = path.basename(file.originalname || `file_${Date.now()}`);
-          const ext = path.extname(rawOrig) || '.bin';
-          let filename = '';
-          let filepath = '';
-          while (true) {
-            filename = `${crypto.randomBytes(8).toString('hex')}${ext}`;
-            filepath = path.join(ownerFolder, filename);
-            if (!fs.existsSync(filepath)) break;
-          }
-          const rawBuf = readUploadedFileBuffer(file);
-          const encrypted = await encryptFileAsync(rawBuf, apiKey);
-          await fs.promises.writeFile(filepath, encrypted);
-          uploadedFilenames.push(filename);
-        }
-        const albumsData = loadUserAlbums(record.owner);
-        for (const fn of uploadedFilenames) {
-          albumsData.fileAlbums[fn] = record.album;
-        }
-        saveUserAlbums(record.owner, albumsData);
-        notifyUserAsync(
-          record.owner,
-          '📥 Nuovo contenuto condiviso',
-          `${sess.username} ha caricato ${uploadedFilenames.length} file nell'album "${record.album}".`,
-          'photocloud-album-upload'
-        );
-        res.json({
-          success: true,
-          uploadedCount: uploadedFilenames.length,
-          uploadedFilenames,
-          items: listAlbumSharedFiles(record.owner, record.album),
-        });
-      } catch (e: unknown) {
-        res.status(500).json({ error: `Errore caricamento: ${e instanceof Error ? e.message : String(e)}` });
-      } finally {
-        cleanupUploadedFiles(req);
-      }
-    }
-  );
-
-  // --- APK & GITHUB ACTIONS / RELEASE ENDPOINTS ---
-  // Release publishing is deliberately not exposed over HTTP. Use the CLI/workflow.
-  app.all(['/api/release/status', '/api/github-actions/status', '/api/github-actions/trigger', '/api/release/publish'], (_req, res) => {
-    res.status(410).json({ error: 'Gestione release disponibile solo tramite CLI o GitHub Actions.' });
-  });
-
-  // --- REGISTRATION ---
-  app.post(
-    '/register',
-    (req: Request, res: Response, next: NextFunction) => {
-      upload.none()(req, res, (err: unknown) => {
-        if (err) {
-          res.status(400).send('Richiesta di registrazione non valida.');
-          return;
-        }
-        next();
-      });
-    },
-    (req: Request, res: Response) => {
-      const clientIp = String(req.ip || req.socket.remoteAddress || 'unknown');
-      const now = Date.now();
-      const regAttempt = REGISTER_ATTEMPTS.get(clientIp);
-      if (regAttempt && regAttempt.resetAt > now && regAttempt.count >= 25) {
-        res.status(429).send('Troppe registrazioni da questo indirizzo. Riprova più tardi.');
-        return;
-      }
-
-      const rawUsername = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
-      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(rawUsername)) {
-        res.status(400).send('Username non valido!');
-        return;
-      }
-      if (findUser(rawUsername)) {
-        res.status(409).send('Username già esistente!');
-        return;
-      }
-
-      const keyType = req.body?.key_type || 'generate';
-      let apiKey = '';
-      if (keyType === 'custom') {
-        apiKey = req.body?.custom_key || '';
-        if (!apiKey || apiKey.length < 8) {
-          res.status(400).send('La chiave personalizzata deve avere almeno 8 caratteri.');
-          return;
-        }
-      } else {
-        apiKey = generateApiKey(32);
-      }
-
-      const nextRegCount = regAttempt && regAttempt.resetAt > now ? regAttempt.count + 1 : 1;
-      REGISTER_ATTEMPTS.set(clientIp, { count: nextRegCount, resetAt: now + 15 * 60 * 1000 });
-
-      saveUser(rawUsername, hashKey(apiKey));
-      const userFolder = path.join(UPLOAD_FOLDER, rawUsername);
-      fs.mkdirSync(userFolder, { recursive: true });
-      fs.mkdirSync(path.join(userFolder, 'trash'), { recursive: true });
-
-      const authData = {
-        username: rawUsername,
-        api_key: apiKey,
-        session_id: crypto.randomUUID(),
-        created_at: Date.now() / 1000,
-        hash_of_key: hashKey(apiKey),
-      };
-
-      const safeName = rawUsername.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const downloadName = `photocloud_auth_${safeName}.json`;
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
-      res.status(200).send(JSON.stringify(authData, null, 2));
-    }
-  );
-
-  // --- LOGIN ---
-  const sendLoginError = (req: Request, res: Response, statusCode: number, message: string) => {
-    const accept = String(req.headers.accept || '');
-    if (accept.includes('text/html') && !accept.includes('application/json')) {
-      res.status(statusCode).setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.send(renderLoginTemplate(message));
-      return;
-    }
-    res.status(statusCode).send(message);
-  };
-
-  app.post(
-    '/login',
-    (req: Request, res: Response, next: NextFunction) => {
-      upload.single('auth_file')(req, res, (err: unknown) => {
-        if (err) {
-          cleanupUploadedFiles(req);
-          sendLoginError(req, res, 400, 'File di autenticazione non valido o troppo grande.');
-          return;
-        }
-        next();
-      });
-    },
-    (req: Request, res: Response) => {
-      try {
-        let authData: { username?: string; api_key?: string } | null = null;
-
-        if (req.file) {
-          try {
-            const buf = readUploadedFileBuffer(req.file);
-            authData = JSON.parse(buf.toString('utf-8'));
-          } catch {
-            sendLoginError(req, res, 400, 'File di autenticazione non valido.');
-            return;
-          }
-        } else if (req.body?.username && req.body?.api_key) {
-          authData = { username: req.body.username, api_key: req.body.api_key };
-        } else {
-          sendLoginError(req, res, 400, 'File di autenticazione non trovato.');
-          return;
-        }
-
-        const username = typeof authData?.username === 'string' ? authData.username.trim() : '';
-        const apiKey = authData?.api_key;
-        if (
-          !username ||
-          username === '.' ||
-          username === '..' ||
-          /[\/\\:\x00-\x1f\x7f]/.test(username) ||
-          typeof apiKey !== 'string' ||
-          !apiKey
-        ) {
-          sendLoginError(req, res, 400, 'File di autenticazione non valido.');
-          return;
-        }
-
-        const clientIp = String(req.ip || req.socket.remoteAddress || 'unknown');
-        const rateKey = `${clientIp}:${username}`;
-        const now = Date.now();
-        const attemptEntry = LOGIN_ATTEMPTS.get(rateKey);
-        if (attemptEntry && attemptEntry.resetAt > now && attemptEntry.count >= 20) {
-          sendLoginError(req, res, 429, 'Troppi tentativi di accesso falliti. Riprova più tardi.');
-          return;
-        }
-
-        const storedHash = findUser(username);
-        const isValid = storedHash ? verifyKey(apiKey, storedHash) : verifyKey(apiKey, DUMMY_KEY_HASH) && false;
-
-        if (isValid) {
-          LOGIN_ATTEMPTS.delete(rateKey);
-          const sid = crypto.randomUUID();
-          SESSIONS.set(sid, { username, apiKey, expiresAt: Date.now() + 86400000 });
-          res.setHeader(
-            'Set-Cookie',
-            `photocloud_sid=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400${req.secure ? '; Secure' : ''}`
-          );
-          if (req.headers.accept?.includes('application/json')) {
-            res.json({ success: true, username });
-            return;
-          }
-          res.redirect('/');
-        } else {
-          const currentCount = attemptEntry && attemptEntry.resetAt > now ? attemptEntry.count + 1 : 1;
-          LOGIN_ATTEMPTS.set(rateKey, { count: currentCount, resetAt: now + 15 * 60 * 1000 });
-          sendLoginError(req, res, 401, 'Credenziali non valide.');
-        }
-      } finally {
-        cleanupUploadedFiles(req);
-      }
-    }
-  );
-
-  // --- LOGOUT ---
-  app.post('/logout', (req: Request, res: Response) => {
-    const cookies = parseCookies(req.headers.cookie);
-    const sid = cookies['photocloud_sid'] || (req.headers['x-session-id'] as string);
-    if (sid) {
-      SESSIONS.delete(sid);
-    }
-    res.setHeader(
-      'Set-Cookie',
-      `photocloud_sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${req.secure ? '; Secure' : ''}`
-    );
-    if (req.headers.accept?.includes('application/json')) {
-      res.json({ success: true });
-      return;
-    }
-    res.redirect('/');
-  });
-
-  // --- UPLOAD (Supports Both Media & Non-Media Cloud Files + Optional Album + High-Volume Parallel Batches) ---
-  app.post(
-    '/upload',
-    (req: Request, res: Response, next: NextFunction) => {
-      const sess = getSession(req);
-      if (!sess) {
-        res.status(403).json({ error: 'Accesso negato' });
-        return;
-      }
-      upload.array('file[]')(req, res, (err: unknown) => {
-        if (err) {
-          cleanupUploadedFiles(req);
-          const msg =
-            err instanceof multer.MulterError
-              ? `Limite upload raggiunto (${err.code}): riduci la dimensione del singolo blocco.`
-              : err instanceof Error
-              ? err.message
-              : 'Errore lettura multipart upload';
-          res.status(400).json({ error: msg });
-          return;
-        }
-        next();
-      });
-    },
-    async (req: Request, res: Response) => {
-      try {
-        const sess = getSession(req);
-        if (!sess) {
-          res.status(403).json({ error: 'Accesso negato' });
-          return;
-        }
-        const files = req.files as Express.Multer.File[] | undefined;
-        if (!files || files.length === 0) {
-          res.status(400).json({ error: 'Nessun file' });
-          return;
-        }
-
-        const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-        const trashFolder = path.join(userFolder, 'trash');
-        fs.mkdirSync(userFolder, { recursive: true });
-        fs.mkdirSync(trashFolder, { recursive: true });
-
-        const rawTimestamps = req.body?.['timestamp[]'] || req.body?.timestamp;
-        const timestamps = Array.isArray(rawTimestamps)
-          ? rawTimestamps
-          : rawTimestamps
-          ? [rawTimestamps]
-          : [];
-
-        const rawChecksums = req.body?.['sha256[]'] || req.body?.sha256;
-        const expectedChecksums = Array.isArray(rawChecksums)
-          ? rawChecksums
-          : rawChecksums
-          ? [rawChecksums]
-          : [];
-
-        const rawAlbum = String(req.body?.album || '').trim();
-        const targetAlbum = rawAlbum && isValidAlbumName(rawAlbum) ? rawAlbum : '';
-        const skipList = req.body?.skipList === '1' || req.query?.skipList === '1';
-        const isAutoBackup = String(req.headers['x-backup-origin'] || '').trim().toLowerCase() === 'auto';
-        const uploadedFilenames: string[] = [];
-
-        for (let i = 0; i < files.length; i++) {
-          const rawExpectedSha = expectedChecksums[i];
-          const hasExpectedSha = rawExpectedSha !== undefined && String(rawExpectedSha).trim() !== '';
-          const expectedSha = hasExpectedSha ? normalizeSha256Hex(rawExpectedSha) : null;
-          if (hasExpectedSha && !expectedSha) {
-            for (const prevName of uploadedFilenames) {
-              try {
-                fs.unlinkSync(path.join(userFolder, prevName));
-              } catch {
-                // ignore
-              }
-            }
-            if (uploadedFilenames.length > 0) {
-              await vaultHashIndex.removeManyFileHashes(userFolder, uploadedFilenames);
-            }
-            res.status(400).json({ error: 'Checksum SHA-256 non valido (attesi 64 caratteri esadecimali)' });
-            return;
-          }
-
-          const file = files[i];
-          const rawOrig = path.basename(file.originalname || `file_${Date.now()}`);
-          const { filename, filepath } = allocateUniqueVaultFilename(userFolder, rawOrig);
-
-          let sha256: string;
-          let plaintextSize: number;
-          if (file.path && fs.existsSync(file.path)) {
-            const streamed = await encryptFileStream(file.path, filepath, sess.apiKey);
-            sha256 = streamed.sha256;
-            plaintextSize = streamed.plaintextSize;
-            try {
-              await fs.promises.unlink(file.path);
-            } catch {
-              // ignore
-            }
-          } else {
-            const rawBuf = readUploadedFileBuffer(file);
-            sha256 = calculateBufferHash(rawBuf);
-            plaintextSize = rawBuf.length;
-            const encrypted = await encryptFileAsync(rawBuf, sess.apiKey);
-            await fs.promises.writeFile(filepath, encrypted);
-          }
-
-          if (expectedSha && sha256 !== expectedSha) {
-            try {
-              if (fs.existsSync(filepath)) await fs.promises.unlink(filepath);
-            } catch {
-              // ignore
-            }
-            for (const prevName of uploadedFilenames) {
-              try {
-                fs.unlinkSync(path.join(userFolder, prevName));
-              } catch {
-                // ignore
-              }
-              await vaultHashIndex.removeFileHash(userFolder, prevName);
-            }
-            res.status(400).json({ error: 'Checksum SHA-256 non corrispondente' });
-            return;
-          }
-
-          uploadedFilenames.push(filename);
-
-          if (timestamps[i]) {
-            const mtime = parseFloat(timestamps[i]) / 1000;
-            if (!Number.isNaN(mtime) && mtime > 0) {
-              try {
-                fs.utimesSync(filepath, mtime, mtime);
-              } catch {
-                // ignore utime errors
-              }
-            }
-          }
-
-          await vaultHashIndex.recordFileHash(userFolder, filename, sha256, plaintextSize);
-        }
-
-        if (targetAlbum && uploadedFilenames.length > 0) {
-          const albumsData = loadUserAlbums(sess.username);
-          if (!albumsData.albums.includes(targetAlbum)) {
-            albumsData.albums.push(targetAlbum);
-            albumsData.albums.sort((a, b) => a.localeCompare(b, 'it'));
-          }
-          for (const fn of uploadedFilenames) {
-            albumsData.fileAlbums[fn] = targetAlbum;
-          }
-          saveUserAlbums(sess.username, albumsData);
-        }
-
-        if (uploadedFilenames.length > 0) {
-          thumbCache.enqueueBackgroundGeneration(userFolder, uploadedFilenames, sess.apiKey, ['thumb', 'large']);
-        }
-
-        const activeMediaFiles = skipList ? undefined : listMediaFiles(userFolder, sess.username);
-        const storageStats = skipList
-          ? undefined
-          : computeCloudStorageStats(
-              activeMediaFiles ?? listMediaFiles(userFolder, sess.username),
-              listMediaFiles(trashFolder, sess.username),
-              thumbCache.getUserStats(userFolder).diskBytes
-            );
-
-        res.json({
-          success: true,
-          uploadedCount: uploadedFilenames.length,
-          uploadedFilenames,
-          message: `${files.length} file caricati.`,
-          mediaFiles: activeMediaFiles,
-          storageStats,
-        });
-
-        if (uploadedFilenames.length > 0 && !isAutoBackup) {
-          notifyUserAsync(
-            sess.username,
-            '☁️ PhotoCloud — Upload completato',
-            `${uploadedFilenames.length} file caricati nel tuo archivio crittografato.`,
-            'photocloud-upload'
-          );
-        }
-      } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
-        res.status(500).json({ error: `Errore durante il caricamento: ${msg}` });
-      } finally {
-        cleanupUploadedFiles(req);
-      }
-    }
-  );
-
-  // --- AUTO BACKUP DEDUPLICATION CHECK (Active Files Only, Excludes Trash) ---
-  app.post('/api/backup/check', async (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-
-    const rawItems: unknown = req.body?.items;
-    if (!Array.isArray(rawItems)) {
-      res.status(400).json({ error: 'Campo items non valido: atteso array' });
-      return;
-    }
-
-    const normalizedItems: Array<{ sha256: string; sizeBytes?: number }> = [];
-    for (const entry of rawItems.slice(0, 500)) {
-      if (typeof entry === 'string') {
-        const sha = normalizeSha256Hex(entry);
-        if (sha) normalizedItems.push({ sha256: sha });
-      } else if (entry && typeof entry === 'object') {
-        const rec = entry as { sha256?: unknown; sizeBytes?: unknown };
-        const sha = normalizeSha256Hex(rec.sha256);
-        const sizeNum = Number(rec.sizeBytes);
-        if (sha) {
-          normalizedItems.push({
-            sha256: sha,
-            sizeBytes: Number.isFinite(sizeNum) && sizeNum >= 0 ? Math.floor(sizeNum) : undefined,
-          });
-        }
-      }
-    }
-
-    try {
-      const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-      fs.mkdirSync(userFolder, { recursive: true });
-      const checkRes = await vaultHashIndex.checkBackupItems(userFolder, sess.apiKey, normalizedItems);
-      res.json({
-        existingSha256: checkRes.existingSha256,
-        backfillPending: checkRes.backfillPending,
-        maxUploadMb: MAX_UPLOAD_MB,
-      });
-    } catch {
-      res.status(500).json({ error: 'Errore verifica duplicati backup' });
-    }
-  });
-
-  // --- CHUNKED STREAMING UPLOAD (Large Videos & Flaky Mobile Connections) ---
-  app.post('/api/upload/chunked/init', async (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-
-    const rawFilename = String(req.body?.filename || '').trim();
-    const cleanOrig = path.basename(rawFilename);
-    if (!cleanOrig || cleanOrig.length > 255) {
-      res.status(400).json({ error: 'Nome file non valido' });
-      return;
-    }
-
-    const totalSize = Number(req.body?.totalSize);
-    if (!Number.isFinite(totalSize) || totalSize < 0 || !Number.isInteger(totalSize)) {
-      res.status(400).json({ error: 'totalSize non valido' });
-      return;
-    }
-    if (totalSize > MAX_UPLOAD_BYTES) {
-      res.status(413).json({ error: `File oltre il limite massimo consentito (${MAX_UPLOAD_MB} MB)` });
-      return;
-    }
-
-    const requestedChunkSize = Number(req.body?.chunkSizeBytes);
-    const chunkSizeBytes = Number.isFinite(requestedChunkSize) && requestedChunkSize > 0
-      ? Math.min(MAX_CHUNKED_PART_BYTES, Math.max(1, Math.floor(requestedChunkSize)))
-      : DEFAULT_CHUNKED_PART_BYTES;
-
-    const rawAlbum = String(req.body?.album || '').trim();
-    const targetAlbum = rawAlbum && isValidAlbumName(rawAlbum) ? rawAlbum : '';
-    const timestampMsRaw = Number(req.body?.timestampMs);
-    const timestampMs = Number.isFinite(timestampMsRaw) && timestampMsRaw > 0 ? timestampMsRaw : undefined;
-    const rawSha256 = req.body?.sha256;
-    const hasRawSha256 = rawSha256 !== undefined && String(rawSha256).trim() !== '';
-    const expectedSha256 = normalizeSha256Hex(rawSha256) ?? undefined;
-    const isAutoBackup = String(req.headers['x-backup-origin'] || req.body?.backupOrigin || '').trim().toLowerCase() === 'auto';
-
-    if (hasRawSha256 && !expectedSha256) {
-      res.status(400).json({ error: 'Checksum SHA-256 non valido (attesi 64 caratteri esadecimali)' });
-      return;
-    }
-    if (isAutoBackup && !expectedSha256) {
-      res.status(400).json({ error: 'Checksum SHA-256 obbligatorio per backup automatico' });
-      return;
-    }
-
-    fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
-    const uploadId = crypto.randomUUID();
-    const tempPartPath = path.join(TEMP_UPLOAD_DIR, `chunked_${uploadId}.part`);
-
-    try {
-      const fh = await fs.promises.open(tempPartPath, 'w');
-      try {
-        await fh.truncate(totalSize);
-      } finally {
-        await fh.close();
-      }
-    } catch {
-      try {
-        if (fs.existsSync(tempPartPath)) await fs.promises.unlink(tempPartPath);
-      } catch {
-        // ignore cleanup error
-      }
-      res.status(500).json({ error: 'Impossibile allocare file temporaneo upload' });
-      return;
-    }
-
-    const expectedTotalChunks = totalSize === 0 ? 1 : Math.ceil(totalSize / chunkSizeBytes);
-    CHUNKED_UPLOADS.set(uploadId, {
-      id: uploadId,
-      owner: sess.username,
-      filename: cleanOrig,
-      totalSize,
-      chunkSizeBytes,
-      expectedTotalChunks,
-      receivedChunks: new Set<number>(),
-      tempPartPath,
-      timestampMs,
-      album: targetAlbum,
-      expectedSha256,
-      isAutoBackup,
-      expiresAt: Date.now() + CHUNKED_UPLOAD_TTL_MS,
-    });
-
-    res.json({
-      uploadId,
-      chunkSizeBytes,
-      totalChunks: expectedTotalChunks,
-      maxUploadMb: MAX_UPLOAD_MB,
-    });
-  });
-
-  app.put(
-    '/api/upload/chunked/:uploadId/:chunkIndex',
-    (req: Request, res: Response, next: NextFunction) => {
-      const sess = getSession(req);
-      if (!sess) {
-        res.status(403).json({ error: 'Accesso negato' });
-        return;
-      }
-      const uploadId = String(req.params.uploadId || '');
-      if (!UUID_REGEX.test(uploadId)) {
-        res.status(404).json({ error: 'Sessione upload non valida' });
-        return;
-      }
-      const session = CHUNKED_UPLOADS.get(uploadId);
-      if (!session || session.owner !== sess.username) {
-        res.status(404).json({ error: 'Sessione upload non trovata' });
-        return;
-      }
-      express.raw({ type: () => true, limit: MAX_CHUNKED_PART_BYTES + 4096 })(req, res, (err: unknown) => {
-        if (err) {
-          res.status(413).json({ error: 'Chunk oltre il limite consentito (16 MB).' });
-          return;
-        }
-        next();
-      });
-    },
-    async (req: Request, res: Response) => {
-      const sess = getSession(req);
-      if (!sess) {
-        res.status(403).json({ error: 'Accesso negato' });
-        return;
-      }
-      const uploadId = String(req.params.uploadId || '');
-      const session = CHUNKED_UPLOADS.get(uploadId);
-      if (!session || session.owner !== sess.username) {
-        res.status(404).json({ error: 'Sessione upload non trovata' });
-        return;
-      }
-
-      const rawIdx = String(req.params.chunkIndex || '');
-      if (!/^[0-9]+$/.test(rawIdx)) {
-        res.status(400).json({ error: 'Indice chunk non valido' });
-        return;
-      }
-      const chunkIndex = Number(rawIdx);
-      if (!Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= session.expectedTotalChunks) {
-        res.status(400).json({ error: 'Indice chunk fuori intervallo' });
-        return;
-      }
-
-      const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-      const offset = chunkIndex * session.chunkSizeBytes;
-      const expectedLen = Math.min(session.chunkSizeBytes, Math.max(0, session.totalSize - offset));
-      if (buf.length !== expectedLen) {
-        res.status(400).json({ error: `Dimensione chunk errata (attesi ${expectedLen} byte, ricevuti ${buf.length})` });
-        return;
-      }
-
-      let fh: fs.promises.FileHandle | null = null;
-      try {
-        fh = await fs.promises.open(session.tempPartPath, 'r+');
-        if (buf.length > 0) {
-          await fh.write(buf, 0, buf.length, offset);
-        }
-        session.receivedChunks.add(chunkIndex);
-        session.expiresAt = Date.now() + CHUNKED_UPLOAD_TTL_MS;
-        res.json({
-          success: true,
-          chunkIndex,
-          receivedChunks: session.receivedChunks.size,
-          totalChunks: session.expectedTotalChunks,
-        });
-      } catch {
-        res.status(500).json({ error: 'Errore scrittura chunk su disco' });
-      } finally {
-        try {
-          await fh?.close();
-        } catch {
-          // ignore
-        }
-      }
-    }
-  );
-
-  app.post('/api/upload/chunked/:uploadId/complete', async (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const uploadId = String(req.params.uploadId || '');
-    if (!UUID_REGEX.test(uploadId)) {
-      res.status(404).json({ error: 'Sessione upload non trovata' });
-      return;
-    }
-    const session = CHUNKED_UPLOADS.get(uploadId);
-    if (!session || session.owner !== sess.username) {
-      res.status(404).json({ error: 'Sessione upload non trovata' });
-      return;
-    }
-    if (session.receivedChunks.size < session.expectedTotalChunks) {
-      res.status(400).json({
-        error: `Upload incompleto (${session.receivedChunks.size}/${session.expectedTotalChunks} chunk ricevuti)`,
-      });
-      return;
-    }
-
-    CHUNKED_UPLOADS.delete(uploadId);
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const trashFolder = path.join(userFolder, 'trash');
-    fs.mkdirSync(userFolder, { recursive: true });
-    fs.mkdirSync(trashFolder, { recursive: true });
-
-    const skipList = req.body?.skipList === true || req.body?.skipList === '1' || req.query?.skipList === '1';
-    const { filename, filepath } = allocateUniqueVaultFilename(userFolder, session.filename);
-
-    try {
-      const streamed = await encryptFileStream(session.tempPartPath, filepath, sess.apiKey);
-      if (session.expectedSha256 && streamed.sha256 !== session.expectedSha256) {
-        try {
-          if (fs.existsSync(filepath)) await fs.promises.unlink(filepath);
-        } catch {
-          // ignore
-        }
-        res.status(400).json({ error: 'Checksum SHA-256 non corrispondente' });
-        return;
-      }
-
-      if (session.timestampMs && session.timestampMs > 0) {
-        const mtimeSec = session.timestampMs / 1000;
-        try {
-          fs.utimesSync(filepath, mtimeSec, mtimeSec);
-        } catch {
-          // ignore
-        }
-      }
-
-      await vaultHashIndex.recordFileHash(userFolder, filename, streamed.sha256, streamed.plaintextSize);
-
-      if (session.album) {
-        const albumsData = loadUserAlbums(sess.username);
-        if (!albumsData.albums.includes(session.album)) {
-          albumsData.albums.push(session.album);
-          albumsData.albums.sort((a, b) => a.localeCompare(b, 'it'));
-        }
-        albumsData.fileAlbums[filename] = session.album;
-        saveUserAlbums(sess.username, albumsData);
-      }
-
-      thumbCache.enqueueBackgroundGeneration(userFolder, [filename], sess.apiKey, ['thumb', 'large']);
-
-      const activeMediaFiles = skipList ? undefined : listMediaFiles(userFolder, sess.username);
-      const storageStats = skipList
-        ? undefined
-        : computeCloudStorageStats(
-            activeMediaFiles ?? listMediaFiles(userFolder, sess.username),
-            listMediaFiles(trashFolder, sess.username),
-            thumbCache.getUserStats(userFolder).diskBytes
-          );
-
-      res.json({
-        success: true,
-        filename,
-        uploadedFilenames: [filename],
-        sha256: streamed.sha256,
-        plaintextSize: streamed.plaintextSize,
-        mediaFiles: activeMediaFiles,
-        storageStats,
-      });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      res.status(500).json({ error: `Errore finalizzazione upload chunked: ${msg}` });
-    } finally {
-      try {
-        if (fs.existsSync(session.tempPartPath)) await fs.promises.unlink(session.tempPartPath);
-      } catch {
-        // ignore cleanup
-      }
-    }
-  });
-
-  // --- MEDIA EDITOR SAVE ENDPOINT (Supports Photos & Videos in "copy" and "overwrite" modes) ---
-  app.post(
-    '/api/media/edit',
-    (req: Request, res: Response, next: NextFunction) => {
-      const sess = getSession(req);
-      if (!sess) {
-        res.status(403).json({ error: 'Accesso negato' });
-        return;
-      }
-      upload.single('file')(req, res, (err: unknown) => {
-        if (err) {
-          cleanupUploadedFiles(req);
-          res.status(400).json({ error: 'File media non valido o troppo grande.' });
-          return;
-        }
-        next();
-      });
-    },
-    async (req: Request, res: Response) => {
-      try {
-        const sess = getSession(req);
-        if (!sess) {
-          res.status(403).json({ error: 'Accesso negato' });
-          return;
-        }
-
-        const rawOriginal = String(req.body?.originalFilename || '').trim();
-        const originalFilename = isValidVaultFilename(rawOriginal) ? rawOriginal : '';
-        const mode = String(req.body?.mode || 'copy').toLowerCase() === 'overwrite' ? 'overwrite' : 'copy';
-
-        let mediaBuffer: Buffer | null = null;
-        if (req.file) {
-          const uploadedBuf = readUploadedFileBuffer(req.file);
-          if (uploadedBuf.length > 0) {
-            mediaBuffer = uploadedBuf;
-          }
-        } else {
-          const rawB64Input =
-            typeof req.body?.mediaBase64 === 'string' && req.body.mediaBase64.length > 0
-              ? req.body.mediaBase64
-              : typeof req.body?.imageBase64 === 'string' && req.body.imageBase64.length > 0
-              ? req.body.imageBase64
-              : '';
-          if (rawB64Input) {
-            const rawB64 = rawB64Input.replace(/^data:(image|video)\/[a-zA-Z0-9+.-]+;base64,/, '');
-            mediaBuffer = Buffer.from(rawB64, 'base64');
-          }
-        }
-
-        if (!mediaBuffer || mediaBuffer.length === 0) {
-          res.status(400).json({ error: 'File media modificato non valido o vuoto.' });
-          return;
-        }
-
-        const ALLOWED_EDIT_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.mp4', '.webm', '.mov', '.mkv']);
-        const VIDEO_EDIT_EXTS = new Set(['.mp4', '.webm', '.mov', '.mkv']);
-
-        const uploadedExt = req.file?.originalname ? path.extname(req.file.originalname).toLowerCase() : '';
-        const requestedExt = typeof req.body?.targetExtension === 'string'
-          ? (req.body.targetExtension.startsWith('.') ? req.body.targetExtension.toLowerCase() : `.${req.body.targetExtension.toLowerCase()}`)
-          : '';
-        const origExt = originalFilename ? path.extname(originalFilename).toLowerCase() : '';
-
-        const chosenExt = ALLOWED_EDIT_EXTS.has(requestedExt)
-          ? requestedExt
-          : ALLOWED_EDIT_EXTS.has(uploadedExt)
-          ? uploadedExt
-          : ALLOWED_EDIT_EXTS.has(origExt)
-          ? origExt
-          : '.jpg';
-
-        const isVideo = VIDEO_EDIT_EXTS.has(chosenExt) || VIDEO_EDIT_EXTS.has(origExt);
-
-        const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-        const trashFolder = path.join(userFolder, 'trash');
-        fs.mkdirSync(userFolder, { recursive: true });
-        fs.mkdirSync(trashFolder, { recursive: true });
-        const safeUserFolder = path.resolve(userFolder);
-
-        let targetFilename = '';
-        let targetFilepath = '';
-        let replacedOldFilename = '';
-
-        if (mode === 'overwrite' && originalFilename) {
-          const candidatePath = path.resolve(safeUserFolder, originalFilename);
-          if (candidatePath.startsWith(safeUserFolder + path.sep) && fs.existsSync(candidatePath)) {
-            if (origExt && origExt !== chosenExt && VIDEO_EDIT_EXTS.has(chosenExt)) {
-              // Container changed (e.g. .mp4 -> .webm from browser recorder): write with accurate extension so MIME matches
-              const baseStem = path.basename(originalFilename, origExt).replace(/[^a-zA-Z0-9._-]/g, '_') || 'video';
-              targetFilename = `${baseStem}${chosenExt}`;
-              if (!isValidVaultFilename(targetFilename)) {
-                targetFilename = `${crypto.randomBytes(8).toString('hex')}${chosenExt}`;
-              }
-              targetFilepath = path.resolve(safeUserFolder, targetFilename);
-              replacedOldFilename = originalFilename;
-            } else {
-              targetFilename = originalFilename;
-              targetFilepath = candidatePath;
-            }
-          }
-        }
-
-        if (!targetFilename) {
-          while (true) {
-            targetFilename = `${crypto.randomBytes(8).toString('hex')}${chosenExt}`;
-            targetFilepath = path.join(safeUserFolder, targetFilename);
-            if (!fs.existsSync(targetFilepath)) break;
-          }
-        }
-
-        const encrypted = await encryptFileAsync(mediaBuffer, sess.apiKey);
-        await fs.promises.writeFile(targetFilepath, encrypted);
-
-        if (replacedOldFilename && replacedOldFilename !== targetFilename) {
-          const oldPath = path.resolve(safeUserFolder, replacedOldFilename);
-          if (oldPath.startsWith(safeUserFolder + path.sep) && fs.existsSync(oldPath)) {
-            try {
-              await fs.promises.unlink(oldPath);
-            } catch {
-              // ignore cleanup errors
-            }
-          }
-        }
-
-        // Preserve album assignment if original media belonged to an album
-        const albumsData = loadUserAlbums(sess.username);
-        if (originalFilename && albumsData.fileAlbums[originalFilename] && targetFilename !== originalFilename) {
-          albumsData.fileAlbums[targetFilename] = albumsData.fileAlbums[originalFilename];
-          if (replacedOldFilename && albumsData.fileAlbums[replacedOldFilename]) {
-            delete albumsData.fileAlbums[replacedOldFilename];
-          }
-          saveUserAlbums(sess.username, albumsData);
-        }
-
-        if (originalFilename) {
-          thumbCache.invalidateFile(safeUserFolder, originalFilename);
-        }
-        if (replacedOldFilename) {
-          thumbCache.invalidateFile(safeUserFolder, replacedOldFilename);
-          await vaultHashIndex.removeFileHash(safeUserFolder, replacedOldFilename);
-        }
-        await vaultHashIndex.recordFileHash(
-          safeUserFolder,
-          targetFilename,
-          calculateBufferHash(mediaBuffer),
-          mediaBuffer.length
-        );
-        thumbCache.invalidateFile(safeUserFolder, targetFilename);
-        thumbCache.enqueueBackgroundGeneration(safeUserFolder, [targetFilename], sess.apiKey, ['thumb', 'large']);
-
-        const activeMediaFiles = listMediaFiles(userFolder, sess.username);
-        const trashedMediaFiles = listMediaFiles(trashFolder, sess.username);
-
-        res.json({
-          success: true,
-          mode,
-          isVideo,
-          filename: targetFilename,
-          previousFilename: originalFilename || undefined,
-          message:
-            mode === 'overwrite'
-              ? isVideo
-                ? 'Video originale aggiornato con successo.'
-                : 'Foto originale aggiornata con successo.'
-              : isVideo
-              ? 'Video modificato salvato come nuova copia.'
-              : 'Foto modificata salvata come nuova copia.',
-          mediaFiles: activeMediaFiles,
-          storageStats: computeCloudStorageStats(
-            activeMediaFiles,
-            trashedMediaFiles,
-            thumbCache.getUserStats(safeUserFolder).diskBytes
-          ),
-        });
-      } catch {
-        res.status(500).json({ error: 'Errore salvataggio media modificato.' });
-      } finally {
-        cleanupUploadedFiles(req);
-      }
-    }
-  );
-
-  // --- DOCUMENT PREVIEW ENGINE API (PDF, Word, Excel, PowerPoint, Text/Code) ---
-  app.get('/api/document-preview/:filename', async (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-
-    const filename = String(req.params.filename);
-    if (!isValidVaultFilename(filename)) {
-      res.status(403).json({ error: 'Accesso non autorizzato.' });
-      return;
-    }
-
-    const fromTrash = req.query.from_trash === 'true';
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const basePath = fromTrash ? path.join(userFolder, 'trash') : userFolder;
-
-    const safeBasePath = path.resolve(basePath);
-    const safeFilepath = path.resolve(safeBasePath, filename);
-
-    if (!safeFilepath.startsWith(safeBasePath + path.sep)) {
-      res.status(403).json({ error: 'Accesso non autorizzato.' });
-      return;
-    }
-
-    if (!fs.existsSync(safeFilepath)) {
-      res.status(404).json({ error: 'File non trovato.' });
-      return;
-    }
-
-    try {
-      const encrypted = await fs.promises.readFile(safeFilepath);
-      const decrypted = await decryptFileAsync(encrypted, sess.apiKey);
-      const preview = await parseDocumentBuffer(filename, decrypted, fromTrash);
-      res.json(preview);
-    } catch {
-      res.status(500).json({ error: "Errore durante l'apertura del documento." });
-    }
-  });
-
-  // --- MEDIA & CLOUD FILE DECRYPTION ---
-  const ACTIVE_SCRIPT_EXTS = new Set(['html', 'htm', 'xhtml', 'xml', 'js', 'mjs', 'svg']);
-
-  const handleMediaRequest = async (req: Request, res: Response, forceTrash = false, forceDownload = false) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).send('Accesso negato');
-      return;
-    }
-
-    const filename = String(req.params.filename);
-    if (!isValidVaultFilename(filename)) {
-      res.status(403).send('Accesso non autorizzato.');
-      return;
-    }
-
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const fromTrash = forceTrash || req.query.from_trash === 'true';
-    const basePath = fromTrash ? path.join(userFolder, 'trash') : userFolder;
-
-    const safeBasePath = path.resolve(basePath);
-    const safeFilepath = path.resolve(safeBasePath, filename);
-
-    if (!safeFilepath.startsWith(safeBasePath + path.sep)) {
-      res.status(403).send('Accesso non autorizzato.');
-      return;
-    }
-
-    if (!fs.existsSync(safeFilepath)) {
-      res.status(404).send('File non trovato');
-      return;
-    }
-
-    try {
-      const spec = resolveFileViewerSpec(filename);
-      const isExplicitDownload = forceDownload || req.query.download === '1' || req.query.download === 'true';
-      const previewVariant = !fromTrash ? parsePreviewVariant(req.query.preview, isExplicitDownload) : null;
-
-      if (previewVariant) {
-        const thumbRes = await thumbCache.getOrCreateThumbnail(userFolder, filename, previewVariant, sess.apiKey);
-        if (thumbRes.status === 'ok') {
-          res.setHeader('X-Content-Type-Options', 'nosniff');
-          res.setHeader(
-            'Content-Security-Policy',
-            "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox"
-          );
-          res.setHeader('ETag', thumbRes.etag);
-          res.setHeader('Last-Modified', new Date(thumbRes.lastModifiedMs).toUTCString());
-          res.setHeader('Cache-Control', `private, max-age=${THUMB_CLIENT_CACHE_MAX_AGE_SEC}`);
-
-          const ifNoneMatch = typeof req.headers['if-none-match'] === 'string' ? req.headers['if-none-match'].trim() : '';
-          if (ifNoneMatch && ifNoneMatch === thumbRes.etag) {
-            res.status(304).end();
-            return;
-          }
-          const ifModSince = typeof req.headers['if-modified-since'] === 'string' ? req.headers['if-modified-since'] : '';
-          if (!ifNoneMatch && ifModSince) {
-            const imsMs = Date.parse(ifModSince);
-            if (!Number.isNaN(imsMs) && Math.floor(thumbRes.lastModifiedMs / 1000) <= Math.floor(imsMs / 1000)) {
-              res.status(304).end();
-              return;
-            }
-          }
-
-          res.setHeader('Content-Type', 'image/jpeg');
-          res.setHeader('Content-Disposition', `inline; filename="preview_${encodeURIComponent(filename)}.jpg"`);
-          res.setHeader('Content-Length', String(thumbRes.buffer.length));
-          res.send(thumbRes.buffer);
-          return;
-        }
-        if (thumbRes.status === 'busy') {
-          res.status(503).setHeader('Retry-After', '2').send('Servizio miniature temporaneamente occupato');
-          return;
-        }
-        // Fallback trasparente sull'originale se il formato non è supportato o privo di miniatura
-      }
-
-      const encrypted = await fs.promises.readFile(safeFilepath);
-      const decrypted = await decryptFileAsync(encrypted, sess.apiKey);
-      const isDangerousExt = ACTIVE_SCRIPT_EXTS.has(spec.extension);
-
-      // Sandbox all /media responses so scripts can NEVER execute in the origin context
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader(
-        'Content-Security-Policy',
-        "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox"
-      );
-      res.setHeader('Accept-Ranges', 'bytes');
-
-      if (isExplicitDownload || isDangerousExt) {
-        const safeMime =
-          spec.extension === 'svg' && req.headers['sec-fetch-dest'] === 'image'
-            ? 'image/svg+xml'
-            : isDangerousExt && !isExplicitDownload
-            ? 'text/plain; charset=utf-8'
-            : spec.mimeType;
-        res.setHeader('Content-Type', safeMime);
-        res.setHeader(
-          'Content-Disposition',
-          `attachment; filename="${encodeURIComponent(filename)}"`
-        );
-      } else {
-        res.setHeader('Content-Type', spec.mimeType);
-        res.setHeader(
-          'Content-Disposition',
-          `inline; filename="${encodeURIComponent(filename)}"`
-        );
-      }
-
-      const parsedRange = parseHttpByteRange(req.headers.range, decrypted.length);
-      if (parsedRange.status === 'invalid') {
-        res.status(416);
-        res.setHeader('Content-Range', `bytes */${decrypted.length}`);
-        res.end();
-        return;
-      }
-      if (parsedRange.status === 'ok') {
-        const chunk = decrypted.subarray(parsedRange.start, parsedRange.end + 1);
-        res.status(206);
-        res.setHeader('Content-Range', `bytes ${parsedRange.start}-${parsedRange.end}/${decrypted.length}`);
-        res.setHeader('Content-Length', String(chunk.length));
-        res.send(chunk);
-        return;
-      }
-
-      res.setHeader('Content-Length', String(decrypted.length));
-      res.send(decrypted);
-    } catch {
-      res.status(500).send('Errore durante la decrittografia.');
-    }
-  };
-
-  app.get('/media/:filename', (req: Request, res: Response) => {
-    void handleMediaRequest(req, res, false, false);
-  });
-
-  app.get('/trash/media/:filename', (req: Request, res: Response) => {
-    void handleMediaRequest(req, res, true, true);
-  });
-
-  // --- PERSISTENT ENCRYPTED THUMBNAIL SERVICE ENDPOINTS ---
-  app.put(
-    '/api/thumbs/:filename',
-    (req: Request, res: Response, next: NextFunction) => {
-      const sess = getSession(req);
-      if (!sess) {
-        res.status(403).json({ error: 'Accesso negato' });
-        return;
-      }
-      express.raw({ type: () => true, limit: MAX_CLIENT_THUMB_UPLOAD_BYTES + 1024 })(req, res, (err: unknown) => {
-        if (err) {
-          res.status(413).json({ error: 'Miniatura oltre il limite massimo consentito (1 MB).' });
-          return;
-        }
-        next();
-      });
-    },
-    async (req: Request, res: Response) => {
-      const sess = getSession(req);
-      if (!sess) {
-        res.status(403).json({ error: 'Accesso negato' });
-        return;
-      }
-      const filename = String(req.params.filename || '');
-      if (!isValidVaultFilename(filename)) {
-        res.status(400).json({ error: 'Nome file non valido.' });
-        return;
-      }
-      const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-      const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-      const variant = parsePreviewVariant(req.query.variant || 'thumb', false) || 'thumb';
-
-      try {
-        const result = await thumbCache.putClientThumbnail(userFolder, filename, rawBody, sess.apiKey, variant);
-        res.json({ success: true, filename, ...result });
-      } catch (err) {
-        const code = err instanceof Error ? err.message : '';
-        if (code === 'SOURCE_NOT_FOUND') {
-          res.status(404).json({ error: 'File sorgente non trovato.' });
-          return;
-        }
-        if (code === 'THUMBNAIL_TOO_LARGE') {
-          res.status(413).json({ error: 'Miniatura oltre il limite massimo consentito (1 MB).' });
-          return;
-        }
-        res.status(400).json({ error: 'Miniatura JPEG non valida.' });
-      }
-    }
-  );
-
-  app.get('/api/thumbs/stats', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const stats = thumbCache.getUserStats(userFolder);
-    res.json({
-      ...stats,
-      totalBytes: stats.diskBytes,
-      entriesCount: stats.totalEntries,
-      variantCount: stats.totalEntries,
-      negativeCount: stats.negativeEntries,
-      pendingJobs: stats.queuePending,
-      diskFormatted: formatFileSize(stats.diskBytes),
-      maxFormatted: formatFileSize(stats.maxBytes),
-    });
-  });
-
-  app.post('/api/thumbs/rebuild', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const userFolder = path.join(UPLOAD_FOLDER, sess.username);
-    const activeFiles = listMediaFiles(userFolder, sess.username).map((m) => m.filename);
-    const force = req.body?.force === true;
-    const rebuilt = thumbCache.rebuildUserThumbnails(userFolder, sess.apiKey, activeFiles, force);
-    res.json({
-      success: true,
-      ...rebuilt,
-      message:
-        rebuilt.queuedCount > 0
-          ? `Avviata generazione in background di ${rebuilt.queuedCount} varianti miniature.`
-          : 'Tutte le miniature supportate sono già aggiornate.',
-    });
-  });
-
-  // --- TRASH OPERATIONS ---
-  app.post('/trash/batch', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato', success: false });
-      return;
-    }
-    const filenames = req.body?.filenames;
-    if (!Array.isArray(filenames)) {
-      res.status(400).json({ error: 'Input non valido', success: false });
-      return;
-    }
-
-    const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
-    const trashFolder = path.resolve(userFolder, 'trash');
-    fs.mkdirSync(trashFolder, { recursive: true });
-
-    const validFilenames: string[] = [];
-    const errors: string[] = [];
-
-    for (const f of filenames) {
-      const fStr = String(f);
-      if (!isValidVaultFilename(fStr)) {
-        errors.push(`File '${fStr}' non trovato o non valido`);
-        continue;
-      }
-      const safePath = path.resolve(userFolder, fStr);
-      if (safePath.startsWith(userFolder + path.sep) && fs.existsSync(safePath)) {
-        try {
-          const dest = path.join(trashFolder, path.basename(safePath));
-          if (fs.existsSync(dest)) throw new Error('Un file con questo nome è già nel cestino');
-          fs.renameSync(safePath, dest);
-          thumbCache.invalidateFile(userFolder, fStr);
-          validFilenames.push(fStr);
-        } catch (err: unknown) {
-          errors.push(`Errore su ${fStr}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      } else {
-        errors.push(`File '${fStr}' non trovato o non valido`);
-      }
-    }
-
-    if (validFilenames.length > 0) {
-      void vaultHashIndex.removeManyFileHashes(userFolder, validFilenames);
-    }
-
-    if (errors.length > 0) {
-      res.status(validFilenames.length > 0 ? 207 : 500).json({
-        success: validFilenames.length > 0,
-        error: errors.join('. '),
-      });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  app.post('/trash/:filename', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato', success: false });
-      return;
-    }
-    const filename = String(req.params.filename);
-    if (!isValidVaultFilename(filename)) {
-      res.status(403).json({ error: 'Accesso non autorizzato', success: false });
-      return;
-    }
-    const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
-    const safeFilepath = path.resolve(userFolder, filename);
-
-    if (!safeFilepath.startsWith(userFolder + path.sep)) {
-      res.status(403).json({ error: 'Accesso non autorizzato', success: false });
-      return;
-    }
-    if (!fs.existsSync(safeFilepath)) {
-      res.status(404).json({ error: 'File non trovato', success: false });
-      return;
-    }
-
-    try {
-      const trashFolder = path.join(userFolder, 'trash');
-      fs.mkdirSync(trashFolder, { recursive: true });
-      const dest = path.join(trashFolder, path.basename(filename));
-      if (fs.existsSync(dest)) {
-        res.status(409).json({ success: false, error: 'Un file con questo nome è già nel cestino' });
-        return;
-      }
-      fs.renameSync(safeFilepath, dest);
-      thumbCache.invalidateFile(userFolder, filename);
-      void vaultHashIndex.removeFileHash(userFolder, filename);
-      res.json({ success: true, message: `File ${filename} spostato nel cestino` });
-    } catch {
-      res.status(500).json({
-        success: false,
-        error: 'Impossibile spostare il file nel cestino.',
-      });
-    }
-  });
-
-  app.post('/restore/:filename', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const filename = String(req.params.filename);
-    if (!isValidVaultFilename(filename)) {
-      res.status(403).json({ success: false, error: 'File non trovato o accesso negato' });
-      return;
-    }
-    const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
-    const trashFolder = path.resolve(userFolder, 'trash');
-    const safeFilepath = path.resolve(trashFolder, filename);
-
-    if (!safeFilepath.startsWith(trashFolder + path.sep) || !fs.existsSync(safeFilepath)) {
-      res.status(404).json({ success: false, error: 'File non trovato o accesso negato' });
-      return;
-    }
-
-    try {
-      const dest = path.join(userFolder, path.basename(filename));
-      if (fs.existsSync(dest)) {
-        res.status(409).json({ success: false, error: 'Un file con questo nome esiste già nell’archivio' });
-        return;
-      }
-      fs.renameSync(safeFilepath, dest);
-      thumbCache.invalidateFile(userFolder, filename);
-      thumbCache.enqueueBackgroundGeneration(userFolder, [filename], sess.apiKey, ['thumb', 'large']);
-      vaultHashIndex.startBackgroundBackfill(userFolder, sess.apiKey);
-      res.json({ success: true });
-    } catch {
-      res.status(500).json({
-        success: false,
-        error: 'Impossibile ripristinare il file.',
-      });
-    }
-  });
-
-  app.post('/delete_permanent/:filename', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const filename = String(req.params.filename);
-    if (!isValidVaultFilename(filename)) {
-      res.status(403).json({ success: false, error: 'File non trovato o accesso negato' });
-      return;
-    }
-    const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
-    const trashFolder = path.resolve(userFolder, 'trash');
-    const safeFilepath = path.resolve(trashFolder, filename);
-
-    if (!safeFilepath.startsWith(trashFolder + path.sep) || !fs.existsSync(safeFilepath)) {
-      res.status(404).json({ success: false, error: 'File non trovato o accesso negato' });
-      return;
-    }
-
-    try {
-      fs.unlinkSync(safeFilepath);
-      thumbCache.invalidateFile(userFolder, filename);
-      const data = loadUserAlbums(sess.username);
-      if (data.fileAlbums[filename]) {
-        delete data.fileAlbums[filename];
-        saveUserAlbums(sess.username, data);
-      }
-      res.json({ success: true });
-    } catch {
-      res.status(500).json({
-        success: false,
-        error: 'Impossibile eliminare definitivamente il file.',
-      });
-    }
-  });
-
-  app.post('/empty_trash', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
-    const trashFolder = path.resolve(userFolder, 'trash');
-    try {
-      if (fs.existsSync(trashFolder)) {
-        fs.rmSync(trashFolder, { recursive: true, force: true });
-        fs.mkdirSync(trashFolder, { recursive: true });
-      }
-      thumbCache.cleanupUserOrphans(userFolder);
-      // Clean up orphaned album references for deleted trash files
-      const data = loadUserAlbums(sess.username);
-      let modified = false;
-      for (const fn of Object.keys(data.fileAlbums)) {
-        const activeFile = path.join(userFolder, fn);
-        if (!fs.existsSync(activeFile)) {
-          delete data.fileAlbums[fn];
-          modified = true;
-        }
-      }
-      if (modified) {
-        saveUserAlbums(sess.username, data);
-      }
-      res.json({ success: true });
-    } catch {
-      res.status(500).json({
-        success: false,
-        error: 'Impossibile svuotare il cestino.',
-      });
-    }
-  });
-
-  // --- DUPLICATES (Reuses persistent .hashes.json active index + streaming SHA-256) ---
-  app.post('/find_duplicates_server', async (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
-    if (!fs.existsSync(userFolder)) {
-      res.json({ duplicates: [] });
-      return;
-    }
-    const files = listMediaFiles(userFolder, sess.username);
-    if (files.length < 2) {
-      res.json({ duplicates: [] });
-      return;
-    }
-
-    const hashedItems = await vaultHashIndex.resolveAllActiveHashes(userFolder, sess.apiKey);
-    const duplicates = findDuplicateGroups(hashedItems);
-    res.json({ duplicates });
-  });
-
-  // --- ZIP EXPORT ---
-  app.post('/prepare-zip', async (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const rawFilenames: unknown[] = Array.isArray(req.body?.filenames) ? req.body.filenames : [];
-    const filenames = rawFilenames.filter((f): f is string => isValidVaultFilename(f)).slice(0, 500);
-    if (filenames.length === 0) {
-      res.status(400).json({ error: 'Nessun file selezionato' });
-      return;
-    }
-
-    const taskId = crypto.randomUUID();
-    const userFolder = path.resolve(UPLOAD_FOLDER, sess.username);
-    ZIP_TASKS.set(taskId, {
-      owner: sess.username,
-      status: 'starting',
-      progress: 0,
-      filename: null,
-      totalBytes: 0,
-      processedBytes: 0,
-    });
-
-    const expiry = setTimeout(() => {
-      const existing = ZIP_TASKS.get(taskId);
-      if (existing?.zipPath && fs.existsSync(existing.zipPath)) {
-        try {
-          fs.unlinkSync(existing.zipPath);
-        } catch {
-          // ignore
-        }
-      }
-      ZIP_TASKS.delete(taskId);
-    }, 60 * 60 * 1000);
-    expiry.unref();
-
-    (async () => {
-      try {
-        const zip = new JSZip();
-        const total = filenames.length;
-        let processedBytes = 0;
-        let totalBytes = 0;
-        for (const fname of filenames) {
-          const sp = path.resolve(userFolder, fname);
-          if (sp.startsWith(userFolder + path.sep) && fs.existsSync(sp)) {
-            totalBytes += getEncryptedFilePlaintextSize(sp);
-          }
-        }
-        for (let i = 0; i < total; i++) {
-          const fname = filenames[i];
-          const progress = Math.round(((i + 1) / total) * 100);
-          const safePath = path.resolve(userFolder, fname);
-          if (safePath.startsWith(userFolder + path.sep) && fs.existsSync(safePath)) {
-            const enc = await fs.promises.readFile(safePath);
-            const dec = await decryptFileAsync(enc, sess.apiKey);
-            processedBytes += dec.length;
-            zip.file(path.basename(fname), dec);
-          }
-          ZIP_TASKS.set(taskId, {
-            owner: sess.username,
-            status: 'processing',
-            progress,
-            filename: null,
-            totalBytes,
-            processedBytes,
-          });
-        }
-        const zipFilename = `${taskId}.zip`;
-        const zipPath = path.join(TEMP_UPLOAD_DIR, zipFilename);
-        const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-        await fs.promises.writeFile(zipPath, buf);
-        ZIP_TASKS.set(taskId, {
-          owner: sess.username,
-          zipPath,
-          status: 'complete',
-          progress: 100,
-          filename: zipFilename,
-          totalBytes: buf.length,
-          processedBytes: buf.length,
-        });
-        notifyUserAsync(
-          sess.username,
-          '📦 PhotoCloud — Archivio ZIP pronto',
-          `L'esportazione di ${total} file è pronta per il download.`,
-          'photocloud-zip'
-        );
-      } catch {
-        ZIP_TASKS.set(taskId, {
-          owner: sess.username,
-          status: 'error',
-          progress: 0,
-          filename: null,
-          error: 'Errore durante la creazione del file ZIP.',
-        });
-      }
-    })();
-
-    res.json({ task_id: taskId });
-  });
-
-  app.get('/zip-progress/:taskId', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
-      return;
-    }
-    const taskId = String(req.params.taskId);
-    if (!UUID_REGEX.test(taskId)) {
-      res.status(404).json({ status: 'not_found', progress: 0 });
-      return;
-    }
-    const info = ZIP_TASKS.get(taskId);
-    if (!info || info.owner !== sess.username) {
-      res.status(404).json({ status: 'not_found', progress: 0 });
-      return;
-    }
-    const { owner, buffer, zipPath, ...publicInfo } = info;
-    res.json(publicInfo);
-  });
-
-  app.get('/download-zip/:filename', (req: Request, res: Response) => {
-    const sess = getSession(req);
-    if (!sess) {
-      res.status(403).send('Accesso negato');
-      return;
-    }
-    const filename = String(req.params.filename);
-    if (!isValidVaultFilename(filename)) {
-      res.status(404).send('File non trovato');
-      return;
-    }
-    const taskId = path.parse(filename).name;
-    const task = ZIP_TASKS.get(taskId);
-    if (!task || task.owner !== sess.username || task.filename !== filename || task.status !== 'complete') {
-      res.status(404).send('File non trovato');
-      return;
-    }
-    ZIP_TASKS.delete(taskId);
-
-    if (task.zipPath && fs.existsSync(task.zipPath)) {
-      const zipPath = task.zipPath;
-      const stat = fs.statSync(zipPath);
-      res.setHeader('Content-Type', 'application/zip');
-      res.setHeader('Content-Length', String(stat.size));
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-      const stream = fs.createReadStream(zipPath);
-      stream.on('close', () => {
-        try {
-          if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-        } catch {
-          // ignore
-        }
-      });
-      stream.pipe(res);
-      return;
-    }
-
-    const zipBytes = task.buffer;
-    if (!zipBytes) {
-      res.status(404).send('File non trovato');
-      return;
-    }
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Length', String(zipBytes.length));
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
-    res.send(zipBytes);
-  });
-
-  // --- ANDROID AUTO-UPDATER MANIFEST & OPTIONAL AI MODEL ENDPOINTS ---
+  // 5. Android Auto-Updater Manifest & On-Device AI TFLite Model (public read-only binaries, zero user data)
   app.get('/api/android/update-manifest', (_req: Request, res: Response) => {
     try {
       const appVersion = readAndroidAppVersion();
@@ -3882,9 +393,7 @@ async function startServer() {
         publishedAt: String(manifestData.publishedAt || new Date().toISOString()),
       });
     } catch {
-      res.status(500).json({
-        error: 'Impossibile leggere il manifest di aggiornamento',
-      });
+      res.status(500).json({ error: 'Impossibile leggere il manifest di aggiornamento' });
     }
   });
 
@@ -3902,35 +411,31 @@ async function startServer() {
       res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Content-Disposition', 'attachment; filename="efficientnet_lite4.tflite"');
 
-      const parsedRange = parseHttpByteRange(req.headers.range, totalSize);
-      if (parsedRange.status === 'invalid') {
+      const parsedRange = parseHttpRangeHeader(req.headers.range, totalSize);
+      if (parsedRange.kind === 'unsatisfiable') {
         res.status(416);
         res.setHeader('Content-Range', `bytes */${totalSize}`);
         res.end();
         return;
       }
-      if (parsedRange.status === 'ok') {
+      if (parsedRange.kind === 'satisfiable') {
         const chunkLength = parsedRange.end - parsedRange.start + 1;
         res.status(206);
         res.setHeader('Content-Range', `bytes ${parsedRange.start}-${parsedRange.end}/${totalSize}`);
         res.setHeader('Content-Length', String(chunkLength));
-        const stream = fs.createReadStream(modelPath, { start: parsedRange.start, end: parsedRange.end });
-        stream.pipe(res);
+        fs.createReadStream(modelPath, { start: parsedRange.start, end: parsedRange.end }).pipe(res);
         return;
       }
 
       res.status(200);
       res.setHeader('Content-Length', String(totalSize));
-      const stream = fs.createReadStream(modelPath);
-      stream.pipe(res);
+      fs.createReadStream(modelPath).pipe(res);
     } catch {
-      res.status(500).json({
-        error: 'Errore durante lo streaming del modello AI',
-      });
+      res.status(500).json({ error: 'Errore durante lo streaming del modello AI' });
     }
   });
 
-  // --- ANDROID RELEASE BUILDER API (APK & Android Studio Project ZIP) ---
+  // 6. Android Release Studio API (authenticated via Zero-Knowledge v2 session)
   const BUILDS_INDEX_PATH = path.join(RELEASE_BUILDS_DIR, 'builds.json');
 
   function loadAndroidBuilds(): AndroidReleaseArtifact[] {
@@ -3970,60 +475,25 @@ async function startServer() {
       projectZipFilename: `photocloud-android-studio-project-v${appVersion.versionName}.zip`,
       sha256Fingerprint: '1ec3cc2e2602d3ab4318cd9b23e297e2e795b91d05eceb6944d1ac1df860c90f',
       apkSizeBytes: defaultSize,
-      steps: [
-        {
-          id: 'step-validate',
-          label: 'Validazione configurazione Android & Permessi (INTERNET, BIOMETRIC, REQUEST_INSTALL_PACKAGES)',
-          durationMs: 38,
-          status: 'completed',
-          command: 'validateAndroidConfig(manifest)',
-        },
-        {
-          id: 'step-generate',
-          label: 'Generazione sorgenti nativi Kotlin Jetpack Compose, GalleryDragSelectionController, AiModelDownloadManager & AppAutoUpdater',
-          durationMs: 92,
-          status: 'completed',
-          command: 'kspReleaseKotlin + compileReleaseKotlin',
-        },
-        {
-          id: 'step-assemble',
-          label: 'Compilazione release APK firmata V1/V2/V3 con Android Keystore RSA-2048',
-          durationMs: 395,
-          status: 'completed',
-          command: 'gradle assembleRelease --no-daemon',
-        },
-        {
-          id: 'step-package',
-          label: 'Verifica digest SHA-256 e pacchettizzazione progetto Android Studio (.ZIP)',
-          durationMs: 48,
-          status: 'completed',
-          command: `sha256sum ${defaultApkFile}`,
-        },
-      ],
+      steps: [],
     };
-
-    saveAndroidBuilds([initialBuild]);
+    fs.writeFileSync(BUILDS_INDEX_PATH, JSON.stringify([initialBuild], null, 2), 'utf-8');
     return [initialBuild];
   }
 
-  function saveAndroidBuilds(builds: AndroidReleaseArtifact[]): void {
-    fs.writeFileSync(BUILDS_INDEX_PATH, JSON.stringify(builds, null, 2), 'utf-8');
-  }
-
   app.get('/api/android/releases', (req: Request, res: Response) => {
-    const sess = getSession(req);
+    const sess = getAuthenticatedV2User(req, zkV2);
     if (!sess) {
-      res.status(403).json({ error: 'Accesso negato' });
+      res.status(403).json({ error: 'Accesso negato (richiesta sessione Zero-Knowledge v2)' });
       return;
     }
-    const builds = loadAndroidBuilds();
-    res.json({ releases: builds });
+    res.json({ releases: loadAndroidBuilds() });
   });
 
   app.post('/api/android/build-release', async (req: Request, res: Response) => {
-    const sess = getSession(req);
+    const sess = getAuthenticatedV2User(req, zkV2);
     if (!sess) {
-      res.status(403).json({ success: false, error: 'Accesso negato' });
+      res.status(403).json({ success: false, error: 'Accesso negato (richiesta sessione Zero-Knowledge v2)' });
       return;
     }
 
@@ -4039,32 +509,30 @@ async function startServer() {
       const safeVer = config.versionName.trim();
       const apkFilename = `photocloud-release-v${safeVer}-signed.apk`;
       const projectZipFilename = `photocloud-android-studio-project-v${safeVer}.zip`;
-
-      const targetApkBuild = path.join(RELEASE_BUILDS_DIR, `${buildId}_${apkFilename}`);
-
-      const requestedApkName = `photocloud-release-v${safeVer}-signed.apk`;
-      const sourceApkRel = resolveReleaseApk(safeVer) || requestedApkName;
+      const sourceApkRel = resolveReleaseApk(safeVer) || apkFilename;
       const sourceApk = path.join(RELEASE_DIR, sourceApkRel);
       if (!fs.existsSync(sourceApk)) {
         res.status(404).json({
           success: false,
-          error: 'Nessun APK di release disponibile: compila prima l\'APK con Gradle o GitHub Actions.',
+          error: "Nessun APK di release disponibile: compila prima l'APK con Gradle o GitHub Actions.",
         });
         return;
       }
       const apkBuffer = fs.readFileSync(sourceApk);
-
-      fs.writeFileSync(targetApkBuild, apkBuffer);
-
+      fs.writeFileSync(path.join(RELEASE_BUILDS_DIR, `${buildId}_${apkFilename}`), apkBuffer);
       const sha256 = crypto.createHash('sha256').update(apkBuffer).digest('hex');
 
-      // 2. Generate complete Android Studio project zip from real android-app/ files
       const zip = new JSZip();
       const androidRoot = path.resolve(APP_ROOT, 'android-app');
       const addDirToZip = (dirPath: string, zipPrefix: string) => {
         if (!fs.existsSync(dirPath)) return;
         for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
-          if (entry.name === '.gradle' || entry.name === 'build' || entry.name.endsWith('.jks') || entry.name.endsWith('.keystore')) {
+          if (
+            entry.name === '.gradle' ||
+            entry.name === 'build' ||
+            entry.name.endsWith('.jks') ||
+            entry.name.endsWith('.keystore')
+          ) {
             continue;
           }
           const fullEntry = path.join(dirPath, entry.name);
@@ -4097,91 +565,49 @@ async function startServer() {
         projectZipFilename,
         sha256Fingerprint: sha256,
         apkSizeBytes: apkBuffer.length,
-        steps: [
-          {
-            id: 'step-1',
-            label: 'Validazione configurazione Android & Permessi (INTERNET, BIOMETRIC)',
-            durationMs: 35,
-            status: 'completed',
-            command: 'validateAndroidConfig(manifest)',
-          },
-          {
-            id: 'step-2',
-            label: 'Generazione codice nativo Kotlin & Jetpack Compose',
-            durationMs: 88,
-            status: 'completed',
-            command: 'generateMainActivityKt + generateAppBuildGradleKts',
-          },
-          {
-            id: 'step-3',
-            label: 'Compilazione release APK firmata V1/V2/V3',
-            durationMs: 420,
-            status: 'completed',
-            command: 'gradle assembleRelease --no-daemon',
-          },
-          {
-            id: 'step-4',
-            label: 'Calcolo checksum SHA-256 e pacchettizzazione ZIP',
-            durationMs: 52,
-            status: 'completed',
-            command: `sha256sum ${apkFilename}`,
-          },
-        ],
+        steps: [],
       };
-
       const existingBuilds = loadAndroidBuilds().slice(0, 49);
-      saveAndroidBuilds([artifact, ...existingBuilds]);
-
+      fs.writeFileSync(BUILDS_INDEX_PATH, JSON.stringify([artifact, ...existingBuilds], null, 2), 'utf-8');
       res.json({ success: true, artifact });
     } catch {
-      res.status(500).json({
-        success: false,
-        error: 'Errore creazione release Android',
-      });
+      res.status(500).json({ success: false, error: 'Errore creazione release Android' });
     }
   });
 
   app.get('/api/android/download/:buildId/:type', (req: Request, res: Response) => {
-    const sess = getSession(req);
+    const sess = getAuthenticatedV2User(req, zkV2);
     if (!sess) {
       res.status(403).send('Accesso negato');
       return;
     }
     const buildId = String(req.params.buildId);
-    const type = String(req.params.type); // 'apk' or 'project'
+    const type = String(req.params.type);
     if (!/^[a-zA-Z0-9._-]{1,64}$/.test(buildId) || (type !== 'apk' && type !== 'project')) {
       res.status(400).send('Parametri richiesta non validi');
       return;
     }
-
     const builds = loadAndroidBuilds();
     const found = builds.find((b) => b.buildId === buildId) || builds[0];
-
     if (!found) {
       res.status(404).send('Release non trovata');
       return;
     }
-
     const fallbackVersionName = readAndroidAppVersion().versionName;
-    const safeApkFilename = isValidVaultFilename(found.apkFilename)
+    const safeApkFilename = isValidSafeFilename(found.apkFilename)
       ? found.apkFilename
       : `photocloud-release-v${fallbackVersionName}-signed.apk`;
-    const safeZipFilename = isValidVaultFilename(found.projectZipFilename)
+    const safeZipFilename = isValidSafeFilename(found.projectZipFilename)
       ? found.projectZipFilename
       : `photocloud-android-studio-project-v${fallbackVersionName}.zip`;
 
     if (type === 'apk') {
       const specificPath = path.resolve(RELEASE_BUILDS_DIR, `${buildId}_${safeApkFilename}`);
       const directPath = path.resolve(RELEASE_DIR, safeApkFilename);
-      const fallbackPath = path.resolve(RELEASE_DIR, safeApkFilename);
-
       const targetPath =
         specificPath.startsWith(RELEASE_BUILDS_DIR + path.sep) && fs.existsSync(specificPath)
           ? specificPath
-          : directPath.startsWith(RELEASE_DIR + path.sep) && fs.existsSync(directPath)
-          ? directPath
-          : fallbackPath;
-
+          : directPath;
       if (!fs.existsSync(targetPath)) {
         res.status(404).send('File APK non trovato');
         return;
@@ -4191,55 +617,47 @@ async function startServer() {
       res.sendFile(targetPath);
     } else {
       const specificPath = path.resolve(RELEASE_BUILDS_DIR, `${buildId}_${safeZipFilename}`);
-      const fallbackFiles = fs.readdirSync(RELEASE_BUILDS_DIR).filter((f) => f.endsWith('.zip') && isValidVaultFilename(f));
-      const fallbackPath = fallbackFiles[0] ? path.resolve(RELEASE_BUILDS_DIR, fallbackFiles[0]) : null;
-
-      const targetPath =
-        specificPath.startsWith(RELEASE_BUILDS_DIR + path.sep) && fs.existsSync(specificPath)
-          ? specificPath
-          : fallbackPath;
-
-      if (!targetPath || !fs.existsSync(targetPath)) {
+      if (!specificPath.startsWith(RELEASE_BUILDS_DIR + path.sep) || !fs.existsSync(specificPath)) {
         res.status(404).send('File ZIP progetto non trovato');
         return;
       }
       res.setHeader('Content-Type', 'application/zip');
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeZipFilename)}"`);
-      res.sendFile(targetPath);
+      res.sendFile(specificPath);
     }
   });
 
-  try {
-    const cleanedParts = cleanupOrphanTempFiles(TEMP_UPLOAD_DIR, {
-      cleanAllChunkedParts: true,
-      staleTempMaxAgeMs: CHUNKED_UPLOAD_TTL_MS,
+  // 7. All removed legacy server-side encryption (v1) routes fail closed with 410 Gone
+  app.use((_req: Request, res: Response) => {
+    res.status(410).json({
+      error: 'SERVER_SIDE_ENCRYPTION_REMOVED',
+      message:
+        'La cifratura lato server (v1) è stata rimossa definitivamente. PhotoCloud utilizza esclusivamente crittografia Zero-Knowledge E2EE client-side su /v2 e /api/v2/*.',
+      v2Url: '/v2',
     });
-    if (cleanedParts > 0) {
-      console.log(`PhotoCloud startup cleanup: rimossi ${cleanedParts} file temporanei orfani da temp_uploads/`);
-    }
-  } catch {
-    // ignore startup temp cleanup error
-  }
+  });
 
+  return { app, zkV2, vaultV2Dir, tempUploadDir };
+}
+
+async function startServer(): Promise<void> {
+  const { app, vaultV2Dir } = createPhotoCloudApp();
   const port = Number(process.env.PORT) || 3000;
   app.listen(port, '0.0.0.0', () => {
-    console.log(`PhotoCloud server listening on http://0.0.0.0:${port}`);
+    console.log(`PhotoCloud Zero-Knowledge E2EE server listening on http://0.0.0.0:${port} (vault: /v2)`);
   });
 
-  setImmediate(() => {
-    try {
-      thumbCache.cleanupAllUsersOrphans(UPLOAD_FOLDER);
-    } catch {
-      // ignore startup orphan cleanup error
-    }
-  });
-
-  // Inizializza il servizio Web Push (chiavi VAPID persistenti) in background.
-  void initPushService(UPLOAD_FOLDER).then((res) => {
+  void initPushService(vaultV2Dir).then((res) => {
     if (res) {
       console.log('PhotoCloud Web Push attivo (endpoint /api/push/* disponibili)');
     }
   });
 }
 
-startServer();
+const isMainEntry =
+  typeof process.argv[1] === 'string' &&
+  pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+
+if (isMainEntry) {
+  void startServer();
+}

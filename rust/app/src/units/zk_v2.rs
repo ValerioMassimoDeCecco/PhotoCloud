@@ -566,6 +566,10 @@ fn get_authenticated_session(state: &AppState, headers: &HeaderMap) -> Option<Au
     })
 }
 
+pub fn has_authenticated_v2_session(state: &AppState, headers: &HeaderMap) -> bool {
+    get_authenticated_session(state, headers).is_some()
+}
+
 fn require_auth(state: &AppState, headers: &HeaderMap) -> Result<AuthenticatedUserV2, Response> {
     get_authenticated_session(state, headers).ok_or_else(|| {
         v2_json(

@@ -14,9 +14,19 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::state::AppState;
-use crate::vault_manager::is_valid_vault_filename;
 use crate::zk_v2_store::{parse_http_range_header, ParsedHttpRange};
 use super::common::{access_denied, json_response};
+use super::zk_v2::has_authenticated_v2_session;
+
+fn is_valid_safe_filename(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('.')
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+        && !name.contains('\0')
+}
 
 const RELEASE_DIR: &str = "release";
 const RELEASE_BUILDS_DIR: &str = "release_builds";
@@ -102,7 +112,7 @@ fn resolve_release_apk(
         }
     }
     if let Some(mf) = manifest_apk_filename {
-        if is_valid_vault_filename(mf) && is_usable_apk(mf) {
+        if is_valid_safe_filename(mf) && is_usable_apk(mf) {
             return Some(mf.to_string());
         }
     }
@@ -451,7 +461,7 @@ fn validate_android_config(cfg: &AndroidBuildConfig) -> Option<&'static str> {
 
 // GET /api/android/releases
 pub async fn get_android_releases(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if state.get_session(&headers).is_none() {
+    if !has_authenticated_v2_session(&state, &headers) {
         return access_denied();
     }
     let builds = load_android_builds();
@@ -503,7 +513,7 @@ pub async fn post_android_build_release(
     headers: HeaderMap,
     body_bytes: Bytes,
 ) -> Response {
-    if state.get_session(&headers).is_none() {
+    if !has_authenticated_v2_session(&state, &headers) {
         return json_response(
             StatusCode::FORBIDDEN,
             r#"{"success":false,"error":"Accesso negato"}"#,
@@ -615,7 +625,7 @@ pub async fn get_android_download(
     headers: HeaderMap,
     Path((build_id, kind)): Path<(String, String)>,
 ) -> Response {
-    if state.get_session(&headers).is_none() {
+    if !has_authenticated_v2_session(&state, &headers) {
         return (StatusCode::FORBIDDEN, "Accesso negato").into_response();
     }
     let valid_id = !build_id.is_empty()
@@ -640,13 +650,13 @@ pub async fn get_android_download(
     let safe_apk = found
         .get("apkFilename")
         .and_then(|v| v.as_str())
-        .filter(|s| is_valid_vault_filename(s))
+        .filter(|s| is_valid_safe_filename(s))
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("photocloud-release-v{fallback_ver}-signed.apk"));
     let safe_zip = found
         .get("projectZipFilename")
         .and_then(|v| v.as_str())
-        .filter(|s| is_valid_vault_filename(s))
+        .filter(|s| is_valid_safe_filename(s))
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("photocloud-android-studio-project-v{fallback_ver}.zip"));
 

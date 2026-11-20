@@ -1,75 +1,26 @@
 pub mod common;
-pub mod auth;
-pub mod session;
 pub mod push;
-pub mod navigation;
-pub mod root;
-pub mod api;
-pub mod media;
-pub mod shares;
-pub mod extras;
 pub mod android;
 pub mod zk_v2;
-pub mod fallback;
 
-use axum::extract::{DefaultBodyLimit, Request};
-use axum::http::{Method, StatusCode};
-use axum::middleware::{self, Next};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, get_service, post, put};
+use axum::routing::{get, get_service, post};
 use axum::{Json, Router};
 use tower_http::services::{ServeDir, ServeFile};
+
 use crate::state::AppState;
 
-const UPLOAD_BODY_LIMIT: usize = 512 * 1024 * 1024; // 512 MiB
-
-fn is_zk_only_mode() -> bool {
-    matches!(
-        std::env::var("PHOTOCLOUD_ZK_ONLY")
-            .unwrap_or_default()
-            .trim()
-            .to_lowercase()
-            .as_str(),
-        "1" | "true" | "yes"
-    )
+async fn redirect_to_v2() -> Redirect {
+    Redirect::temporary("/v2")
 }
 
-async fn zk_only_guard_middleware(req: Request, next: Next) -> Response {
-    if !is_zk_only_mode() {
-        return next.run(req).await;
-    }
-    let path = req.uri().path();
-    if path == "/" && (req.method() == Method::GET || req.method() == Method::HEAD) {
-        return Redirect::temporary("/v2").into_response();
-    }
-    let allowed = path == "/v2"
-        || path.starts_with("/v2/")
-        || path.starts_with("/api/v2/")
-        || path.starts_with("/api/android/")
-        || path.starts_with("/api/ai-model/")
-        || path.starts_with("/api/push/")
-        || path.starts_with("/static/")
-        || path.starts_with("/release/")
-        || matches!(
-            path,
-            "/register-pwa.js"
-                | "/service-worker.js"
-                | "/manifest.webmanifest"
-                | "/favicon.ico"
-                | "/icon.svg"
-                | "/apple-touch-icon.png"
-                | "/pwa-192x192.png"
-                | "/pwa-512x512.png"
-                | "/pwa-maskable-512x512.png"
-        );
-    if allowed {
-        return next.run(req).await;
-    }
+async fn removed_v1_gone() -> Response {
     (
         StatusCode::GONE,
         Json(serde_json::json!({
-            "error": "LEGACY_V1_DISABLED_ZK_ONLY",
-            "message": "Modalità Zero-Knowledge esclusiva attiva. Usa /v2 e /api/v2/*.",
+            "error": "SERVER_SIDE_ENCRYPTION_REMOVED",
+            "message": "La cifratura lato server (v1) è stata rimossa definitivamente. PhotoCloud opera esclusivamente in modalità Zero-Knowledge End-to-End su /v2 e /api/v2/*.",
             "v2Url": "/v2"
         })),
     )
@@ -83,16 +34,16 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .nest("/api/v2", zk_api)
         .nest("/v2", zk_web)
-        .route("/", get(root::get_root))
-        .route("/login", get(navigation::redirect_to_root).post(auth::post_login))
-        .route("/logout", post(auth::post_logout))
-        .route("/register", post(auth::post_register))
-        .route("/trash", get(navigation::get_trash))
-        .route("/map", get(extras::get_map_page))
-        .route("/api/session", get(session::get_session))
+        // Unconditional redirects from legacy entry pages to the Zero-Knowledge v2 web app
+        .route("/", get(redirect_to_v2))
+        .route("/login", get(redirect_to_v2).post(removed_v1_gone))
+        .route("/trash", get(redirect_to_v2))
+        .route("/map", get(redirect_to_v2))
+        // Push notifications (subscribe/unsubscribe authenticated via v2 session cookie)
         .route("/api/push/vapid-key", get(push::get_vapid_key))
         .route("/api/push/subscribe", post(push::post_subscribe))
         .route("/api/push/unsubscribe", post(push::post_unsubscribe))
+        // Android OTA update manifest, on-device AI TFLite model, and Release Studio API
         .route("/api/android/update-manifest", get(android::android_update_manifest))
         .route(
             "/api/ai-model/efficientnet_lite4.tflite",
@@ -107,72 +58,7 @@ pub fn router(state: AppState) -> Router {
             "/api/android/download/{buildId}/{type}",
             get(android::get_android_download),
         )
-        .route("/api/albums", get(api::get_albums))
-        .route("/api/albums/create", post(api::post_albums_create))
-        .route("/api/albums/assign", post(api::post_albums_assign))
-        .route("/api/albums/delete", post(api::post_albums_delete))
-        .route("/api/albums/share", post(shares::post_albums_share))
-        .route("/api/albums/unshare", post(shares::post_albums_unshare))
-        .route("/api/albums/shared", get(shares::get_albums_shared))
-        .route("/api/shared-albums/{shareId}/media", get(shares::get_shared_album_media))
-        .route(
-            "/api/shared-albums/{shareId}/file/{filename}",
-            get(shares::get_shared_album_file),
-        )
-        .route(
-            "/api/shared-albums/{shareId}/upload",
-            post(shares::post_shared_album_upload).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
-        )
-        .route("/api/favorites", get(api::get_favorites))
-        .route("/api/favorites/toggle", post(api::post_favorites_toggle))
-        .route("/api/favorites/set-many", post(api::post_favorites_set_many))
-        .route("/api/memories", get(api::get_memories))
-        .route("/api/shares", get(shares::get_shares))
-        .route("/api/shares/create", post(shares::post_shares_create))
-        .route("/api/shares/delete", post(shares::post_shares_delete))
-        .route("/share/{token}", get(shares::get_public_share_page))
-        .route("/share/{token}/unlock", post(shares::post_public_share_unlock))
-        .route(
-            "/share/{token}/media/{filename}",
-            get(shares::get_public_share_media_query),
-        )
-        .route("/api/search", get(api::get_search))
-        .route("/api/similar_duplicates", post(api::post_similar_duplicates))
-        .route("/api/exif/{filename}", get(extras::get_exif))
-        .route("/api/map-photos", get(extras::get_map_photos))
-        .route("/api/thumbs/stats", get(extras::get_thumb_stats))
-        .route("/api/thumbs/rebuild", post(extras::post_thumb_rebuild))
-        .route("/api/thumbs/{filename}", put(extras::put_thumb))
-        .route("/api/backup/check", post(extras::post_backup_check))
-        .route("/api/upload/chunked/init", post(extras::post_chunked_init))
-        .route(
-            "/api/upload/chunked/{uploadId}/{chunkIndex}",
-            put(extras::put_chunked_part).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
-        )
-        .route(
-            "/api/upload/chunked/{uploadId}/complete",
-            post(extras::post_chunked_complete),
-        )
-        .route("/api/document-preview/{filename}", get(extras::get_document_preview))
-        .route(
-            "/api/media/edit",
-            post(extras::post_media_edit).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
-        )
-        .route("/trash/batch", post(extras::post_trash_batch))
-        .route("/find_duplicates_server", post(extras::post_find_duplicates))
-        .route("/prepare-zip", post(extras::post_prepare_zip))
-        .route("/zip-progress/{taskId}", get(extras::get_zip_progress))
-        .route("/download-zip/{filename}", get(extras::get_download_zip))
-        .route(
-            "/upload",
-            post(media::post_upload).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
-        )
-        .route("/media/{filename}", get(media::get_media))
-        .route("/trash/media/{filename}", get(media::get_trash_media))
-        .route("/trash/{filename}", post(media::post_trash_file))
-        .route("/restore/{filename}", post(media::post_restore_file))
-        .route("/delete_permanent/{filename}", post(media::post_delete_permanent))
-        .route("/empty_trash", post(media::post_empty_trash))
+        // Static PWA & release assets
         .nest_service("/static", ServeDir::new("static"))
         .nest_service("/release", ServeDir::new("release"))
         .route("/register-pwa.js", get_service(ServeFile::new("public/register-pwa.js")))
@@ -187,7 +73,7 @@ pub fn router(state: AppState) -> Router {
             "/pwa-maskable-512x512.png",
             get_service(ServeFile::new("public/pwa-maskable-512x512.png")),
         )
-        .fallback(fallback::not_found)
-        .layer(middleware::from_fn(zk_only_guard_middleware))
+        // Every removed legacy V1 route fails closed with 410 Gone
+        .fallback(removed_v1_gone)
         .with_state(state)
 }

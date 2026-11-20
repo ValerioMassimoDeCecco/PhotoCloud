@@ -277,22 +277,12 @@ class MainActivity : ComponentActivity() {
                     bottomBar = {
                         NavigationBar {
                             NavigationBarItem(
-                                selected = currentTab == "vault_zk",
+                                selected = true,
                                 onClick = {
-                                    currentTab = "vault_zk"
                                     webViewRef?.loadUrl("${safeServerUrl}/v2")
                                 },
                                 icon = { Icon(Icons.Default.Lock, contentDescription = "Vault E2EE") },
                                 label = { Text("Vault E2EE") }
-                            )
-                            NavigationBarItem(
-                                selected = currentTab == "gallery_legacy",
-                                onClick = {
-                                    currentTab = "gallery_legacy"
-                                    webViewRef?.loadUrl("${safeServerUrl}/")
-                                },
-                                icon = { Icon(Icons.Default.PhotoLibrary, contentDescription = "Classico") },
-                                label = { Text("Classico") }
                             )
                         }
                     }

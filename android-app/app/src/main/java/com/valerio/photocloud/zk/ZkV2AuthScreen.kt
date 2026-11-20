@@ -133,7 +133,6 @@ sealed interface ZkV2UiEvent {
     data object SubmitRewrap : ZkV2UiEvent
     data object Logout : ZkV2UiEvent
     data object OpenServerConfig : ZkV2UiEvent
-    data object ExitV2BetaToLegacy : ZkV2UiEvent
 }
 
 fun canUseStrongBiometricsOnly(activity: FragmentActivity): Boolean {
@@ -189,8 +188,7 @@ fun ZkV2AuthCoordinator(
     activity: FragmentActivity,
     sessionManager: ZkSessionManager,
     serverUrl: String,
-    onOpenServerConfig: () -> Unit,
-    onExitV2Mode: () -> Unit
+    onOpenServerConfig: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -594,7 +592,6 @@ fun ZkV2AuthCoordinator(
                 }
             }
             ZkV2UiEvent.OpenServerConfig -> onOpenServerConfig()
-            ZkV2UiEvent.ExitV2BetaToLegacy -> onExitV2Mode()
         }
     }
 
@@ -642,19 +639,12 @@ fun ZkV2AuthScreen(
                         .padding(horizontal = 20.dp, vertical = 16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Server URL Bar
+                    // Server URL Bar (Zero-Knowledge v2 only)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.End,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (!session.isUnlocked) {
-                            TextButton(onClick = { onEvent(ZkV2UiEvent.ExitV2BetaToLegacy) }) {
-                                Text("Torna a v1 (Legacy)")
-                            }
-                        } else {
-                            Spacer(Modifier.width(8.dp))
-                        }
 
                         Surface(
                             onClick = { onEvent(ZkV2UiEvent.OpenServerConfig) },

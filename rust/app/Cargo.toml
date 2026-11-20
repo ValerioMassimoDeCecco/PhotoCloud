@@ -3,35 +3,28 @@ name = "server"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "PhotoCloud standalone pure Rust server (V1 + V2 Zero-Knowledge E2EE)"
+description = "PhotoCloud standalone pure Rust server (100% Zero-Knowledge E2EE v2 only — zero symmetric cipher crates)"
 
 [[bin]]
 name = "server"
 path = "src/main.rs"
 
 [dependencies]
-axum = { version = "0.8", features = ["multipart"] }
+axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "time", "fs", "io-util"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_urlencoded = "0.7"
 sha2 = "0.10"
-aes = "0.8"
-aes-gcm = "0.10"
-cfb-mode = "0.8"
-pbkdf2 = { version = "0.12", default-features = false }
 scrypt = { version = "0.11", default-features = false }
 hmac = "0.12"
 hex = "0.4"
 base64 = "0.22"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "gif"] }
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4", features = ["serde"] }
 subtle = "2.5"
 rand = "0.8"
-hkdf = "0.12"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 [workspace]
