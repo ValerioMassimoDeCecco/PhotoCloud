@@ -71,43 +71,47 @@ async function run() {
 
   try {
     // -----------------------------------------------------------------------
-    // Flow 1: Register with dynamic stdout setupToken + passphrase warning + keyfile
+    // Flow 1: Register (Argon2id passphrase mode) + auto keyfile download + Recovery Code
     // -----------------------------------------------------------------------
     console.log('[E2E Flow 1] Registration & Keyfile download...');
     await ownerPage.goto(`${BASE_URL}/v2`, { waitUntil: 'networkidle' });
     await ownerPage.locator('#tab-register').click();
 
-    const regWarn = await ownerPage.locator('#reg-warning-unrecoverable').textContent();
-    assert.ok(regWarn && regWarn.includes('NON sostituisce MAI la tua Passphrase'));
+    // Switch to custom passphrase mode (Argon2id 64 MiB) before filling inputs
+    await ownerPage.locator('#reg-mode-passphrase').click();
+    await ownerPage.locator('#reg-passphrase-input').waitFor({ state: 'visible', timeout: 5000 });
 
     await ownerPage.locator('#reg-username-input').fill(username);
-    await ownerPage.locator('#reg-setup-token-input').fill(SETUP_TOKEN);
     await ownerPage.locator('#reg-passphrase-input').fill(passphrase);
-    await ownerPage.locator('#btn-reg-prepare').click();
-
-    const recoveryCode = (await ownerPage.locator('#reg-recovery-code-display').textContent()).trim();
-    assert.ok(recoveryCode.length >= 64, 'Expected valid Recovery Code hex');
-    await ownerPage.locator('#reg-recovery-confirm-input').fill(recoveryCode);
-    await ownerPage.locator('#btn-reg-complete').click();
-
-    await ownerPage
-      .locator('#e2ee-status-badge', { hasText: 'E2EE Attivo (Vault Sbloccato)' })
-      .waitFor({ timeout: 25000 });
-    const kfWarn = await ownerPage.locator('#keyfile-passphrase-warning').textContent();
-    assert.ok(kfWarn && kfWarn.includes('Passphrase persa = dati non recuperabili'));
+    const setupTokenInput = ownerPage.locator('#reg-setup-token-input');
+    if ((await setupTokenInput.count()) > 0) {
+      await setupTokenInput.fill(SETUP_TOKEN);
+    }
 
     const [keyfileDownload] = await Promise.all([
-      ownerPage.waitForEvent('download'),
-      ownerPage.locator('#btn-download-keyfile').click(),
+      ownerPage.waitForEvent('download', { timeout: 25000 }),
+      ownerPage.locator('#btn-reg-submit').click(),
     ]);
+
+    await ownerPage
+      .locator('#e2ee-status-badge', { hasText: `E2EE · ${username}` })
+      .waitFor({ timeout: 25000 });
+
     await keyfileDownload.saveAs(savedKeyfilePath);
     const keyfileRaw = fs.readFileSync(savedKeyfilePath, 'utf8');
     assert.equal(keyfileRaw.includes(passphrase), false, 'Passphrase must NEVER appear in keyfile');
     const parsedKeyfile = JSON.parse(keyfileRaw);
     assert.equal(parsedKeyfile.username, username);
     assert.equal(parsedKeyfile.formatVersion, 2);
+    assert.equal(parsedKeyfile.hasPassphrase, true);
     assert.ok(typeof parsedKeyfile.accountKey === 'string' && parsedKeyfile.accountKey.length >= 43);
     assert.ok(parsedKeyfile.kdfParams?.memoryKiB >= 65536);
+
+    // Verify Recovery Code is available in the Security view
+    await ownerPage.locator('#nav-security').click();
+    const recoveryCode = (await ownerPage.locator('#security-recovery-code').textContent())?.trim() ?? '';
+    assert.ok(recoveryCode.length >= 64, 'Expected valid Recovery Code hex in Security view');
+    await ownerPage.locator('#nav-gallery').click();
 
     // -----------------------------------------------------------------------
     // Flow 2: Logout (RAM zeroization) & Login via Keyfile + Passphrase
@@ -120,12 +124,12 @@ async function run() {
 
     await ownerPage.locator('#login-keyfile-input').setInputFiles(savedKeyfilePath);
     await ownerPage
-      .locator('#login-keyfile-status', { hasText: `Utente keyfile: ${username}` })
+      .locator('#login-keyfile-status', { hasText: `Account: ${username}` })
       .waitFor({ timeout: 5000 });
     await ownerPage.locator('#login-passphrase-input').fill(passphrase);
     await ownerPage.locator('#btn-login-submit').click();
     await ownerPage
-      .locator('#e2ee-status-badge', { hasText: 'E2EE Attivo (Vault Sbloccato)' })
+      .locator('#e2ee-status-badge', { hasText: `E2EE · ${username}` })
       .waitFor({ timeout: 25000 });
 
     // Ensure Service Worker controls /v2/ before playing video stream
@@ -139,10 +143,13 @@ async function run() {
       await ownerPage.reload({ waitUntil: 'networkidle' });
       // Re-unlock vault after reload so session & SW controller are both active
       await ownerPage.locator('#login-keyfile-input').setInputFiles(savedKeyfilePath);
+      await ownerPage
+        .locator('#login-keyfile-status', { hasText: `Account: ${username}` })
+        .waitFor({ timeout: 5000 });
       await ownerPage.locator('#login-passphrase-input').fill(passphrase);
       await ownerPage.locator('#btn-login-submit').click();
       await ownerPage
-        .locator('#e2ee-status-badge', { hasText: 'E2EE Attivo (Vault Sbloccato)' })
+        .locator('#e2ee-status-badge', { hasText: `E2EE · ${username}` })
         .waitFor({ timeout: 25000 });
     }
 
@@ -157,7 +164,7 @@ async function run() {
       path.join(FIXTURES_DIR, 'rapporto.pdf'),
     ]);
     await ownerPage
-      .locator('#stats-active-count', { hasText: 'Elementi attivi: 4' })
+      .locator('#stats-active-count', { hasText: 'Attivi: 4' })
       .waitFor({ timeout: 20000 });
 
     // -----------------------------------------------------------------------
@@ -211,14 +218,21 @@ async function run() {
     console.log('[E2E Flow 5 & 6] Photo Editor E2EE + Encrypted Streaming ZIP export...');
     await ownerPage.locator('[data-item-name="photo_e2e.png"]').click();
     await ownerPage.locator('#lightbox-decrypted-image').waitFor({ timeout: 8000 });
-    await ownerPage.locator('#btn-lightbox-rotate-save').click();
+    await ownerPage.locator('#btn-lightbox-edit').click();
+    await ownerPage.locator('#editor-preview-canvas').waitFor({ state: 'visible', timeout: 10000 });
+    await ownerPage.locator('#editor-tab-transform').click();
+    await ownerPage.locator('#btn-editor-rotate-right').click();
+    await ownerPage.locator('#btn-editor-save-overwrite').click();
     await ownerPage
-      .locator('#lightbox-item-title', { hasText: 'photo_e2e.png (v2)' })
-      .waitFor({ timeout: 10000 });
-    await ownerPage.locator('#btn-lightbox-save-copy').click();
+      .locator('#lightbox-modal .exif-meta-bar', { hasText: 'v2' })
+      .waitFor({ timeout: 15000 });
+
+    await ownerPage.locator('#btn-lightbox-edit').click();
+    await ownerPage.locator('#editor-preview-canvas').waitFor({ state: 'visible', timeout: 10000 });
+    await ownerPage.locator('#btn-editor-save-copy').click();
     await ownerPage
-      .locator('#stats-active-count', { hasText: 'Elementi attivi: 5' })
-      .waitFor({ timeout: 10000 });
+      .locator('#stats-active-count', { hasText: 'Attivi: 5' })
+      .waitFor({ timeout: 15000 });
 
     const [zipDownload] = await Promise.all([
       ownerPage.waitForEvent('download'),
@@ -232,29 +246,29 @@ async function run() {
     // Flow 7: Trash -> Restore -> Trash -> Permanent Delete
     // -----------------------------------------------------------------------
     console.log('[E2E Flow 7] Trash, Restore & Permanent Delete...');
-    await ownerPage.locator('[data-item-name="photo_e2e_copia.png"]').click();
+    await ownerPage.locator('[data-item-name="photo_e2e_modificata.png"]').click();
     await ownerPage.locator('#btn-lightbox-trash').click();
     await ownerPage
-      .locator('#stats-trashed-count', { hasText: 'Nel cestino: 1' })
+      .locator('#stats-trashed-count', { hasText: 'Cestino: 1' })
       .waitFor({ timeout: 8000 });
 
     await ownerPage.locator('#nav-trash').click();
-    await ownerPage.locator('[data-item-name="photo_e2e_copia.png"]').click();
+    await ownerPage.locator('[data-item-name="photo_e2e_modificata.png"]').click();
     await ownerPage.locator('#btn-lightbox-restore').click();
     await ownerPage
-      .locator('#stats-trashed-count', { hasText: 'Nel cestino: 0' })
+      .locator('#stats-trashed-count', { hasText: 'Cestino: 0' })
       .waitFor({ timeout: 8000 });
 
     await ownerPage.locator('#nav-gallery').click();
-    await ownerPage.locator('[data-item-name="photo_e2e_copia.png"]').click();
+    await ownerPage.locator('[data-item-name="photo_e2e_modificata.png"]').click();
     await ownerPage.locator('#btn-lightbox-trash').click();
     await ownerPage.locator('#nav-trash').click();
-    await ownerPage.locator('[data-item-name="photo_e2e_copia.png"]').click();
+    await ownerPage.locator('[data-item-name="photo_e2e_modificata.png"]').click();
     await ownerPage.locator('#btn-lightbox-delete-permanent').click();
     await ownerPage.locator('#vault-empty-state').waitFor({ timeout: 8000 });
     await ownerPage.locator('#nav-gallery').click();
     await ownerPage
-      .locator('#stats-active-count', { hasText: 'Elementi attivi: 4' })
+      .locator('#stats-active-count', { hasText: 'Attivi: 4' })
       .waitFor({ timeout: 8000 });
 
     // -----------------------------------------------------------------------
@@ -289,17 +303,25 @@ async function run() {
     console.log('[E2E Flow 9] Zero-Cookie Public Share (#fragment), Argon2id Password & Revocation...');
     await ownerPage.locator('[data-item-name="photo_e2e.png"]').click();
     await ownerPage.locator('#btn-lightbox-share').click();
-    await ownerPage.locator('#lightbox-modal').waitFor({ state: 'hidden', timeout: 15000 });
-    const shareUrlNoPw = (await ownerPage.locator('#last-share-url-display').textContent()).trim();
+    await ownerPage.locator('#create-share-modal').waitFor({ state: 'visible', timeout: 8000 });
+    await ownerPage.locator('#btn-share-modal-submit').click();
+    await ownerPage.locator('#share-modal-url-display').waitFor({ state: 'visible', timeout: 15000 });
+    const shareUrlNoPw = (await ownerPage.locator('#share-modal-url-display').textContent())?.trim() ?? '';
     assert.ok(shareUrlNoPw.includes('/v2/share/') && shareUrlNoPw.includes('#') && !shareUrlNoPw.includes('?'));
+    await ownerPage.locator('#btn-share-modal-close').click();
+    await ownerPage.locator('#create-share-modal').waitFor({ state: 'hidden', timeout: 8000 });
 
     await ownerPage.locator('[data-item-name="photo_e2e.png"]').click();
-    await ownerPage.locator('#share-password-input').fill('SharePass-2026!');
     await ownerPage.locator('#btn-lightbox-share').click();
-    await ownerPage.locator('#lightbox-modal').waitFor({ state: 'hidden', timeout: 25000 });
-    const shareUrlWithPw = (await ownerPage.locator('#last-share-url-display').textContent()).trim();
+    await ownerPage.locator('#create-share-modal').waitFor({ state: 'visible', timeout: 8000 });
+    await ownerPage.locator('#share-modal-password').fill('SharePass-2026!');
+    await ownerPage.locator('#btn-share-modal-submit').click();
+    await ownerPage.locator('#share-modal-url-display').waitFor({ state: 'visible', timeout: 25000 });
+    const shareUrlWithPw = (await ownerPage.locator('#share-modal-url-display').textContent())?.trim() ?? '';
     assert.ok(shareUrlWithPw.includes('/v2/share/') && shareUrlWithPw.includes('#'));
     assert.notEqual(shareUrlWithPw, shareUrlNoPw);
+    await ownerPage.locator('#btn-share-modal-close').click();
+    await ownerPage.locator('#create-share-modal').waitFor({ state: 'hidden', timeout: 8000 });
 
     // Anonymous zero-cookie context opens Share without password
     await anonPage.goto(shareUrlNoPw, { waitUntil: 'networkidle' });

@@ -37,6 +37,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -127,7 +128,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
 import com.valerio.photocloud.GalleryDragSelectionController
 import com.valerio.photocloud.GridCellBounds
-import com.valerio.photocloud.findCellAtPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -177,8 +177,8 @@ fun ZkV2VaultScreen(
 
     // Multi-select & drag-select state (GalleryDragSelectionController)
     var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    val dragController = remember { GalleryDragSelectionController<String>() }
-    val tileBounds = remember { mutableMapOf<String, GridCellBounds<String>>() }
+    val dragController = remember { GalleryDragSelectionController() }
+    val tileBounds = remember { mutableMapOf<String, GridCellBounds>() }
 
     var backupConfig by remember { mutableStateOf(ZkAutoBackupPrefs.load(context)) }
     val transfers by transferManager.transfers.collectAsState()
@@ -648,24 +648,37 @@ fun ZkV2VaultScreen(
                         .pointerInput(orderedFilteredIds, selectedIds) {
                             detectDragGesturesAfterLongPress(
                                 onDragStart = { startOffset ->
-                                    val hit = findCellAtPoint(tileBounds.values, startOffset.x, startOffset.y)
+                                    val hit = GalleryDragSelectionController.findCellAtPoint(
+                                        cells = tileBounds.values.toList(),
+                                        x = startOffset.x,
+                                        y = startOffset.y,
+                                        snapToNearest = false
+                                    )
                                     if (hit != null) {
                                         selectedIds = dragController.startDragSelection(
-                                            anchorItem = hit.item,
-                                            orderedItems = orderedFilteredIds,
-                                            currentSelection = selectedIds
+                                            anchorIndex = hit.index,
+                                            allFilenames = orderedFilteredIds,
+                                            existingSelection = selectedIds
                                         )
                                     }
                                 },
                                 onDrag = { change, _ ->
                                     change.consume()
                                     val pos = change.position
-                                    val hit = findCellAtPoint(tileBounds.values, pos.x, pos.y)
+                                    val hit = GalleryDragSelectionController.findCellAtPoint(
+                                        cells = tileBounds.values.toList(),
+                                        x = pos.x,
+                                        y = pos.y,
+                                        snapToNearest = true
+                                    )
                                     if (hit != null) {
-                                        selectedIds = dragController.updateDragTarget(
-                                            targetItem = hit.item,
-                                            orderedItems = orderedFilteredIds
+                                        val update = dragController.updateDragSelection(
+                                            targetIndex = hit.index,
+                                            allFilenames = orderedFilteredIds
                                         )
+                                        if (update.changed) {
+                                            selectedIds = update.selectedFilenames
+                                        }
                                     }
                                 },
                                 onDragEnd = { dragController.endDragSelection() },
@@ -761,10 +774,11 @@ fun ZkV2VaultScreen(
                             }
                         }
                     } else {
-                        items(filtered, key = { it.id }) { item ->
+                        itemsIndexed(filtered, key = { _, it -> it.id }) { index, item ->
                             val isSelected = item.id in selectedIds
                             ZkEncryptedThumbTile(
                                 item = item,
+                                itemIndex = index,
                                 repository = repository,
                                 isSelectionMode = selectedIds.isNotEmpty(),
                                 isSelected = isSelected,
@@ -1395,9 +1409,10 @@ private fun ZkTransferQueueCard(
 private fun ZkEncryptedThumbTile(
     item: DecryptedZkItem,
     repository: ZkVaultRepository,
+    itemIndex: Int = -1,
     isSelectionMode: Boolean = false,
     isSelected: Boolean = false,
-    onBoundsChanged: ((GridCellBounds<String>) -> Unit)? = null,
+    onBoundsChanged: ((GridCellBounds) -> Unit)? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null
 ) {
@@ -1427,9 +1442,18 @@ private fun ZkEncryptedThumbTile(
         modifier = Modifier
             .aspectRatio(1f)
             .onGloballyPositioned { coords ->
-                if (onBoundsChanged != null) {
+                if (onBoundsChanged != null && itemIndex >= 0) {
                     val r = coords.boundsInParent()
-                    onBoundsChanged(GridCellBounds(item.id, r.left, r.top, r.right, r.bottom))
+                    onBoundsChanged(
+                        GridCellBounds(
+                            filename = item.id,
+                            index = itemIndex,
+                            left = r.left,
+                            top = r.top,
+                            right = r.right,
+                            bottom = r.bottom
+                        )
+                    )
                 }
             }
             .clip(RoundedCornerShape(10.dp))

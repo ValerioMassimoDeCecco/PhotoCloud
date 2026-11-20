@@ -884,8 +884,7 @@ class ZkVaultRepository(
         )
         val dedupTagBytes = ZkCoreCrypto.computeDedupTag(
             dedupKey = subkeys.dedupKey,
-            plaintext = editedBytes,
-            cryptoProvider = cryptoProvider
+            input = editedBytes.inputStream()
         )
         val dedupTagB64u = ZkCoreCrypto.toBase64Url(dedupTagBytes)
 
@@ -989,8 +988,7 @@ class ZkVaultRepository(
         val dedupTagB64u = ZkCoreCrypto.toBase64Url(
             ZkCoreCrypto.computeDedupTag(
                 dedupKey = subkeys.dedupKey,
-                plaintext = editedBytes,
-                cryptoProvider = cryptoProvider
+                input = editedBytes.inputStream()
             )
         )
         val meta = ZkBlobPlaintextMeta(

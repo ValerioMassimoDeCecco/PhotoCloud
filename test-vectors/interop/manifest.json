@@ -19,7 +19,7 @@
   "vaultKeyHex": "505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f",
   "shareKeyHex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
   "plaintextUtf8": "PhotoCloud Zero-Knowledge v2 Interop Payload between Web TypeScript SDK and Android Kotlin Client.",
-  "ciphertextSha256Hex": "c7f7902091a9e38fe10e1fb95ca8fcb5a5a18e9b02a0016e89936380d51357e4",
+  "ciphertextSha256Hex": "67235d61c1ee0c4278350919badb6689cd736157dc2dfa51482cd2f845234d2c",
   "dedupTagHex": "f78d48ee96301b9611c648539cdd56ba50d3a7c22ca888b507d8cf9197c9aeab",
   "headerChunkSizeLog2": 20,
   "expectedMetaName": "interop_photo_2026.jpg",

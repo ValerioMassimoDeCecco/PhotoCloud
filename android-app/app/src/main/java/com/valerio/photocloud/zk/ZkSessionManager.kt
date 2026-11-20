@@ -28,7 +28,7 @@ data class ZkKeyFileV2(
     val accountKeyB64u: String,
     val saltB64u: String?,
     val kdfParams: V2KdfParamsDto?,
-    val hasPassphrase: Boolean,
+    val hasPassphrase: Boolean = true,
     val createdAt: String?
 )
 

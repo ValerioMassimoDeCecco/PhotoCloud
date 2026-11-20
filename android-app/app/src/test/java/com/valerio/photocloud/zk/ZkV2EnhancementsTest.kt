@@ -43,7 +43,7 @@ class ZkV2EnhancementsTest {
         val decrypted = ZkCoreCrypto.decryptOwnerShareMeta(
             metaKey = subkeys.metaKey,
             shareId = shareId.uppercase(),
-            encryptedMeta = encrypted,
+            encryptedOwnerMeta = encrypted,
             cryptoProvider = JvmCryptoProvider
         )
         val parsed = JSONObject(decrypted)
@@ -55,12 +55,12 @@ class ZkV2EnhancementsTest {
             ZkCoreCrypto.decryptOwnerShareMeta(
                 metaKey = subkeys.metaKey,
                 shareId = UUID.randomUUID().toString(),
-                encryptedMeta = encrypted,
+                encryptedOwnerMeta = encrypted,
                 cryptoProvider = JvmCryptoProvider
             )
             fail("Expected ZkCryptoException for mismatched shareId AAD")
         } catch (expected: ZkCryptoException) {
-            assertEquals(ZkErrorCode.AEAD_AUTH_FAILED, expected.code)
+            assertEquals(ZkErrorCode.AUTH_TAG_MISMATCH, expected.code)
         } finally {
             vk.zeroize()
             subkeys.zeroizeAll()
@@ -106,7 +106,7 @@ class ZkV2EnhancementsTest {
             )
             fail("Expected failure with wrong VK")
         } catch (expected: ZkCryptoException) {
-            assertEquals(ZkErrorCode.AEAD_AUTH_FAILED, expected.code)
+            assertEquals(ZkErrorCode.AUTH_TAG_MISMATCH, expected.code)
         }
 
         // Wrong userId AAD must fail
@@ -119,7 +119,7 @@ class ZkV2EnhancementsTest {
             )
             fail("Expected failure with wrong userId AAD")
         } catch (expected: ZkCryptoException) {
-            assertEquals(ZkErrorCode.AEAD_AUTH_FAILED, expected.code)
+            assertEquals(ZkErrorCode.AUTH_TAG_MISMATCH, expected.code)
         } finally {
             vk.zeroize()
             otherVk.zeroize()
@@ -240,8 +240,8 @@ class ZkV2EnhancementsTest {
             assertFalse(rawBioEnv!!.contains(registeredAuthSecret!!))
 
             // 4. Simulate cold app restart: lock in-memory vault AND clear in-memory HTTP cookie jar
-            sessionManager.lockVault("cold_restart_test")
-            apiClient.clearSessionState()
+            sessionManager.lock("cold_restart_test")
+            apiClient.cookieJar.clear()
             assertFalse(sessionManager.isUnlocked())
             assertFalse(apiClient.hasActiveSessionCookie())
 
@@ -257,13 +257,13 @@ class ZkV2EnhancementsTest {
             assertEquals(1, loginCallsCount)
 
             // 6. Full logout + 1-click keyfile login without passphrase
-            sessionManager.logout(deleteKeystoreKeys = true)
+            sessionManager.logout()
             assertFalse(sessionManager.isUnlocked())
 
             val keyFileJson = ZkAccountCredentialsCodec.serializeKeyFileJson(keyFile)
             sessionManager.loginWithKeyFileJson(keyFileJson, "")
             assertTrue(sessionManager.isUnlocked())
-            assertEquals("android_valerio", sessionManager.getCurrentUsernameOrNull())
+            assertEquals("android_valerio", sessionManager.getUsername())
             assertEquals(2, loginCallsCount)
         } finally {
             server.shutdown()
