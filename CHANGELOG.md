@@ -2,6 +2,16 @@
 
 Tutte le modifiche rilevanti di PhotoCloud sono documentate in questo file.
 
+## [1.5.2] - Android versionCode 34
+
+### Corretto
+- **Fix loop Caricamento File -> Schermata Login su Android (`ZkSessionManager.kt`, `MainActivity.kt`, `ZkV2VaultScreen.kt`, `ZkV2AuthScreen.kt`, `ZkTransferManager.kt`)**:
+  - Risolto il blocco immediato del vault (`onStop()` -> `onAppBackgrounded()`) all'apertura del selettore file di sistema (`OpenMultipleDocuments`), dell'esportazione File Chiave SAF (`CreateDocument`) e del selettore di apertura esterna (`Intent.createChooser`), che azzerava le chiavi in RAM e riportava l'utente alla schermata di login in loop al ritorno nell'app.
+  - Introdotta guardia temporanea `beginTransientExternalActivity()` / `endTransientExternalActivity()` con riarmo automatico al ritorno (`ActivityResult` e `MainActivity.onResume()`) e finestra di sicurezza massima, preservando il blocco immediato quando l'app viene messa realmente in background.
+  - Aggiunto heartbeat di attività durante l'avanzamento degli upload in `ZkTransferManager` per impedire il blocco per inattività durante caricamenti di file grandi.
+- **Hardening upload Web App `/v2` (`src/client/zk-sdk/client.ts`, `src/client/v2-app/main.ts`)**:
+  - Differito l'auto-lock durante la selezione file e per tutta la durata degli upload multi-chunk (con aggiornamento `touchActivity()` per chunk) e aggiunto reset di `#vault-upload-input` al termine del caricamento.
+
 ## [1.5.1] - Android versionCode 33
 
 ### Corretto & Rafforzato

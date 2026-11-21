@@ -1,18 +1,18 @@
 {
-  "apkFilename": "photocloud-release-v1.5.1-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.5.1-signed.apk",
+  "apkFilename": "photocloud-release-v1.5.2-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.5.2-signed.apk",
   "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "sizeBytes": 0,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.5.1",
-  "versionCode": 33,
-  "changelog": "Release 1.5.1 — Pulizia automatica all'avvio e via TTL dei file orfani temp_uploads/chunked_*.part dopo riavvii del server, checksum SHA-256 obbligatorio per il backup automatico su /api/upload/chunked/init (e verifica end-to-end su /upload?skipList=1), e fix completi di compilazione Kotlin/KSP per Android Release (PhotoCloudApiClient, AutoBackupWorker, MainActivity).",
+  "versionName": "1.5.2",
+  "versionCode": 34,
+  "changelog": "Release 1.5.2 — Risolto il loop Caricamento File -> Schermata Login su Android (soppressione selettiva del background lock durante selettore file di sistema, esportazione Keyfile SAF e apertura esterna con riarmo automatico su onResume), heartbeat sessione durante upload grandi su Android e Web /v2, e toggle HTTP/HTTPS integrato nella schermata principale.",
   "features": [
-    "Affidabilità Server & Backup v1.5.1: pulizia automatica all'avvio dei file temp_uploads/chunked_*.part orfani dopo riavvio e validazione/verifica SHA-256 obbligatoria per gli upload di backup automatico",
-    "Fix Compilazione Android Release (v1.5.1): risolti errori Kotlin/KSP su PhotoCloudApiClient, AutoBackupWorker (syncGallerySession) e MainActivity (SettingsSwitchRow)",
-    "Backup Automatico Camera Roll Android: caricamento in background con WorkManager, selettore cartelle (Camera default), solo Wi-Fi/ricarica/risparmio energetico, deduplica attiva SHA-256 e upload chunked streaming per video grandi",
-    "Cache Persistente Miniature Server: varianti cifrate AES-256-GCM thumb (320px) e large (1280px) JPEG q=80, ETag/304, eviction LRU configurabile (THUMB_CACHE_MAX_MB) e ricostruzione on-demand"
+    "Fix Loop Upload -> Login (v1.5.2): apertura del selettore file di sistema, salvataggio Keyfile SAF e apertura esterna non bloccano più il vault né riportano alla schermata di login",
+    "Protezione Auto-Lock durante Upload (Android & Web /v2): rinnovo attività su ogni chunk caricato per evitare blocchi a metà upload",
+    "Toggle Protocollo HTTP/HTTPS in alto a sinistra nella schermata principale di login/registrazione (Android, Web /v2, Server Node e Rust)",
+    "Vault Zero-Knowledge E2EE v2 completo con cifratura AES-256-GCM lato client, backup automatico cifrato e condivisioni Zero-Knowledge"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.5.1",
-  "notes": "Pre-release v1.5.1: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release, firmato con la stessa firma persistente (nessun segreto committato)."
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.5.2",
+  "notes": "Pre-release v1.5.2: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release, firmato con la stessa firma persistente (nessun segreto committato)."
 }

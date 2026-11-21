@@ -320,4 +320,72 @@ class ZkV2EnhancementsTest {
         }
         assertTrue("Switching back to HTTPS must reject plain HTTP URL", threwAfterHttps)
     }
+
+    @Test
+    fun `transient file picker activity suppresses background lock and re-arms on return or expiry`() = runTest {
+        var nowMs = 1_700_000_000_000L
+        val server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.path ?: ""
+                return when (path) {
+                    "/api/v2/register" -> {
+                        val body = JSONObject(request.body.readUtf8())
+                        val resp = JSONObject()
+                            .put("userId", body.optString("userId", UUID.randomUUID().toString()))
+                            .put("username", body.getString("username"))
+                            .put("salt", body.getString("salt"))
+                            .put("kdfParams", body.getJSONObject("kdfParams"))
+                            .put("wrappedVaultKey", body.getString("wrappedVaultKey"))
+                            .put("csrfToken", "csrf-picker-test")
+                        MockResponse()
+                            .setResponseCode(201)
+                            .addHeader("Set-Cookie", "photocloud_v2_sid=picker-sid; HttpOnly; SameSite=Strict; Path=/api/v2")
+                            .setBody(resp.toString())
+                    }
+                    else -> MockResponse().setResponseCode(404).setBody("""{"error":"not found"}""")
+                }
+            }
+        }
+        server.start()
+        try {
+            val apiClient = PhotoCloudZkApiClientV2(
+                initialBaseUrl = server.url("/").toString().removeSuffix("/"),
+                allowLocalhostHttpForTests = true
+            )
+            val session = ZkSessionManager(
+                apiClient = apiClient,
+                vaultKeyStore = InMemoryFakeVaultKeyStore(),
+                clockMs = { nowMs }
+            )
+            session.registerAccount(username = "picker_user", passphrase = null)
+            session.setAutoLockConfig(timeoutMs = 15 * 60 * 1000L, lockOnBackground = true)
+            assertTrue(session.isUnlocked())
+
+            // 1. Opening Android Document Picker triggers onStop -> onAppBackgrounded():
+            // vault MUST remain unlocked so returning with files does not show login screen.
+            session.beginTransientExternalActivity(maxDurationMs = 60_000L)
+            assertTrue(session.isTransientExternalActivityActive())
+            session.onAppBackgrounded()
+            assertTrue("Vault must stay unlocked during active system file picker", session.isUnlocked())
+            assertNotNull("Subkeys must remain available to enqueue picked files", session.getSubkeysOrNull())
+
+            // 2. Returning from the picker (ActivityResult / onResume) re-arms background lock.
+            session.endTransientExternalActivity()
+            assertFalse(session.isTransientExternalActivityActive())
+            session.onAppBackgrounded()
+            assertFalse("Real app backgrounding must still lock the vault when lockOnBackground=true", session.isUnlocked())
+
+            // 3. Re-register and verify safety expiry re-arms lock even if endTransientExternalActivity is never called.
+            session.registerAccount(username = "picker_user_2", passphrase = null)
+            session.setAutoLockConfig(timeoutMs = 15 * 60 * 1000L, lockOnBackground = true)
+            session.beginTransientExternalActivity(maxDurationMs = 30_000L)
+            nowMs += 31_000L
+            assertFalse("Expired transient suppression must auto-clear", session.isTransientExternalActivityActive())
+            session.onAppBackgrounded()
+            assertFalse("Vault must lock on background once transient safety window expires", session.isUnlocked())
+        } finally {
+            server.shutdown()
+        }
+    }
 }

@@ -366,9 +366,14 @@ sealed class PendingTransferRequest {
 class MainActivity : FragmentActivity() {
 
     private var onBackgroundLockCallback: (() -> Unit)? = null
+    private var onForegroundResumeCallback: (() -> Unit)? = null
 
     fun setOnBackgroundLockListener(listener: (() -> Unit)?) {
         onBackgroundLockCallback = listener
+    }
+
+    fun setOnForegroundResumeListener(listener: (() -> Unit)?) {
+        onForegroundResumeCallback = listener
     }
 
     private fun enableHighRefreshRate120Hz() {
@@ -463,6 +468,11 @@ class MainActivity : FragmentActivity() {
             .build()
 
         prompt.authenticate(promptInfo)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        onForegroundResumeCallback?.invoke()
     }
 
     override fun onStop() {
@@ -904,8 +914,12 @@ fun PhotoCloudNativeApp(
         activity.setOnBackgroundLockListener {
             zkV2Gate.onBackgrounded { it.onAppBackgrounded() }
         }
+        activity.setOnForegroundResumeListener {
+            zkV2Gate.getOrNull()?.endTransientExternalActivity()
+        }
         onDispose {
             activity.setOnBackgroundLockListener(null)
+            activity.setOnForegroundResumeListener(null)
         }
     }
 

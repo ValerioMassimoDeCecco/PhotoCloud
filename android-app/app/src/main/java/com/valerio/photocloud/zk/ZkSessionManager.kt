@@ -446,6 +446,12 @@ class ZkSessionManager(
     @Volatile
     private var autoLockJob: Job? = null
 
+    @Volatile
+    private var transientExternalActivityActive: Boolean = false
+
+    @Volatile
+    private var transientExternalActivityExpiresAtMs: Long = 0L
+
     fun isUnlocked(): Boolean = vaultKey != null && subkeys != null && currentUserId != null
 
     fun getUserId(): String? = currentUserId
@@ -522,8 +528,47 @@ class ZkSessionManager(
         return false
     }
 
+    /**
+     * Temporarily suppresses background auto-lock while an in-app system picker or chooser
+     * (e.g. Document Picker for file uploads, SAF KeyFile export, or external viewer chooser)
+     * puts `MainActivity` into `onStop()`, preventing the upload -> login screen loop.
+     */
+    fun beginTransientExternalActivity(maxDurationMs: Long = 5 * 60 * 1000L) {
+        val safeDuration = maxDurationMs.coerceIn(1_000L, 15 * 60 * 1000L)
+        transientExternalActivityActive = true
+        transientExternalActivityExpiresAtMs = clockMs() + safeDuration
+        if (isUnlocked()) {
+            touchActivity()
+        }
+    }
+
+    /**
+     * Re-arms background auto-lock once the user returns from the system picker or chooser.
+     */
+    fun endTransientExternalActivity() {
+        transientExternalActivityActive = false
+        transientExternalActivityExpiresAtMs = 0L
+        if (isUnlocked()) {
+            touchActivity()
+        }
+    }
+
+    fun isTransientExternalActivityActive(): Boolean {
+        if (!transientExternalActivityActive) return false
+        if (clockMs() > transientExternalActivityExpiresAtMs) {
+            transientExternalActivityActive = false
+            transientExternalActivityExpiresAtMs = 0L
+            return false
+        }
+        return true
+    }
+
     fun onAppBackgrounded() {
         if (!isUnlocked()) return
+        if (isTransientExternalActivityActive()) {
+            checkInactivityTimeout()
+            return
+        }
         if (lockOnBackground) {
             lock("App passata in background.")
         } else {
@@ -1197,6 +1242,8 @@ class ZkSessionManager(
     fun lock(reason: String? = "Vault bloccato.") {
         autoLockJob?.cancel()
         autoLockJob = null
+        transientExternalActivityActive = false
+        transientExternalActivityExpiresAtMs = 0L
         zeroizeInMemorySecrets()
         publishState(lockReason = reason)
     }
@@ -1204,6 +1251,8 @@ class ZkSessionManager(
     suspend fun logout() {
         autoLockJob?.cancel()
         autoLockJob = null
+        transientExternalActivityActive = false
+        transientExternalActivityExpiresAtMs = 0L
         try {
             apiClient.logout()
         } catch (_: Throwable) {

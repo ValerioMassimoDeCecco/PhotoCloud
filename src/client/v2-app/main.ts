@@ -871,12 +871,20 @@ export function initZkWebApp(): void {
     statusLine.id = 'upload-status-line';
     uploadPanel.appendChild(statusLine);
 
+    fileInput.addEventListener('click', () => {
+      client.beginTransientExternalActivity();
+    });
+    fileInput.addEventListener('cancel', () => {
+      client.endTransientExternalActivity();
+    });
     fileInput.addEventListener('change', async () => {
+      client.endTransientExternalActivity();
       const files = Array.from(fileInput.files ?? []);
       if (files.length === 0) return;
       statusLine.textContent = `Cifratura e upload di ${files.length} file...`;
       try {
         for (const f of files) {
+          client.touchActivity();
           const thumbs = await generateBrowserImageThumbs(f);
           const bytes = new Uint8Array(await f.arrayBuffer());
           await client.uploadFile(
@@ -909,6 +917,8 @@ export function initZkWebApp(): void {
           text: err instanceof Error ? err.message : 'Errore durante il caricamento.',
         };
         render();
+      } finally {
+        fileInput.value = '';
       }
     });
     sidebar.appendChild(uploadPanel);

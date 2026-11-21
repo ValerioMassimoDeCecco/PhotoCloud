@@ -39,8 +39,8 @@ struct AndroidAppVersion {
 
 fn read_android_app_version() -> AndroidAppVersion {
     let fallback = AndroidAppVersion {
-        version_name: "1.5.1".to_string(),
-        version_code: 33,
+        version_name: "1.5.2".to_string(),
+        version_code: 34,
     };
     let gradle_path = StdPath::new("android-app/app/build.gradle.kts");
     let Ok(content) = fs::read_to_string(gradle_path) else {

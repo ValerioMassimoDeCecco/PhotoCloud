@@ -101,8 +101,8 @@ describe('Zero-Knowledge Only Repository Audit & E2EE Wire/Disk Proof', () => {
     const generatedKt = generateMainActivityKt({
       appName: 'PhotoCloud',
       packageName: 'com.valerio.photocloud',
-      versionName: '1.5.1',
-      versionCode: 33,
+      versionName: '1.5.2',
+      versionCode: 34,
       serverUrl: 'https://vault.example.test',
       signingMode: 'release',
       keystoreAlias: 'photocloud-release-key',

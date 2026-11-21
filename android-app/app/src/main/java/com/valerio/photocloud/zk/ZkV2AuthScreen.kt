@@ -163,6 +163,8 @@ sealed interface ZkV2UiEvent {
     data object Logout : ZkV2UiEvent
     data object OpenServerConfig : ZkV2UiEvent
     data class SelectProtocolMode(val useHttps: Boolean) : ZkV2UiEvent
+    data object BeginTransientExternalActivity : ZkV2UiEvent
+    data object EndTransientExternalActivity : ZkV2UiEvent
 }
 
 fun canUseStrongBiometricsOnly(activity: FragmentActivity): Boolean {
@@ -256,7 +258,8 @@ fun ZkV2AuthCoordinator(
             pipeline = uploadPipeline,
             subkeysProvider = { sessionManager.getSubkeysOrNull() },
             scope = scope,
-            initialParallelism = savedParallelism
+            initialParallelism = savedParallelism,
+            onActivityHeartbeat = { sessionManager.touchActivity() }
         )
     }
 
@@ -347,6 +350,7 @@ fun ZkV2AuthCoordinator(
     val safSaveKeyFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri: Uri? ->
+        sessionManager.endTransientExternalActivity()
         val jsonPayload = pendingSaveKeyFileJson
         if (uri != null && jsonPayload != null) {
             try {
@@ -370,7 +374,13 @@ fun ZkV2AuthCoordinator(
     fun triggerKeyFileExport(keyFile: ZkKeyFileV2) {
         pendingSaveKeyFileJson = ZkAccountCredentialsCodec.serializeKeyFileJson(keyFile)
         val safeUser = keyFile.username.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-        safSaveKeyFileLauncher.launch("photocloud_v2_key_${safeUser}.json")
+        sessionManager.beginTransientExternalActivity()
+        try {
+            safSaveKeyFileLauncher.launch("photocloud_v2_key_${safeUser}.json")
+        } catch (t: Throwable) {
+            sessionManager.endTransientExternalActivity()
+            Toast.makeText(context, "Errore apertura selettore salvataggio: ${t.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     fun executeRegister() {
@@ -825,6 +835,8 @@ fun ZkV2AuthCoordinator(
             }
             ZkV2UiEvent.OpenServerConfig -> onOpenServerConfig()
             is ZkV2UiEvent.SelectProtocolMode -> onSelectProtocolMode(event.useHttps)
+            ZkV2UiEvent.BeginTransientExternalActivity -> sessionManager.beginTransientExternalActivity()
+            ZkV2UiEvent.EndTransientExternalActivity -> sessionManager.endTransientExternalActivity()
         }
     }
 

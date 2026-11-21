@@ -385,6 +385,8 @@ export class ZkVaultClient {
 
   private autoLockTimeoutMs: number;
   private autoLockTimer: ReturnType<typeof setTimeout> | null = null;
+  private activeUploadsCount = 0;
+  private transientExternalActivityExpiresAtMs = 0;
 
   constructor(options: ZkVaultClientOptions = {}) {
     this.transportMode = options.transportMode ? normalizeTransportMode(options.transportMode) : null;
@@ -466,6 +468,17 @@ export class ZkVaultClient {
     this.touchActivity();
   }
 
+  public beginTransientExternalActivity(maxDurationMs = 5 * 60 * 1000): void {
+    const safeDuration = Math.min(15 * 60 * 1000, Math.max(1000, maxDurationMs));
+    this.transientExternalActivityExpiresAtMs = Date.now() + safeDuration;
+    this.touchActivity();
+  }
+
+  public endTransientExternalActivity(): void {
+    this.transientExternalActivityExpiresAtMs = 0;
+    this.touchActivity();
+  }
+
   public touchActivity(): void {
     if (this.autoLockTimer !== null) {
       clearTimeout(this.autoLockTimer);
@@ -473,6 +486,10 @@ export class ZkVaultClient {
     }
     if (this.isUnlocked() && this.autoLockTimeoutMs > 0) {
       this.autoLockTimer = setTimeout(() => {
+        if (this.activeUploadsCount > 0 || Date.now() < this.transientExternalActivityExpiresAtMs) {
+          this.touchActivity();
+          return;
+        }
         this.lock();
         if (this.onAutoLock) {
           this.onAutoLock();
@@ -489,6 +506,7 @@ export class ZkVaultClient {
       clearTimeout(this.autoLockTimer);
       this.autoLockTimer = null;
     }
+    this.transientExternalActivityExpiresAtMs = 0;
     if (this.subkeys) {
       this.subkeys.zeroizeAll();
     }
@@ -1085,8 +1103,10 @@ export class ZkVaultClient {
     };
 
     const self = this;
+    self.activeUploadsCount += 1;
     const promise = (async (): Promise<{ skippedDuplicate: boolean; itemId?: string; blobId: string }> => {
       status = 'running';
+      self.touchActivity();
       emitProgress(0, 1, 0);
 
       // 1. Calcola dedupTag in streaming
@@ -1207,6 +1227,7 @@ export class ZkVaultClient {
 
       for (let idx = 0; idx < totalUploadChunks; idx++) {
         await waitIfPaused();
+        self.touchActivity();
         const start = idx * uploadSliceSize;
         const end = Math.min(start + uploadSliceSize, fullCipher.byteLength);
         const slice = fullCipher.subarray(start, end);
@@ -1309,17 +1330,24 @@ export class ZkVaultClient {
         itemId: createdItemId,
         blobId,
       };
-    })().catch(async (err) => {
-      if (cancelled && activeUploadId) {
-        await self
-          .apiFetch(`/api/v2/blobs/upload/${activeUploadId}`, {
-            method: 'DELETE',
-          })
-          .catch(() => {});
-      }
-      status = cancelled ? 'cancelled' : 'error';
-      throw err;
-    });
+    })()
+      .catch(async (err) => {
+        if (cancelled && activeUploadId) {
+          await self
+            .apiFetch(`/api/v2/blobs/upload/${activeUploadId}`, {
+              method: 'DELETE',
+            })
+            .catch(() => {});
+        }
+        status = cancelled ? 'cancelled' : 'error';
+        throw err;
+      })
+      .finally(() => {
+        self.activeUploadsCount = Math.max(0, self.activeUploadsCount - 1);
+        if (self.isUnlocked()) {
+          self.touchActivity();
+        }
+      });
 
     return {
       transferId,

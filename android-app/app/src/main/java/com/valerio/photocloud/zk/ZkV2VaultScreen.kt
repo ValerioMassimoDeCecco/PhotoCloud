@@ -210,6 +210,7 @@ fun ZkV2VaultScreen(
     val mediaUploadPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
+        onAuthEvent(ZkV2UiEvent.EndTransientExternalActivity)
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         val includeGps = backupConfig.includeGps
         scope.launch {
@@ -311,7 +312,13 @@ fun ZkV2VaultScreen(
                             setDataAndType(uri, item.meta.mime)
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
-                        context.startActivity(Intent.createChooser(intent, "Apri file decifrato con..."))
+                        onAuthEvent(ZkV2UiEvent.BeginTransientExternalActivity)
+                        try {
+                            context.startActivity(Intent.createChooser(intent, "Apri file decifrato con..."))
+                        } catch (t: Throwable) {
+                            onAuthEvent(ZkV2UiEvent.EndTransientExternalActivity)
+                            throw t
+                        }
                     } catch (t: Throwable) {
                         Toast.makeText(
                             context,
@@ -406,7 +413,19 @@ fun ZkV2VaultScreen(
         floatingActionButton = {
             if (!showTrashView && selectedTab == ZkVaultTab.GALLERY && selectedIds.isEmpty()) {
                 FloatingActionButton(
-                    onClick = { mediaUploadPicker.launch(arrayOf("image/*", "video/*")) }
+                    onClick = {
+                        onAuthEvent(ZkV2UiEvent.BeginTransientExternalActivity)
+                        try {
+                            mediaUploadPicker.launch(arrayOf("image/*", "video/*"))
+                        } catch (t: Throwable) {
+                            onAuthEvent(ZkV2UiEvent.EndTransientExternalActivity)
+                            Toast.makeText(
+                                context,
+                                "Impossibile aprire il selettore file: ${t.message ?: "riprova"}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
                 ) {
                     Icon(Icons.Default.Add, contentDescription = "Carica file cifrato")
                 }

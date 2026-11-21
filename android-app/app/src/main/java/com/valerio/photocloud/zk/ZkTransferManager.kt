@@ -56,7 +56,8 @@ class ZkTransferManager(
     private val subkeysProvider: () -> ZkCoreCrypto.VaultSubkeys?,
     private val scope: CoroutineScope,
     initialParallelism: Int = DEFAULT_PARALLELISM,
-    private val onItemCompleted: ((ZkUploadOutcome.Uploaded) -> Unit)? = null
+    private val onItemCompleted: ((ZkUploadOutcome.Uploaded) -> Unit)? = null,
+    private val onActivityHeartbeat: (() -> Unit)? = null
 ) {
     companion object {
         const val MIN_PARALLELISM = 1
@@ -165,6 +166,7 @@ class ZkTransferManager(
                     control = rec.control,
                     returnImmediatelyOnPause = true,
                     onProgress = { progress ->
+                        onActivityHeartbeat?.invoke()
                         updateState(transferId) {
                             it.copy(
                                 status = ZkTransferStatus.RUNNING,

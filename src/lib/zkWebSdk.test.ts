@@ -1095,4 +1095,44 @@ describe('FASE 3 & 4.0 — Zero-Knowledge Web SDK (src/client/zk-sdk) & /v2 E2EE
     );
     assert.equal(ktMeta.name, ktManifest.expectedMetaName);
   });
+
+  it('10. Upload & File Picker Auto-Lock Guard: la sessione resta sbloccata durante selezione file e upload e si riblocca dopo inattività reale', async () => {
+    let autoLockCount = 0;
+    const client = new ZkVaultClient({
+      baseUrl,
+      autoLockTimeoutMs: 60,
+      onAutoLock: () => {
+        autoLockCount += 1;
+      },
+    });
+    const prep = client.prepareRegistration('upload_guard_user', '', TEST_FLOOR_KDF_PARAMS);
+    await client.register(prep, '', undefined, {
+      inviteToken: 'test-invite-token-phase3',
+      skipRecoveryConfirmation: true,
+    });
+    assert.equal(client.isUnlocked(), true);
+
+    // 1. Apertura selettore file (transient external activity): non deve scattare auto-lock
+    client.beginTransientExternalActivity(1500);
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(client.isUnlocked(), true, 'Il vault deve restare sbloccato mentre il selettore file è aperto');
+    assert.equal(autoLockCount, 0);
+
+    // 2. Chiusura selettore + upload file: resta sbloccato durante e subito dopo l'upload
+    client.endTransientExternalActivity();
+    const payload = new TextEncoder().encode('PhotoCloud Upload Guard Payload v1.5.2');
+    const up = await client.uploadFile({
+      name: 'guard-test.txt',
+      mimeType: 'text/plain',
+      size: payload.byteLength,
+      source: payload,
+    });
+    assert.ok(up.itemId, 'Upload deve completarsi con itemId valido');
+    assert.equal(client.isUnlocked(), true, 'Il vault deve restare sbloccato dopo il caricamento file');
+
+    // 3. Dopo la fine dell'upload e il superamento del timeout di inattività reale, auto-lock si riattiva
+    await new Promise((r) => setTimeout(r, 130));
+    assert.equal(client.isUnlocked(), false, 'Dopo inattività reale post-upload il vault deve bloccarsi');
+    assert.equal(autoLockCount, 1);
+  });
 });
