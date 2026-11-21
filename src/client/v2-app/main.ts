@@ -1,10 +1,13 @@
 import {
   ZkVaultClient,
+  TRANSPORT_MODE_STORAGE_KEY,
+  detectDefaultTransportMode,
   evaluatePassphraseStrength,
   generateUuidV4,
   isSafeRasterImageMime,
   isSvgMime,
   isUntrustedActiveMime,
+  normalizeTransportMode,
   parseClientDocumentPreview,
   zeroize,
   type AuthConfigV2,
@@ -14,6 +17,7 @@ import {
   type OwnerShareSummaryV2,
   type PinnedKdfRecord,
   type TimelineGroupModeV2,
+  type TransportProtocolMode,
   type VaultDetailedStatsV2,
   type ZkKeyFileV2,
 } from '../zk-sdk/index.ts';
@@ -213,7 +217,21 @@ export function initZkWebApp(): void {
     }
   };
 
+  const loadStoredTransportMode = (): TransportProtocolMode => {
+    const fallback = detectDefaultTransportMode(window.location.protocol);
+    try {
+      const saved = window.localStorage.getItem(TRANSPORT_MODE_STORAGE_KEY);
+      if (saved === 'http' || saved === 'https') return saved;
+    } catch {
+      // ignore storage access errors
+    }
+    return fallback;
+  };
+
+  let transportMode: TransportProtocolMode = loadStoredTransportMode();
+
   const client = new ZkVaultClient({
+    transportMode,
     pinningStore: new BrowserLocalStoragePinStore(),
     onAutoLock: () => {
       closeActiveOverlayModal();
@@ -399,8 +417,76 @@ export function initZkWebApp(): void {
     }
   }
 
+  function setTransportProtocolMode(nextMode: TransportProtocolMode): void {
+    const normalized = normalizeTransportMode(nextMode);
+    transportMode = normalized;
+    client.setTransportMode(normalized);
+    try {
+      window.localStorage.setItem(TRANSPORT_MODE_STORAGE_KEY, normalized);
+    } catch {
+      // ignore storage quota errors
+    }
+    const targetOrigin =
+      normalized === 'https'
+        ? authConfig.transport?.httpsUrl
+        : authConfig.transport?.httpUrl;
+    if (targetOrigin) {
+      try {
+        const parsedTarget = new URL(targetOrigin);
+        if (parsedTarget.origin !== window.location.origin) {
+          window.location.assign(
+            `${parsedTarget.origin}${window.location.pathname}${window.location.search}${window.location.hash}`
+          );
+          return;
+        }
+      } catch {
+        // ignore invalid configured URL
+      }
+    }
+    client
+      .getAuthConfig()
+      .then((cfg) => {
+        authConfig = cfg;
+        render();
+      })
+      .catch(() => render());
+    render();
+  }
+
   function renderAuthView(container: HTMLElement): void {
     const box = el('main', 'auth-container');
+
+    const topBar = el('div', 'auth-protocol-bar');
+    const toggleGroup = el('div', 'protocol-toggle');
+    toggleGroup.id = 'protocol-mode-toggle';
+    toggleGroup.setAttribute('role', 'radiogroup');
+    toggleGroup.setAttribute('aria-label', 'Modalità protocollo HTTP o HTTPS');
+
+    const httpBtn = el(
+      'button',
+      `protocol-toggle-btn mono-nums ${transportMode === 'http' ? 'active is-http' : ''}`,
+      'HTTP'
+    );
+    httpBtn.type = 'button';
+    httpBtn.id = 'btn-protocol-http';
+    httpBtn.setAttribute('role', 'radio');
+    httpBtn.setAttribute('aria-checked', String(transportMode === 'http'));
+    httpBtn.addEventListener('click', () => setTransportProtocolMode('http'));
+
+    const httpsBtn = el(
+      'button',
+      `protocol-toggle-btn mono-nums ${transportMode === 'https' ? 'active is-https' : ''}`,
+      'HTTPS'
+    );
+    httpsBtn.type = 'button';
+    httpsBtn.id = 'btn-protocol-https';
+    httpsBtn.setAttribute('role', 'radio');
+    httpsBtn.setAttribute('aria-checked', String(transportMode === 'https'));
+    httpsBtn.addEventListener('click', () => setTransportProtocolMode('https'));
+
+    toggleGroup.append(httpBtn, httpsBtn);
+    topBar.appendChild(toggleGroup);
+    box.appendChild(topBar);
 
     const authHero = el('div', 'auth-hero');
     authHero.appendChild(el('h1', 'auth-hero-title', 'Archivio Fotografico Zero-Knowledge'));

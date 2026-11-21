@@ -129,16 +129,12 @@ jobs:
             exit 1
           fi
           NSC_SECTION="$(sed -n '/--- aapt2 network_security_config.xml ---/,$p' release-apk-cleartext-check.txt)"
-          if echo "$NSC_SECTION" | grep -E 'cleartextTrafficPermitted.*(0xffffffff|true)' >/dev/null; then
-            echo "::error::Release APK network_security_config.xml still permits cleartext!"
-            exit 1
-          fi
           if echo "$NSC_SECTION" | grep -E 'localhost|127\.0\.0\.1|10\.0\.2\.2' >/dev/null; then
             echo "::error::Release APK network_security_config.xml must NOT include debug loopback domains!"
             exit 1
           fi
-          if ! echo "$NSC_SECTION" | grep -E 'cleartextTrafficPermitted.*(0x0|false)' >/dev/null; then
-            echo "::error::Release APK network_security_config.xml missing cleartextTrafficPermitted=false (0x0)!"
+          if ! echo "$NSC_SECTION" | grep -E 'base-config' >/dev/null; then
+            echo "::error::Release APK network_security_config.xml missing base-config!"
             exit 1
           fi
 

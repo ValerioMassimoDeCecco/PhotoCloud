@@ -269,4 +269,55 @@ class ZkV2EnhancementsTest {
             server.shutdown()
         }
     }
+
+    @Test
+    fun userSelectedHttpAndHttpsTransportModeTogglesValidationAndUrlScheme() {
+        assertEquals(
+            "http://192.168.1.50:3000",
+            PhotoCloudZkApiClientV2.applyProtocolModeToUrl("https://192.168.1.50:3000/", useHttps = false)
+        )
+        assertEquals(
+            "https://vault.example.com",
+            PhotoCloudZkApiClientV2.applyProtocolModeToUrl("http://vault.example.com", useHttps = true)
+        )
+        assertEquals(
+            "http://192.168.1.50:3000",
+            PhotoCloudZkApiClientV2.applyProtocolModeToUrl("192.168.1.50:3000", useHttps = false)
+        )
+
+        val apiClient = PhotoCloudZkApiClientV2(
+            initialBaseUrl = "http://192.168.1.50:3000",
+            allowLocalhostHttpForTests = false
+        )
+
+        // Default is strict HTTPS-only: LAN HTTP must throw InsecureTransportException
+        var threwDefault = false
+        try {
+            apiClient.validateBaseUrl()
+        } catch (_: InsecureTransportException) {
+            threwDefault = true
+        }
+        assertTrue("Default client must reject non-HTTPS URL", threwDefault)
+        assertFalse(apiClient.cookieJar.allowUserSelectedHttp)
+
+        // Enabling HTTP mode via top-left toggle permits LAN HTTP and syncs cookieJar
+        apiClient.setTransportProtocolMode(useHttps = false)
+        assertTrue(apiClient.allowUserSelectedHttp)
+        assertTrue(apiClient.cookieJar.allowUserSelectedHttp)
+        val validatedHttp = apiClient.validateBaseUrl()
+        assertEquals("http", validatedHttp.scheme)
+        assertEquals("192.168.1.50", validatedHttp.host)
+
+        // Switching back to HTTPS mode immediately re-enforces HTTPS-only
+        apiClient.setTransportProtocolMode(useHttps = true)
+        assertFalse(apiClient.allowUserSelectedHttp)
+        assertFalse(apiClient.cookieJar.allowUserSelectedHttp)
+        var threwAfterHttps = false
+        try {
+            apiClient.validateBaseUrl()
+        } catch (_: InsecureTransportException) {
+            threwAfterHttps = true
+        }
+        assertTrue("Switching back to HTTPS must reject plain HTTP URL", threwAfterHttps)
+    }
 }

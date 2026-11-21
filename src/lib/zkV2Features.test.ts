@@ -8,8 +8,13 @@ import { describe, it } from 'node:test';
 import express from 'express';
 import {
   ZkVaultClient,
+  TRANSPORT_MODE_HEADER,
+  applyTransportModeToUrl,
   decryptOwnerShareMeta,
+  detectDefaultTransportMode,
   encryptOwnerShareMeta,
+  normalizeTransportMode,
+  resolveOriginForTransportMode,
 } from '../client/zk-sdk/index.ts';
 import {
   clusterGeoItems,
@@ -422,5 +427,117 @@ describe('Zero-Knowledge V2 Features — Auth Config, V1-Simple UX, Shares, Edit
     assert.ok(fit.lat > 42 && fit.lat < 45);
     assert.ok(fit.lon > 9.5 && fit.lon < 12.2);
     assert.ok(fit.zoom >= 4 && fit.zoom <= 12);
+  });
+
+  it('HTTP/HTTPS transport mode: pure helpers, LAN HTTP explicit header acceptance, cookie Secure flag, and ZkVaultClient integration', async () => {
+    // 1. Pure helper checks
+    assert.equal(normalizeTransportMode('http'), 'http');
+    assert.equal(normalizeTransportMode('HTTPS:'), 'https');
+    assert.equal(normalizeTransportMode('invalid', 'http'), 'http');
+    assert.equal(detectDefaultTransportMode('http:'), 'http');
+    assert.equal(detectDefaultTransportMode('https:'), 'https');
+    assert.equal(applyTransportModeToUrl('https://192.168.1.50:3000/', 'http'), 'http://192.168.1.50:3000');
+    assert.equal(applyTransportModeToUrl('http://vault.example.com', 'https'), 'https://vault.example.com');
+    assert.equal(applyTransportModeToUrl('192.168.1.50:3000', 'http'), 'http://192.168.1.50:3000');
+    assert.equal(applyTransportModeToUrl('', 'https'), '');
+    assert.equal(
+      resolveOriginForTransportMode('http://192.168.1.50:3000', 'https', {
+        httpsUrl: 'https://vault.example.com/',
+      }),
+      'https://vault.example.com'
+    );
+
+    // 2. Live server: /auth/config exposes transport metadata, LAN without header -> 403, LAN with HTTP mode -> 201 + non-Secure cookie
+    const srv = await startServer({ registrationEnabled: 'open' });
+    try {
+      const cfgResp = await fetch(`${srv.baseUrl}/api/v2/auth/config`);
+      assert.equal(cfgResp.status, 200);
+      const cfg = (await cfgResp.json()) as {
+        transport?: { currentProtocol: string; httpModeAllowed: boolean };
+      };
+      assert.equal(cfg.transport?.currentProtocol, 'http');
+      assert.equal(cfg.transport?.httpModeAllowed, true);
+
+      // Simulate LAN Host header over plain HTTP via Node http.request
+      const port = Number(new URL(srv.baseUrl).port);
+      const sendLanRequest = (extraHeaders: Record<string, string>) =>
+        new Promise<{ status: number; setCookie: string; body: Record<string, unknown> }>((resolve, reject) => {
+          const payload = JSON.stringify({
+            username: 'lan_user_' + crypto.randomBytes(3).toString('hex'),
+            salt: toBase64Url(crypto.randomBytes(16)),
+            kdfParams: { algorithm: 'Argon2id', memoryKiB: 65536, iterations: 3, parallelism: 1 },
+            authSecret: toBase64Url(crypto.randomBytes(32)),
+            wrappedVaultKey: toBase64Url(crypto.randomBytes(60)),
+          });
+          const req = http.request(
+            {
+              host: '127.0.0.1',
+              port,
+              path: '/api/v2/register',
+              method: 'POST',
+              headers: {
+                Host: `192.168.1.50:${port}`,
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(payload),
+                ...extraHeaders,
+              },
+            },
+            (res) => {
+              const chunks: Buffer[] = [];
+              res.on('data', (c) => chunks.push(Buffer.from(c)));
+              res.on('end', () => {
+                const rawCookie = Array.isArray(res.headers['set-cookie'])
+                  ? res.headers['set-cookie'].join('; ')
+                  : String(res.headers['set-cookie'] || '');
+                resolve({
+                  status: res.statusCode ?? 0,
+                  setCookie: rawCookie,
+                  body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+                });
+              });
+            }
+          );
+          req.on('error', reject);
+          req.write(payload);
+          req.end();
+        });
+
+      // Default (no HTTP mode header) on LAN host MUST still be rejected with 403 HTTPS_REQUIRED
+      const blocked = await sendLanRequest({});
+      assert.equal(blocked.status, 403);
+      assert.equal(blocked.body.error, 'HTTPS_REQUIRED');
+
+      // Explicit HTTP mode selected by user (X-PhotoCloud-Transport-Mode: http) succeeds & omits ; Secure on plain HTTP
+      const allowed = await sendLanRequest({ [TRANSPORT_MODE_HEADER]: 'http' });
+      assert.equal(allowed.status, 201);
+      assert.ok(allowed.setCookie.includes('photocloud_v2_sid='));
+      assert.equal(/;\s*Secure/i.test(allowed.setCookie), false, 'Plain HTTP mode must omit Secure cookie flag');
+
+      // 3. ZkVaultClient propagates X-PhotoCloud-Transport-Mode header & updates baseUrl scheme cleanly
+      const seenHeaders: string[] = [];
+      const baseFetch = createCookieFetch();
+      const spyFetch: typeof fetch = (input, init) => {
+        const h = new Headers(init?.headers);
+        seenHeaders.push(h.get(TRANSPORT_MODE_HEADER) ?? '');
+        return baseFetch(input, init);
+      };
+      const client = new ZkVaultClient({
+        baseUrl: srv.baseUrl,
+        transportMode: 'http',
+        fetchFn: spyFetch,
+      });
+      assert.equal(client.getTransportMode(), 'http');
+      const clientCfg = await client.getAuthConfig();
+      assert.equal(clientCfg.transport?.httpModeAllowed, true);
+      assert.equal(seenHeaders[0], 'http');
+
+      client.setTransportMode('https');
+      assert.equal(client.getTransportMode(), 'https');
+      assert.ok(client.getBaseUrl().startsWith('https://'));
+      client.setTransportMode('http');
+      assert.ok(client.getBaseUrl().startsWith('http://'));
+    } finally {
+      await srv.close();
+    }
   });
 });

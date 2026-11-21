@@ -91,6 +91,7 @@ enum class ZkAuthMode {
 @Immutable
 data class ZkV2LoginFormUiState(
     val serverUrl: String,
+    val useHttps: Boolean = serverUrl.startsWith("https://", ignoreCase = true),
     val authMode: ZkAuthMode = ZkAuthMode.LOGIN_KEYFILE,
     val useRecoveryCodeTab: Boolean = false,
     val authConfig: V2AuthConfigResponse? = null,
@@ -161,6 +162,7 @@ sealed interface ZkV2UiEvent {
     data object SubmitRewrap : ZkV2UiEvent
     data object Logout : ZkV2UiEvent
     data object OpenServerConfig : ZkV2UiEvent
+    data class SelectProtocolMode(val useHttps: Boolean) : ZkV2UiEvent
 }
 
 fun canUseStrongBiometricsOnly(activity: FragmentActivity): Boolean {
@@ -216,6 +218,8 @@ fun ZkV2AuthCoordinator(
     activity: FragmentActivity,
     sessionManager: ZkSessionManager,
     serverUrl: String,
+    useHttps: Boolean = serverUrl.startsWith("https://", ignoreCase = true),
+    onSelectProtocolMode: (Boolean) -> Unit = {},
     onOpenServerConfig: () -> Unit
 ) {
     val context = LocalContext.current
@@ -284,6 +288,7 @@ fun ZkV2AuthCoordinator(
         mutableStateOf(
             ZkV2LoginFormUiState(
                 serverUrl = serverUrl,
+                useHttps = useHttps,
                 hasBiometricSavedVk = session.isLockedWithSavedKeystore,
                 canUseStrongBiometrics = canUseStrongBiometricsOnly(activity),
                 savedUsername = session.username
@@ -292,7 +297,7 @@ fun ZkV2AuthCoordinator(
     }
 
     // Fetch server registration policy (/api/v2/auth/config) so Setup/Invite field is only shown if needed
-    LaunchedEffect(serverUrl) {
+    LaunchedEffect(serverUrl, useHttps) {
         try {
             val cfg = sessionManager.apiClient.fetchAuthConfig()
             formState = formState.copy(authConfig = cfg)
@@ -304,6 +309,7 @@ fun ZkV2AuthCoordinator(
     // Keep session-derived flags synchronized cleanly
     val effectiveForm = formState.copy(
         serverUrl = serverUrl,
+        useHttps = useHttps,
         hasBiometricSavedVk = session.isLockedWithSavedKeystore,
         canUseStrongBiometrics = canUseStrongBiometricsOnly(activity),
         savedUsername = session.username,
@@ -818,6 +824,7 @@ fun ZkV2AuthCoordinator(
                 }
             }
             ZkV2UiEvent.OpenServerConfig -> onOpenServerConfig()
+            is ZkV2UiEvent.SelectProtocolMode -> onSelectProtocolMode(event.useHttps)
         }
     }
 
@@ -865,12 +872,70 @@ fun ZkV2AuthScreen(
                         .padding(horizontal = 20.dp, vertical = 16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Server URL Bar (Zero-Knowledge v2 only)
+                    // Top Bar: HTTP/HTTPS toggle (top-left) & Server URL chip (top-right)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(3.dp)
+                            ) {
+                                Surface(
+                                    onClick = { onEvent(ZkV2UiEvent.SelectProtocolMode(false)) },
+                                    shape = CircleShape,
+                                    color = if (!form.useHttps) {
+                                        MaterialTheme.colorScheme.tertiaryContainer
+                                    } else {
+                                        Color.Transparent
+                                    }
+                                ) {
+                                    Text(
+                                        text = "HTTP",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = if (!form.useHttps) {
+                                            MaterialTheme.colorScheme.onTertiaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                    )
+                                }
+                                Surface(
+                                    onClick = { onEvent(ZkV2UiEvent.SelectProtocolMode(true)) },
+                                    shape = CircleShape,
+                                    color = if (form.useHttps) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        Color.Transparent
+                                    }
+                                ) {
+                                    Text(
+                                        text = "HTTPS",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = if (form.useHttps) {
+                                            MaterialTheme.colorScheme.onPrimary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.width(8.dp))
 
                         Surface(
                             onClick = { onEvent(ZkV2UiEvent.OpenServerConfig) },

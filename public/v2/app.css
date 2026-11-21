@@ -221,6 +221,51 @@ body {
   box-shadow: 0 24px 48px -16px rgba(0, 0, 0, 0.7);
 }
 
+.auth-protocol-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin-bottom: 1rem;
+}
+
+.protocol-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  gap: 2px;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+}
+
+.protocol-toggle-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.28rem 0.72rem;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.protocol-toggle-btn:hover:not(.active) {
+  color: var(--text-primary);
+}
+
+.protocol-toggle-btn.active.is-https {
+  background-color: var(--accent-primary);
+  color: #ffffff;
+}
+
+.protocol-toggle-btn.active.is-http {
+  background-color: rgba(245, 158, 11, 0.22);
+  color: #fbbf24;
+}
+
 .auth-hero {
   margin-bottom: 1.35rem;
 }

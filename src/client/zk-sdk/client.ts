@@ -86,11 +86,19 @@ import type {
   VaultDetailedStatsV2,
   ZkKeyFileV2,
 } from './types.ts';
+import {
+  applyTransportModeToUrl,
+  normalizeTransportMode,
+  resolveOriginForTransportMode,
+  TRANSPORT_MODE_HEADER,
+  type TransportProtocolMode,
+} from './transportMode.ts';
 
 export const UNIFORM_AUTH_ERROR_MESSAGE = 'Credenziali o keyfile non validi.';
 
 export interface ZkVaultClientOptions {
   baseUrl?: string;
+  transportMode?: TransportProtocolMode;
   fetchFn?: typeof fetch;
   workerClient?: ZkWorkerClient;
   pinningStore?: KdfPinningStore;
@@ -350,7 +358,8 @@ function toReadableByteStream(
  * SDK Zero-Knowledge v2 per il client web PhotoCloud.
  */
 export class ZkVaultClient {
-  private readonly baseUrl: string;
+  private baseUrl: string;
+  private transportMode: TransportProtocolMode | null;
   private readonly fetchFn: typeof fetch;
   private readonly workerClient: ZkWorkerClient;
   private readonly pinningStore: KdfPinningStore;
@@ -378,13 +387,34 @@ export class ZkVaultClient {
   private autoLockTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: ZkVaultClientOptions = {}) {
-    this.baseUrl = (options.baseUrl ?? '').replace(/\/+$/, '');
+    this.transportMode = options.transportMode ? normalizeTransportMode(options.transportMode) : null;
+    const rawBase = (options.baseUrl ?? '').replace(/\/+$/, '');
+    this.baseUrl =
+      this.transportMode && rawBase ? applyTransportModeToUrl(rawBase, this.transportMode) : rawBase;
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
     this.workerClient = options.workerClient ?? new ZkWorkerClient();
     this.pinningStore = options.pinningStore ?? new InMemoryKdfPinningStore();
     this.autoLockTimeoutMs = options.autoLockTimeoutMs ?? 15 * 60 * 1000;
     this.onAutoLock = options.onAutoLock;
     this.onKdfParamsChangedWarning = options.onKdfParamsChangedWarning;
+  }
+
+  public getTransportMode(): TransportProtocolMode {
+    if (this.transportMode) return this.transportMode;
+    if (/^http:\/\//i.test(this.baseUrl)) return 'http';
+    return 'https';
+  }
+
+  public setTransportMode(mode: TransportProtocolMode): void {
+    const normalized = normalizeTransportMode(mode);
+    this.transportMode = normalized;
+    if (this.baseUrl) {
+      this.baseUrl = applyTransportModeToUrl(this.baseUrl, normalized);
+    }
+  }
+
+  public getBaseUrl(): string {
+    return this.baseUrl;
   }
 
   public isUnlocked(): boolean {
@@ -505,6 +535,9 @@ export class ZkVaultClient {
   private async apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
     const url = `${this.baseUrl}${path}`;
     const headers = new Headers(init.headers ?? {});
+    if (this.transportMode && !headers.has(TRANSPORT_MODE_HEADER)) {
+      headers.set(TRANSPORT_MODE_HEADER, this.transportMode);
+    }
     if (this.sessionCookieHeader && !headers.has('cookie')) {
       headers.set('cookie', this.sessionCookieHeader);
     }
@@ -545,6 +578,14 @@ export class ZkVaultClient {
           data.policy === 'disabled' || data.policy === 'setup_token_or_invite' || data.policy === 'open'
             ? data.policy
             : 'open',
+        transport: data.transport
+          ? {
+              currentProtocol: normalizeTransportMode(data.transport.currentProtocol),
+              httpModeAllowed: data.transport.httpModeAllowed !== false,
+              httpUrl: data.transport.httpUrl ?? null,
+              httpsUrl: data.transport.httpsUrl ?? null,
+            }
+          : undefined,
       };
     } catch {
       return { registrationOpen: true, requiresInviteToken: false, policy: 'open' };
@@ -2279,7 +2320,10 @@ export class ZkVaultClient {
         throw new Error(err.error || `CREATE_SHARE_FAILED_${resp.status}`);
       }
 
-      const shareUrl = buildShareUrl(origin, shareId, shareKey);
+      const effectiveOrigin = this.transportMode
+        ? resolveOriginForTransportMode(origin, this.transportMode)
+        : origin;
+      const shareUrl = buildShareUrl(effectiveOrigin, shareId, shareKey);
 
       return {
         shareId,
@@ -2334,7 +2378,10 @@ export class ZkVaultClient {
             try {
               if (keyBytes.byteLength === 32) {
                 shareKeyBase64Url = decrypted.shareKeyB64u;
-                shareUrl = buildShareUrl(origin, row.shareId, keyBytes);
+                const effectiveOrigin = this.transportMode
+                  ? resolveOriginForTransportMode(origin, this.transportMode)
+                  : origin;
+                shareUrl = buildShareUrl(effectiveOrigin, row.shareId, keyBytes);
               }
             } finally {
               zeroize(keyBytes);

@@ -845,7 +845,20 @@ fun PhotoCloudNativeApp(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var serverUrl by remember { mutableStateOf(initialServerUrl) }
+    val mainPrefs = remember(context) {
+        context.getSharedPreferences("photocloud_prefs", Context.MODE_PRIVATE)
+    }
+    var useHttps by remember {
+        mutableStateOf(
+            mainPrefs.getBoolean(
+                "zk_use_https",
+                initialServerUrl.trim().startsWith("https://", ignoreCase = true)
+            )
+        )
+    }
+    var serverUrl by remember {
+        mutableStateOf(PhotoCloudZkApiClientV2.applyProtocolModeToUrl(initialServerUrl, useHttps))
+    }
     var showServerDialog by remember { mutableStateOf(false) }
     var tempServerInput by remember { mutableStateOf(serverUrl) }
 
@@ -854,11 +867,16 @@ fun PhotoCloudNativeApp(
             isEnabledProvider = { true },
             factory = {
                 val allowLoopbackHttp = BuildConfig.DEBUG
+                val allowUserHttp = !useHttps
                 val v2Client = PhotoCloudZkApiClientV2(
                     initialBaseUrl = serverUrl,
                     pinStore = PrefsTofuSpkiPinStore(context),
                     allowLocalhostHttpForTests = allowLoopbackHttp,
-                    cookieJar = ZkV2CookieJar(allowLocalhostHttpForTests = allowLoopbackHttp)
+                    allowUserSelectedHttp = allowUserHttp,
+                    cookieJar = ZkV2CookieJar(
+                        allowLocalhostHttpForTests = allowLoopbackHttp,
+                        allowUserSelectedHttp = allowUserHttp
+                    )
                 )
                 ZkSessionManager(
                     apiClient = v2Client,
@@ -873,7 +891,8 @@ fun PhotoCloudNativeApp(
 
     val activeZkSessionManager = zkV2Gate.getOrNull()!!
 
-    LaunchedEffect(serverUrl) {
+    LaunchedEffect(serverUrl, useHttps) {
+        activeZkSessionManager.apiClient.setTransportProtocolMode(useHttps)
         activeZkSessionManager.apiClient.baseUrl = serverUrl
         // Ensure any deprecated legacy v1 WorkManager jobs are cancelled
         AutoBackupWorker.cancelAllBackupWork(context)
@@ -896,6 +915,17 @@ fun PhotoCloudNativeApp(
         activity = activity,
         sessionManager = activeZkSessionManager,
         serverUrl = serverUrl,
+        useHttps = useHttps,
+        onSelectProtocolMode = { nextUseHttps ->
+            useHttps = nextUseHttps
+            val updatedUrl = PhotoCloudZkApiClientV2.applyProtocolModeToUrl(serverUrl, nextUseHttps)
+            mainPrefs.edit().putBoolean("zk_use_https", nextUseHttps).apply()
+            activeZkSessionManager.apiClient.setTransportProtocolMode(nextUseHttps)
+            if (updatedUrl.isNotBlank()) {
+                serverUrl = updatedUrl
+                onSaveServerUrl(updatedUrl)
+            }
+        },
         onOpenServerConfig = {
             tempServerInput = serverUrl
             showServerDialog = true
@@ -911,7 +941,12 @@ fun PhotoCloudNativeApp(
                 OutlinedTextField(
                     value = tempServerInput,
                     onValueChange = { tempServerInput = it },
-                    label = { Text("Indirizzo (es. https://vault.esempio.it)") },
+                    label = {
+                        Text(
+                            if (useHttps) "Indirizzo (es. https://vault.esempio.it)"
+                            else "Indirizzo (es. http://192.168.1.10:3000)"
+                        )
+                    },
                     singleLine = true,
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -920,10 +955,19 @@ fun PhotoCloudNativeApp(
             confirmButton = {
                 Button(
                     onClick = {
-                        val cleaned = tempServerInput.trim().removeSuffix("/")
-                        if (cleaned.isNotBlank()) {
-                            serverUrl = cleaned
-                            onSaveServerUrl(cleaned)
+                        val rawCleaned = tempServerInput.trim().removeSuffix("/")
+                        if (rawCleaned.isNotBlank()) {
+                            val resolvedUseHttps = when {
+                                rawCleaned.startsWith("https://", ignoreCase = true) -> true
+                                rawCleaned.startsWith("http://", ignoreCase = true) -> false
+                                else -> useHttps
+                            }
+                            val finalUrl = PhotoCloudZkApiClientV2.applyProtocolModeToUrl(rawCleaned, resolvedUseHttps)
+                            useHttps = resolvedUseHttps
+                            mainPrefs.edit().putBoolean("zk_use_https", resolvedUseHttps).apply()
+                            activeZkSessionManager.apiClient.setTransportProtocolMode(resolvedUseHttps)
+                            serverUrl = finalUrl
+                            onSaveServerUrl(finalUrl)
                         }
                         showServerDialog = false
                     }

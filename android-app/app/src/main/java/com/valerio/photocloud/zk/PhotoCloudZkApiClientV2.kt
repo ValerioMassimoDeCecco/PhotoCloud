@@ -208,7 +208,11 @@ class PhotoCloudZkApiClientV2(
     initialBaseUrl: String,
     private val pinStore: TofuSpkiPinStore = InMemoryTofuSpkiPinStore(),
     private val allowLocalhostHttpForTests: Boolean = false,
-    val cookieJar: ZkV2CookieJar = ZkV2CookieJar(allowLocalhostHttpForTests = allowLocalhostHttpForTests),
+    @Volatile var allowUserSelectedHttp: Boolean = false,
+    val cookieJar: ZkV2CookieJar = ZkV2CookieJar(
+        allowLocalhostHttpForTests = allowLocalhostHttpForTests,
+        allowUserSelectedHttp = allowUserSelectedHttp
+    ),
     systemTrustManager: X509TrustManager = TofuSpkiPinning.defaultSystemTrustManager(),
     extraInterceptors: List<Interceptor> = emptyList()
 ) {
@@ -216,6 +220,22 @@ class PhotoCloudZkApiClientV2(
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         val OCTET_MEDIA_TYPE = "application/octet-stream".toMediaType()
         private val CONTENT_RANGE_REGEX = Regex("^bytes\\s+(\\d+)-(\\d+)/(\\d+|\\*)$", RegexOption.IGNORE_CASE)
+
+        fun applyProtocolModeToUrl(rawUrl: String, useHttps: Boolean): String {
+            val trimmed = rawUrl.trim().removeSuffix("/")
+            if (trimmed.isBlank()) return ""
+            val scheme = if (useHttps) "https" else "http"
+            return when {
+                trimmed.startsWith("https://", ignoreCase = true) -> "$scheme://${trimmed.substring(8)}"
+                trimmed.startsWith("http://", ignoreCase = true) -> "$scheme://${trimmed.substring(7)}"
+                else -> "$scheme://$trimmed"
+            }
+        }
+    }
+
+    fun setTransportProtocolMode(useHttps: Boolean) {
+        allowUserSelectedHttp = !useHttps
+        cookieJar.allowUserSelectedHttp = !useHttps
     }
 
     @Volatile
@@ -248,8 +268,10 @@ class PhotoCloudZkApiClientV2(
         .writeTimeout(60, TimeUnit.SECONDS)
         .addInterceptor { chain ->
             val original = chain.request()
+            val transportModeHeader = if (allowUserSelectedHttp && !original.url.isHttps) "http" else "https"
             val reqBuilder = original.newBuilder()
                 .header("X-PhotoCloud-Request", "1")
+                .header("X-PhotoCloud-Transport-Mode", transportModeHeader)
                 .header("Accept", "application/json, application/octet-stream")
             chain.proceed(reqBuilder.build())
         }
@@ -267,13 +289,14 @@ class PhotoCloudZkApiClientV2(
 
         val permitted = when {
             parsed.isHttps -> true
+            allowUserSelectedHttp && parsed.scheme.equals("http", ignoreCase = true) -> true
             allowLocalhostHttpForTests && parsed.scheme.equals("http", ignoreCase = true) ->
                 ZkV2CookieJar.isLoopbackHost(parsed.host)
             else -> false
         }
         if (!permitted) {
             throw InsecureTransportException(
-                "HTTPS obbligatorio per PhotoCloud Zero-Knowledge v2 (HTTP consentito solo su localhost/127.0.0.1/10.0.2.2 in test)."
+                "HTTPS obbligatorio per PhotoCloud Zero-Knowledge v2 (attiva la modalità HTTP nel toggle in alto a sinistra oppure usa HTTPS)."
             )
         }
         return parsed

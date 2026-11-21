@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Production Release policy: cleartext HTTP strictly forbidden for ALL hosts (including loopback). -->
-    <base-config cleartextTrafficPermitted="false">
+    <!--
+        PhotoCloud enforces HTTPS by default in PhotoCloudZkApiClientV2 / ZkV2CookieJar.
+        Cleartext HTTP is permitted at the OS layer ONLY so the user's explicit HTTP/HTTPS
+        toggle on the login screen can connect to self-hosted LAN HTTP servers when selected.
+    -->
+    <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

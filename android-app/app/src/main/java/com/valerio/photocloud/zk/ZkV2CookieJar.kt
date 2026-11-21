@@ -17,7 +17,8 @@ import java.util.concurrent.ConcurrentHashMap
  * - Keeps session cookies exclusively in memory and clears them immediately on logout/reset.
  */
 class ZkV2CookieJar(
-    private val allowLocalhostHttpForTests: Boolean = false
+    private val allowLocalhostHttpForTests: Boolean = false,
+    @Volatile var allowUserSelectedHttp: Boolean = false
 ) : CookieJar {
 
     companion object {
@@ -53,6 +54,7 @@ class ZkV2CookieJar(
 
     private fun isTransportPermitted(url: HttpUrl): Boolean {
         if (url.isHttps) return true
+        if (allowUserSelectedHttp && url.scheme.equals("http", ignoreCase = true)) return true
         return allowLocalhostHttpForTests && isLoopbackHost(url.host)
     }
 

@@ -447,11 +447,18 @@ class ZkAutoBackupWorker(
         }
 
         val allowLoopback = BuildConfig.DEBUG
+        val useHttps = mainPrefs.getBoolean("zk_use_https", serverUrl.startsWith("https://", ignoreCase = true))
+        val effectiveServerUrl = PhotoCloudZkApiClientV2.applyProtocolModeToUrl(serverUrl, useHttps)
+        val allowUserHttp = !useHttps
         val apiClient = PhotoCloudZkApiClientV2(
-            initialBaseUrl = serverUrl,
+            initialBaseUrl = effectiveServerUrl,
             pinStore = PrefsTofuSpkiPinStore(applicationContext),
             allowLocalhostHttpForTests = allowLoopback,
-            cookieJar = ZkV2CookieJar(allowLocalhostHttpForTests = allowLoopback)
+            allowUserSelectedHttp = allowUserHttp,
+            cookieJar = ZkV2CookieJar(
+                allowLocalhostHttpForTests = allowLoopback,
+                allowUserSelectedHttp = allowUserHttp
+            )
         )
         val keyStore = AndroidHardwareVaultKeyStore(applicationContext)
         val spoolDir = File(applicationContext.cacheDir, "zk_upload_spool")

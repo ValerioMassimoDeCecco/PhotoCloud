@@ -425,13 +425,12 @@ jobs:
             exit 1
           fi
           NSC_DUMP=$(sed -n '/--- network_security_config.xml ---/,$p' ../release-apk-cleartext-check.txt)
-          if echo "$NSC_DUMP" | grep -E 'cleartextTrafficPermitted.*(0xffffffff|true)' >/dev/null || \
-             echo "$NSC_DUMP" | grep -E 'localhost|127\.0\.0\.1|10\.0\.2\.2' >/dev/null; then
-            echo "::error::L'APK release include eccezioni cleartext in network_security_config.xml!"
+          if echo "$NSC_DUMP" | grep -E 'localhost|127\.0\.0\.1|10\.0\.2\.2' >/dev/null; then
+            echo "::error::L'APK release include domini di debug loopback in network_security_config.xml!"
             exit 1
           fi
-          if ! echo "$NSC_DUMP" | grep -E 'cleartextTrafficPermitted.*(0x0|false)' >/dev/null; then
-            echo "::error::cleartextTrafficPermitted=false (0x0) mancante in network_security_config.xml!"
+          if ! echo "$NSC_DUMP" | grep -E 'base-config' >/dev/null; then
+            echo "::error::base-config mancante in network_security_config.xml!"
             exit 1
           fi
 

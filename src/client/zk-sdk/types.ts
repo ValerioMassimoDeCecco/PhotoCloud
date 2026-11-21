@@ -36,6 +36,12 @@ export interface AuthConfigV2 {
   registrationOpen: boolean;
   requiresInviteToken: boolean;
   policy: 'open' | 'setup_token_or_invite' | 'disabled';
+  transport?: {
+    currentProtocol: 'http' | 'https';
+    httpModeAllowed: boolean;
+    httpUrl?: string | null;
+    httpsUrl?: string | null;
+  };
 }
 
 export interface PreparedRegistrationV2 {

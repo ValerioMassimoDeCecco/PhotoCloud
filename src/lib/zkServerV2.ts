@@ -847,6 +847,7 @@ export interface ZkV2ServerOptions {
   shareRateLimitWindowMs?: number;
   logger?: ZkLogger;
   nowFn?: () => number;
+  allowHttpMode?: boolean;
 }
 
 interface AuthenticatedUserV2 {
@@ -946,6 +947,29 @@ export function isSecureOrLocalhostRequest(req: Request): boolean {
     clientIp === '';
 
   return isLoopbackIp;
+}
+
+export function isActualHttpsRequest(req: Request): boolean {
+  const trustProxyEnabled = Boolean(req.app?.get('trust proxy'));
+  const rawForwardedProto = trustProxyEnabled
+    ? String(req.headers['x-forwarded-proto'] || '')
+        .split(',')[0]
+        .trim()
+        .toLowerCase()
+    : '';
+  return Boolean(req.secure || rawForwardedProto === 'https');
+}
+
+export function isExplicitHttpTransportRequested(
+  req: Request,
+  allowHttpModeByDefault = false
+): boolean {
+  if (allowHttpModeByDefault) return true;
+  const rawMode = String(req.headers['x-photocloud-transport-mode'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  return rawMode === 'http';
 }
 
 function parseCookiesHeader(cookieHeader: string | undefined): Record<string, string> {
@@ -1051,6 +1075,9 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
   const registrationPolicy = parseRegistrationPolicyFromEnv(options.registrationEnabled);
   const registrationInviteToken =
     options.registrationInviteToken ?? process.env.REGISTRATION_INVITE_TOKEN;
+  const allowHttpMode =
+    options.allowHttpMode ??
+    ['1', 'true', 'yes'].includes(String(process.env.PHOTOCLOUD_ALLOW_HTTP || '').trim().toLowerCase());
 
   // Token di setup monouso generato una sola volta all'avvio se il DB utenti v2 è vuoto
   let activeSetupToken: string | null = null;
@@ -1249,16 +1276,22 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
   }
 
   function requireHttpsOrLocalhost(req: Request, res: Response): boolean {
-    if (!isSecureOrLocalhostRequest(req)) {
+    if (!isSecureOrLocalhostRequest(req) && !isExplicitHttpTransportRequested(req, allowHttpMode)) {
       logger.warn('v2_insecure_http_rejected', { method: req.method, path: req.path });
       res.status(403).json({
         error: 'HTTPS_REQUIRED',
         message:
-          'HTTPS è obbligatorio per le API Zero-Knowledge v2 (WebCrypto e cookie Secure richiedono HTTPS o localhost).',
+          'HTTPS è obbligatorio per le API Zero-Knowledge v2 (seleziona la modalità HTTP nella schermata di accesso oppure usa HTTPS).',
       });
       return false;
     }
     return true;
+  }
+
+  function shouldMarkCookieSecure(req: Request): boolean {
+    if (isActualHttpsRequest(req)) return true;
+    if (isExplicitHttpTransportRequested(req, allowHttpMode)) return false;
+    return isSecureOrLocalhostRequest(req);
   }
 
   function issueSessionCookie(req: Request, res: Response, userId: string): { csrfToken: string } {
@@ -1276,7 +1309,7 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
       .run(sidHash, userId, csrfToken, now, expiresAt);
 
     const maxAgeSec = Math.max(1, Math.floor(sessionTtlMs / 1000));
-    const secureFlag = isSecureOrLocalhostRequest(req) ? '; Secure' : '';
+    const secureFlag = shouldMarkCookieSecure(req) ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
       `${V2_SESSION_COOKIE_NAME}=${rawSid}; Path=/; HttpOnly${secureFlag}; SameSite=Strict; Max-Age=${maxAgeSec}`
@@ -1285,7 +1318,7 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
   }
 
   function clearSessionCookie(req: Request, res: Response): void {
-    const secureFlag = isSecureOrLocalhostRequest(req) ? '; Secure' : '';
+    const secureFlag = shouldMarkCookieSecure(req) ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
       `${V2_SESSION_COOKIE_NAME}=; Path=/; HttpOnly${secureFlag}; SameSite=Strict; Max-Age=0`
@@ -1306,7 +1339,7 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
   // 1. ACCOUNT ENDPOINTS (`/auth/config`, `/register`, `/login/params`, `/login`, `/logout`, `/account/rewrap`)
   // ==========================================================================
 
-  router.get('/auth/config', (_req: Request, res: Response) => {
+  router.get('/auth/config', (req: Request, res: Response) => {
     const userCount = store.getUserCount();
     const hasInviteConfigured = Boolean(
       registrationInviteToken && registrationInviteToken.trim().length > 0
@@ -1330,10 +1363,19 @@ export function createZkV2Router(options: ZkV2ServerOptions): {
       policy = 'setup_token_or_invite';
     }
 
+    const advertisedHttpUrl = String(process.env.PHOTOCLOUD_HTTP_URL || '').trim() || null;
+    const advertisedHttpsUrl = String(process.env.PHOTOCLOUD_HTTPS_URL || '').trim() || null;
+
     res.status(200).json({
       registrationOpen,
       requiresInviteToken,
       policy,
+      transport: {
+        currentProtocol: isActualHttpsRequest(req) ? 'https' : 'http',
+        httpModeAllowed: true,
+        httpUrl: advertisedHttpUrl,
+        httpsUrl: advertisedHttpsUrl,
+      },
     });
   });
 

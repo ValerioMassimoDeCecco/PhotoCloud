@@ -423,13 +423,57 @@ fn is_secure_or_localhost_request(headers: &HeaderMap) -> bool {
         || hostname.ends_with(".localhost")
 }
 
+fn is_actual_https_request(headers: &HeaderMap) -> bool {
+    if trust_proxy_enabled() {
+        if let Some(proto) = headers
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+        {
+            if proto
+                .split(',')
+                .next()
+                .map(|s| s.trim().eq_ignore_ascii_case("https"))
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_explicit_http_transport_requested(headers: &HeaderMap) -> bool {
+    let allow_env = std::env::var("PHOTOCLOUD_ALLOW_HTTP")
+        .map(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if allow_env {
+        return true;
+    }
+    headers
+        .get("x-photocloud-transport-mode")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().eq_ignore_ascii_case("http"))
+        .unwrap_or(false)
+}
+
+fn should_mark_cookie_secure(headers: &HeaderMap) -> bool {
+    if is_actual_https_request(headers) {
+        return true;
+    }
+    if is_explicit_http_transport_requested(headers) {
+        return false;
+    }
+    is_secure_or_localhost_request(headers)
+}
+
 fn require_https_or_localhost(headers: &HeaderMap) -> Result<(), Response> {
-    if !is_secure_or_localhost_request(headers) {
+    if !is_secure_or_localhost_request(headers) && !is_explicit_http_transport_requested(headers) {
         return Err(v2_json(
             StatusCode::FORBIDDEN,
             serde_json::json!({
                 "error": "HTTPS_REQUIRED",
-                "message": "HTTPS è obbligatorio per le API Zero-Knowledge v2 (WebCrypto e cookie Secure richiedono HTTPS o localhost)."
+                "message": "HTTPS è obbligatorio per le API Zero-Knowledge v2 (seleziona la modalità HTTP nella schermata di accesso oppure usa HTTPS)."
             }),
         ));
     }
@@ -601,7 +645,7 @@ fn issue_session_cookie(
     }
 
     let max_age_sec = (state.zk_v2.session_ttl_ms / 1000).max(1);
-    let secure_flag = if is_secure_or_localhost_request(req_headers) {
+    let secure_flag = if should_mark_cookie_secure(req_headers) {
         "; Secure"
     } else {
         ""
@@ -613,7 +657,7 @@ fn issue_session_cookie(
 }
 
 fn clear_session_cookie(req_headers: &HeaderMap) -> String {
-    let secure_flag = if is_secure_or_localhost_request(req_headers) {
+    let secure_flag = if should_mark_cookie_secure(req_headers) {
         "; Secure"
     } else {
         ""
@@ -625,7 +669,7 @@ fn clear_session_cookie(req_headers: &HeaderMap) -> String {
 // 1. ACCOUNT ENDPOINTS
 // ============================================================================
 
-async fn get_auth_config(State(state): State<AppState>) -> Response {
+async fn get_auth_config(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let user_count: i64 = {
         let conn = state.zk_v2.db.lock().unwrap();
         conn.query_row("SELECT COUNT(*) FROM users_v2", [], |r| r.get(0))
@@ -650,12 +694,32 @@ async fn get_auth_config(State(state): State<AppState>) -> Response {
         }
     };
 
+    let http_url = std::env::var("PHOTOCLOUD_HTTP_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let https_url = std::env::var("PHOTOCLOUD_HTTPS_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let current_protocol = if is_actual_https_request(&headers) {
+        "https"
+    } else {
+        "http"
+    };
+
     v2_json(
         StatusCode::OK,
         serde_json::json!({
             "registrationOpen": registration_open,
             "requiresInviteToken": requires_invite_token,
             "policy": policy,
+            "transport": {
+                "currentProtocol": current_protocol,
+                "httpModeAllowed": true,
+                "httpUrl": http_url,
+                "httpsUrl": https_url,
+            },
         }),
     )
 }
