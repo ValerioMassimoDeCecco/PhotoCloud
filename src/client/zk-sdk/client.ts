@@ -385,7 +385,7 @@ export class ZkVaultClient {
 
   private autoLockTimeoutMs: number;
   private autoLockTimer: ReturnType<typeof setTimeout> | null = null;
-  private activeUploadsCount = 0;
+  private activeTransfersCount = 0;
   private transientExternalActivityExpiresAtMs = 0;
 
   constructor(options: ZkVaultClientOptions = {}) {
@@ -486,7 +486,7 @@ export class ZkVaultClient {
     }
     if (this.isUnlocked() && this.autoLockTimeoutMs > 0) {
       this.autoLockTimer = setTimeout(() => {
-        if (this.activeUploadsCount > 0 || Date.now() < this.transientExternalActivityExpiresAtMs) {
+        if (this.activeTransfersCount > 0 || Date.now() < this.transientExternalActivityExpiresAtMs) {
           this.touchActivity();
           return;
         }
@@ -1103,7 +1103,7 @@ export class ZkVaultClient {
     };
 
     const self = this;
-    self.activeUploadsCount += 1;
+    self.activeTransfersCount += 1;
     const promise = (async (): Promise<{ skippedDuplicate: boolean; itemId?: string; blobId: string }> => {
       status = 'running';
       self.touchActivity();
@@ -1343,7 +1343,7 @@ export class ZkVaultClient {
         throw err;
       })
       .finally(() => {
-        self.activeUploadsCount = Math.max(0, self.activeUploadsCount - 1);
+        self.activeTransfersCount = Math.max(0, self.activeTransfersCount - 1);
         if (self.isUnlocked()) {
           self.touchActivity();
         }
@@ -1702,16 +1702,26 @@ export class ZkVaultClient {
 
   public async downloadBlobToBytes(blobId: string): Promise<Uint8Array> {
     const { subkeys } = this.requireUnlocked();
-    const resp = await this.apiFetch(`/api/v2/blobs/${blobId}`);
-    if (!resp.ok) {
-      throw new Error(`BLOB_DOWNLOAD_FAILED_${resp.status}`);
+    this.activeTransfersCount += 1;
+    this.touchActivity();
+    try {
+      const resp = await this.apiFetch(`/api/v2/blobs/${blobId}`);
+      if (!resp.ok) {
+        throw new Error(`BLOB_DOWNLOAD_FAILED_${resp.status}`);
+      }
+      const cipherBytes = new Uint8Array(await resp.arrayBuffer());
+      this.touchActivity();
+      const { plaintext } = await decryptBlobToBytes(cipherBytes, {
+        fkWrapKey: subkeys.fkWrapKey,
+        expectedBlobId: blobId,
+      });
+      return plaintext;
+    } finally {
+      this.activeTransfersCount = Math.max(0, this.activeTransfersCount - 1);
+      if (this.isUnlocked()) {
+        this.touchActivity();
+      }
     }
-    const cipherBytes = new Uint8Array(await resp.arrayBuffer());
-    const { plaintext } = await decryptBlobToBytes(cipherBytes, {
-      fkWrapKey: subkeys.fkWrapKey,
-      expectedBlobId: blobId,
-    });
-    return plaintext;
   }
 
   public async downloadBlobRange(
@@ -1720,53 +1730,62 @@ export class ZkVaultClient {
     endByteInclusive: number
   ): Promise<{ plaintextSlice: Uint8Array; header: ParsedPczkHeader }> {
     const { subkeys } = this.requireUnlocked();
+    this.activeTransfersCount += 1;
+    this.touchActivity();
+    try {
+      const headerResp = await this.apiFetch(`/api/v2/blobs/${blobId}`, {
+        headers: { Range: `bytes=0-${PCZK_HEADER_LENGTH - 1}` },
+      });
+      if (!headerResp.ok) {
+        throw new Error(`BLOB_HEADER_FETCH_FAILED_${headerResp.status}`);
+      }
+      const headerBytes = new Uint8Array(await headerResp.arrayBuffer()).subarray(
+        0,
+        PCZK_HEADER_LENGTH
+      );
+      const header = parsePczkHeader(headerBytes);
 
-    const headerResp = await this.apiFetch(`/api/v2/blobs/${blobId}`, {
-      headers: { Range: `bytes=0-${PCZK_HEADER_LENGTH - 1}` },
-    });
-    if (!headerResp.ok) {
-      throw new Error(`BLOB_HEADER_FETCH_FAILED_${headerResp.status}`);
-    }
-    const headerBytes = new Uint8Array(await headerResp.arrayBuffer()).subarray(
-      0,
-      PCZK_HEADER_LENGTH
-    );
-    const header = parsePczkHeader(headerBytes);
-
-    let totalCiphertextBytes = 0;
-    const contentRange = headerResp.headers.get('content-range');
-    if (contentRange) {
-      const m = /\/(\d+)$/.exec(contentRange.trim());
-      if (m) totalCiphertextBytes = Number(m[1]);
-    }
-    if (!totalCiphertextBytes) {
-      for (const it of this.itemsById.values()) {
-        if (it.blobId === blobId.toLowerCase()) {
-          totalCiphertextBytes = it.cipherSize;
-          break;
+      let totalCiphertextBytes = 0;
+      const contentRange = headerResp.headers.get('content-range');
+      if (contentRange) {
+        const m = /\/(\d+)$/.exec(contentRange.trim());
+        if (m) totalCiphertextBytes = Number(m[1]);
+      }
+      if (!totalCiphertextBytes) {
+        for (const it of this.itemsById.values()) {
+          if (it.blobId === blobId.toLowerCase()) {
+            totalCiphertextBytes = it.cipherSize;
+            break;
+          }
         }
       }
+
+      const plaintextSlice = await decryptBlobRange({
+        headerBytes,
+        totalCiphertextBytes,
+        startPlaintextByte: startByte,
+        endPlaintextByteInclusive: endByteInclusive,
+        fkWrapKey: subkeys.fkWrapKey,
+        expectedBlobId: blobId,
+        fetchCiphertextRange: async (cStart, cEndInclusive) => {
+          this.touchActivity();
+          const rangeResp = await this.apiFetch(`/api/v2/blobs/${blobId}`, {
+            headers: { Range: `bytes=${cStart}-${cEndInclusive}` },
+          });
+          if (!rangeResp.ok) {
+            throw new Error(`BLOB_RANGE_FETCH_FAILED_${rangeResp.status}`);
+          }
+          return new Uint8Array(await rangeResp.arrayBuffer());
+        },
+      });
+
+      return { plaintextSlice, header };
+    } finally {
+      this.activeTransfersCount = Math.max(0, this.activeTransfersCount - 1);
+      if (this.isUnlocked()) {
+        this.touchActivity();
+      }
     }
-
-    const plaintextSlice = await decryptBlobRange({
-      headerBytes,
-      totalCiphertextBytes,
-      startPlaintextByte: startByte,
-      endPlaintextByteInclusive: endByteInclusive,
-      fkWrapKey: subkeys.fkWrapKey,
-      expectedBlobId: blobId,
-      fetchCiphertextRange: async (cStart, cEndInclusive) => {
-        const rangeResp = await this.apiFetch(`/api/v2/blobs/${blobId}`, {
-          headers: { Range: `bytes=${cStart}-${cEndInclusive}` },
-        });
-        if (!rangeResp.ok) {
-          throw new Error(`BLOB_RANGE_FETCH_FAILED_${rangeResp.status}`);
-        }
-        return new Uint8Array(await rangeResp.arrayBuffer());
-      },
-    });
-
-    return { plaintextSlice, header };
   }
 
   public async getVideoStreamTicket(blobId: string): Promise<{
@@ -2200,8 +2219,21 @@ export class ZkVaultClient {
       .filter((x): x is DecryptedItemV2 => Boolean(x));
 
     const self = this;
+    self.activeTransfersCount += 1;
+    self.touchActivity();
+    let released = false;
+    const releaseTransfer = () => {
+      if (released) return;
+      released = true;
+      self.activeTransfersCount = Math.max(0, self.activeTransfersCount - 1);
+      if (self.isUnlocked()) {
+        self.touchActivity();
+      }
+    };
+
     async function* zipEntries() {
       for (const item of selected) {
+        self.touchActivity();
         const resp = await self.apiFetch(`/api/v2/blobs/${item.blobId}`);
         if (!resp.ok || !resp.body) {
           throw new Error(`EXPORT_BLOB_FETCH_FAILED_${resp.status}`);
@@ -2221,12 +2253,27 @@ export class ZkVaultClient {
     const gen = generateZipStream(zipEntries());
     return new ReadableStream<Uint8Array>({
       async pull(controller) {
-        const step = await gen.next();
-        if (step.done) {
-          controller.close();
-          return;
+        try {
+          self.touchActivity();
+          const step = await gen.next();
+          if (step.done) {
+            releaseTransfer();
+            controller.close();
+            return;
+          }
+          controller.enqueue(step.value);
+        } catch (err) {
+          releaseTransfer();
+          throw err;
         }
-        controller.enqueue(step.value);
+      },
+      async cancel() {
+        releaseTransfer();
+        try {
+          await gen.return?.();
+        } catch {
+          // ignore generator close error
+        }
       },
     });
   }

@@ -894,7 +894,17 @@ fun PhotoCloudNativeApp(
                     kdfPinningStore = PrefsKdfPinningStore(context),
                     metadataStore = PrefsZkAccountMetadataStore(context),
                     autoLockScope = scope
-                )
+                ).apply {
+                    if (
+                        mainPrefs.contains("zk_auto_lock_timeout_ms") ||
+                        mainPrefs.contains("zk_lock_on_background")
+                    ) {
+                        setAutoLockConfig(
+                            timeoutMs = mainPrefs.getLong("zk_auto_lock_timeout_ms", 15L * 60L * 1000L),
+                            lockOnBackground = mainPrefs.getBoolean("zk_lock_on_background", true)
+                        )
+                    }
+                }
             }
         )
     }
@@ -1002,7 +1012,10 @@ fun PhotoCloudNativeApp(
             updateState = appUpdateState,
             onCancel = { AppAutoUpdater.cancelUpdateDownload() },
             onRetry = { AppAutoUpdater.retryDownload(context) },
-            onInstall = { AppAutoUpdater.promptInstallApk(context) },
+            onInstall = {
+                activeZkSessionManager.beginTransientExternalActivity()
+                AppAutoUpdater.promptInstallApk(context)
+            },
             onDismiss = { AppAutoUpdater.dismissModal() }
         )
     }

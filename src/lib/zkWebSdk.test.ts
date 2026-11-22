@@ -1135,4 +1135,63 @@ describe('FASE 3 & 4.0 — Zero-Knowledge Web SDK (src/client/zk-sdk) & /v2 E2EE
     assert.equal(client.isUnlocked(), false, 'Dopo inattività reale post-upload il vault deve bloccarsi');
     assert.equal(autoLockCount, 1);
   });
+
+  it('11. Download & Streaming ZIP Export Auto-Lock Guard: il vault non si blocca durante download o export ZIP in corso', async () => {
+    let autoLockCount = 0;
+    const delayedFetch: typeof fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes('/api/v2/blobs/') && (!init?.method || init.method.toUpperCase() === 'GET')) {
+        await new Promise((r) => setTimeout(r, 90));
+      }
+      return globalThis.fetch(input, init);
+    };
+
+    const client = new ZkVaultClient({
+      baseUrl,
+      fetchFn: delayedFetch,
+      autoLockTimeoutMs: 55,
+      onAutoLock: () => {
+        autoLockCount += 1;
+      },
+    });
+    const prep = client.prepareRegistration('download_guard_user', '', TEST_FLOOR_KDF_PARAMS);
+    await client.register(prep, '', undefined, {
+      inviteToken: 'test-invite-token-phase3',
+      skipRecoveryConfirmation: true,
+    });
+
+    const payload = new TextEncoder().encode('PhotoCloud Download & ZIP Auto-Lock Guard v1.5.3');
+    const up = await client.uploadFile({
+      name: 'dl-guard.txt',
+      mimeType: 'text/plain',
+      size: payload.byteLength,
+      source: payload,
+    });
+    assert.ok(up.itemId);
+    await client.syncItems('active');
+
+    // Download lento (> autoLockTimeoutMs): il vault deve restare sbloccato!
+    const decrypted = await client.downloadBlobToBytes(up.blobId);
+    assert.deepEqual(decrypted, payload);
+    assert.equal(client.isUnlocked(), true);
+    assert.equal(autoLockCount, 0);
+
+    // Export ZIP streaming lento (> autoLockTimeoutMs): il vault resta sbloccato fino al termine
+    const zipStream = client.exportZipStream([up.itemId!]);
+    const reader = zipStream.getReader();
+    let totalZipBytes = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) totalZipBytes += value.byteLength;
+    }
+    assert.ok(totalZipBytes > payload.byteLength);
+    assert.equal(client.isUnlocked(), true);
+    assert.equal(autoLockCount, 0);
+
+    // Dopo la fine dei trasferimenti, l'inattività reale riblocca il vault
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(client.isUnlocked(), false);
+    assert.equal(autoLockCount, 1);
+  });
 });

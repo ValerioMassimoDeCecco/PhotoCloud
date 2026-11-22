@@ -1,18 +1,17 @@
 {
-  "apkFilename": "photocloud-release-v1.5.2-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.5.2-signed.apk",
+  "apkFilename": "photocloud-release-v1.5.3-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.5.3-signed.apk",
   "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "sizeBytes": 0,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.5.2",
-  "versionCode": 34,
-  "changelog": "Release 1.5.2 — Risolto il loop Caricamento File -> Schermata Login su Android (soppressione selettiva del background lock durante selettore file di sistema, esportazione Keyfile SAF e apertura esterna con riarmo automatico su onResume), heartbeat sessione durante upload grandi su Android e Web /v2, e toggle HTTP/HTTPS integrato nella schermata principale.",
+  "versionName": "1.5.3",
+  "versionCode": 35,
+  "changelog": "Release 1.5.3 — Risolti tutti i bug di lifecycle/auto-lock/permessi su Android e Web /v2 (configChanges completi, persistenza impostazioni auto-lock, guardia biometrica e installer APK, permessi runtime Auto-Backup, heartbeat video/interazioni/download/ZIP) e riscritti da zero il Pinch-to-Zoom e l'Editor Foto in maniera semplice e intuitiva.",
   "features": [
-    "Fix Loop Upload -> Login (v1.5.2): apertura del selettore file di sistema, salvataggio Keyfile SAF e apertura esterna non bloccano più il vault né riportano alla schermata di login",
-    "Protezione Auto-Lock durante Upload (Android & Web /v2): rinnovo attività su ogni chunk caricato per evitare blocchi a metà upload",
-    "Toggle Protocollo HTTP/HTTPS in alto a sinistra nella schermata principale di login/registrazione (Android, Web /v2, Server Node e Rust)",
-    "Vault Zero-Knowledge E2EE v2 completo con cifratura AES-256-GCM lato client, backup automatico cifrato e condivisioni Zero-Knowledge"
+    "Nuovo Pinch-to-Zoom (Android & Web /v2): zoom fluido centrato sul punto focale (1x–5x), doppio tap/click 1x↔2.5x, pan vincolato ai bordi e controlli zoom discreti",
+    "Nuovo Editor Foto E2EE (Android & Web /v2): anteprime reali live dei filtri, ritaglio interattivo diretto sull'immagine con maniglie e griglia terzi, controlli regolazioni puliti, confronta con originale e Undo/Redo",
+    "Fix completi Auto-Lock & Lifecycle: persistenza impostazioni auto-lock, configChanges Android per tema/split-screen, guardia su biometria e installer APK, permessi runtime Auto-Backup, heartbeat durante riproduzione video, download grandi ed export ZIP streaming"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.5.2",
-  "notes": "Pre-release v1.5.2: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release, firmato con la stessa firma persistente (nessun segreto committato)."
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.5.3",
+  "notes": "Pre-release v1.5.3: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release, firmato con la stessa firma persistente (nessun segreto committato)."
 }

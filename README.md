@@ -244,7 +244,7 @@ Le altre variabili in `.env.example` (`GITHUB_TOKEN`, `PHOTOCLOUD_KEYSTORE_*`, `
 
 ## App Android
 
-Requisiti del dispositivo: **Android 8.0 o successivo (API 26)**, compilata per **Android 15 (`targetSdk 35`)**. Versione corrente: **`1.5.2` (`versionCode 34`)**.
+Requisiti del dispositivo: **Android 8.0 o successivo (API 26)**, compilata per **Android 15 (`targetSdk 35`)**. Versione corrente: **`1.5.3` (`versionCode 35`)**.
 
 ### Installare l'APK
 

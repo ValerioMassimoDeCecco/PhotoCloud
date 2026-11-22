@@ -36,7 +36,7 @@
             android:exported="false"
             android:icon="@drawable/ic_launcher_color"
             android:roundIcon="@drawable/ic_launcher_color"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale|keyboardHidden" />
 
         <!-- Default Color Launcher Alias -->
         <activity-alias

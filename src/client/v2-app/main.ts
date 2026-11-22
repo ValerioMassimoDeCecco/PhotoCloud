@@ -22,6 +22,16 @@ import {
   type ZkKeyFileV2,
 } from '../zk-sdk/index.ts';
 import { formatCoordinates, isValidGpsCoord } from '../../lib/gpsMapClustering.ts';
+import {
+  applyPanDelta,
+  applyTwoFingerPinch,
+  applyWheelZoom,
+  createInitialZoomPan,
+  formatZoomPercent,
+  isZoomedIn,
+  stepButtonZoom,
+  toggleDoubleTapZoom,
+} from '../../lib/zoomPanMath.ts';
 import { renderGpsMapView } from './gpsMapView.ts';
 import { openPhotoEditorModal } from './photoEditorModal.ts';
 import { openCreateShareModal, renderSharesManagementView } from './sharesView.ts';
@@ -209,8 +219,17 @@ export function initZkWebApp(): void {
   let lastCreatedShare: { shareId: string; shareUrl: string } | null = null;
   let selectedLightboxItem: DecryptedItemV2 | null = null;
   let activeModalCleanup: (() => void) | null = null;
+  let activeLightboxCleanup: (() => void) | null = null;
+
+  const closeActiveLightboxListeners = () => {
+    if (activeLightboxCleanup) {
+      activeLightboxCleanup();
+      activeLightboxCleanup = null;
+    }
+  };
 
   const closeActiveOverlayModal = () => {
+    closeActiveLightboxListeners();
     if (activeModalCleanup) {
       activeModalCleanup();
       activeModalCleanup = null;
@@ -258,6 +277,20 @@ export function initZkWebApp(): void {
   if ('serviceWorker' in navigator && window.location.pathname.startsWith('/v2')) {
     navigator.serviceWorker.register('/v2/sw-stream.js', { scope: '/v2' }).catch(() => {});
   }
+
+  // Throttled global user-activity heartbeat so active reading/editing/browsing never triggers auto-lock
+  let lastGlobalActivityTouchMs = 0;
+  const touchUserActivityThrottled = () => {
+    if (!client.isUnlocked()) return;
+    const now = Date.now();
+    if (now - lastGlobalActivityTouchMs >= 5000) {
+      lastGlobalActivityTouchMs = now;
+      client.touchActivity();
+    }
+  };
+  window.addEventListener('pointerdown', touchUserActivityThrottled, { passive: true });
+  window.addEventListener('keydown', touchUserActivityThrottled, { passive: true });
+  window.addEventListener('wheel', touchUserActivityThrottled, { passive: true });
 
   const shareMatch = /^\/v2\/share\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/i.exec(
     window.location.pathname
@@ -871,13 +904,27 @@ export function initZkWebApp(): void {
     statusLine.id = 'upload-status-line';
     uploadPanel.appendChild(statusLine);
 
+    let filePickerPending = false;
+    const onWindowFocusAfterPicker = () => {
+      if (!filePickerPending) return;
+      setTimeout(() => {
+        if (filePickerPending && (!fileInput.files || fileInput.files.length === 0)) {
+          filePickerPending = false;
+          client.endTransientExternalActivity();
+        }
+      }, 350);
+    };
     fileInput.addEventListener('click', () => {
+      filePickerPending = true;
       client.beginTransientExternalActivity();
+      window.addEventListener('focus', onWindowFocusAfterPicker, { once: true });
     });
     fileInput.addEventListener('cancel', () => {
+      filePickerPending = false;
       client.endTransientExternalActivity();
     });
     fileInput.addEventListener('change', async () => {
+      filePickerPending = false;
       client.endTransientExternalActivity();
       const files = Array.from(fileInput.files ?? []);
       if (files.length === 0) return;
@@ -1763,21 +1810,25 @@ export function initZkWebApp(): void {
   }
 
   function renderLightboxModal(container: HTMLElement, item: DecryptedItemV2): void {
+    closeActiveLightboxListeners();
     const backdrop = el('div', 'modal-backdrop');
     backdrop.id = 'lightbox-modal';
 
-    const panel = el('div', 'modal-panel');
+    const panel = el('div', 'modal-panel lightbox-modal-panel');
     const topRow = el('div', 'toolbar-row');
     const title = el('h2', 'brand-title', `${item.meta.name}`);
     title.id = 'lightbox-item-title';
     topRow.appendChild(title);
 
-    const closeBtn = el('button', 'btn btn-ghost', 'Chiudi');
-    closeBtn.id = 'btn-lightbox-close';
-    closeBtn.addEventListener('click', () => {
+    const closeLightbox = () => {
+      closeActiveLightboxListeners();
       selectedLightboxItem = null;
       render();
-    });
+    };
+
+    const closeBtn = el('button', 'btn btn-ghost', 'Chiudi');
+    closeBtn.id = 'btn-lightbox-close';
+    closeBtn.addEventListener('click', closeLightbox);
     topRow.appendChild(closeBtn);
     panel.appendChild(topRow);
 
@@ -1796,6 +1847,17 @@ export function initZkWebApp(): void {
           const video = el('video', 'lightbox-img');
           video.id = 'lightbox-video-player';
           video.controls = true;
+          let lastVideoTouchMs = 0;
+          const onVideoActive = () => {
+            if (!client.isUnlocked()) return;
+            const now = Date.now();
+            if (now - lastVideoTouchMs >= 10_000) {
+              lastVideoTouchMs = now;
+              client.touchActivity();
+            }
+          };
+          video.addEventListener('play', onVideoActive);
+          video.addEventListener('timeupdate', onVideoActive);
           if (swRegistered) {
             video.dataset.streamMode = 'sw-range';
             video.src = `/v2/__stream/${item.blobId}`;
@@ -1824,13 +1886,241 @@ export function initZkWebApp(): void {
             !isSvgMime(item.meta.mime, item.meta.name) &&
             !isUntrustedActiveMime(item.meta.mime, item.meta.name)
           ) {
-            const img = el('img', 'lightbox-img');
+            const viewport = el('div', 'lightbox-zoom-viewport');
+            viewport.id = 'lightbox-zoom-viewport';
+
+            const img = el('img', 'lightbox-img lightbox-zoom-img');
             img.id = 'lightbox-decrypted-image';
             img.alt = item.meta.name;
+            img.draggable = false;
             img.src = registerObjectUrl(
               new Blob([plainBytes as unknown as BlobPart], { type: item.meta.mime })
             );
-            previewBox.appendChild(img);
+            viewport.appendChild(img);
+
+            // Minimal floating zoom toolbar tucked in bottom-right corner
+            const zoomBar = el('div', 'lightbox-zoom-controls');
+            zoomBar.id = 'lightbox-zoom-controls';
+
+            const zoomOutBtn = el('button', 'lightbox-zoom-btn', '−');
+            zoomOutBtn.type = 'button';
+            zoomOutBtn.id = 'btn-lightbox-zoom-out';
+            zoomOutBtn.setAttribute('aria-label', 'Riduci zoom');
+
+            const zoomPctEl = el('span', 'lightbox-zoom-pct mono-nums', '100%');
+            zoomPctEl.id = 'lightbox-zoom-level';
+
+            const zoomInBtn = el('button', 'lightbox-zoom-btn', '+');
+            zoomInBtn.type = 'button';
+            zoomInBtn.id = 'btn-lightbox-zoom-in';
+            zoomInBtn.setAttribute('aria-label', 'Aumenta zoom');
+
+            const zoomResetBtn = el('button', 'lightbox-zoom-btn lightbox-zoom-reset', 'Adatta');
+            zoomResetBtn.type = 'button';
+            zoomResetBtn.id = 'btn-lightbox-zoom-reset';
+            zoomResetBtn.setAttribute('aria-label', 'Ripristina zoom 100%');
+
+            zoomBar.append(zoomOutBtn, zoomPctEl, zoomInBtn, zoomResetBtn);
+            viewport.appendChild(zoomBar);
+            previewBox.appendChild(viewport);
+
+            // Focal-point Pinch-to-Zoom, Wheel Zoom, Double-Tap & Drag Pan state
+            let zoomState = createInitialZoomPan();
+            const activePointers = new Map<number, { x: number; y: number }>();
+            let prevPinch: { midX: number; midY: number; dist: number } | null = null;
+            let panPointerId: number | null = null;
+            let lastPanPos: { x: number; y: number } | null = null;
+            let lastTapTimeMs = 0;
+            let lastTapPos: { x: number; y: number } | null = null;
+
+            const getMetrics = () => {
+              const rect = viewport.getBoundingClientRect();
+              return {
+                rect,
+                metrics: {
+                  viewportWidth: rect.width || 600,
+                  viewportHeight: rect.height || 420,
+                  mediaWidth: img.naturalWidth || undefined,
+                  mediaHeight: img.naturalHeight || undefined,
+                },
+              };
+            };
+
+            const applyZoomTransform = (animate = false) => {
+              img.classList.toggle('zoom-animated', animate);
+              img.style.transform = `translate3d(${zoomState.panX.toFixed(2)}px, ${zoomState.panY.toFixed(2)}px, 0) scale(${zoomState.scale.toFixed(4)})`;
+              const zoomed = isZoomedIn(zoomState);
+              viewport.classList.toggle('is-zoomed', zoomed);
+              viewport.dataset.zoomScale = zoomState.scale.toFixed(2);
+              zoomPctEl.textContent = formatZoomPercent(zoomState.scale);
+              zoomOutBtn.disabled = !zoomed;
+              zoomInBtn.disabled = zoomState.scale >= 4.98;
+              zoomResetBtn.style.display = zoomed ? 'inline-flex' : 'none';
+            };
+            applyZoomTransform(false);
+
+            zoomInBtn.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              const { metrics } = getMetrics();
+              zoomState = stepButtonZoom(zoomState, 'in', metrics);
+              applyZoomTransform(true);
+            });
+            zoomOutBtn.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              const { metrics } = getMetrics();
+              zoomState = stepButtonZoom(zoomState, 'out', metrics);
+              applyZoomTransform(true);
+            });
+            zoomResetBtn.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              zoomState = createInitialZoomPan();
+              applyZoomTransform(true);
+            });
+
+            viewport.addEventListener(
+              'wheel',
+              (ev) => {
+                ev.preventDefault();
+                const { rect, metrics } = getMetrics();
+                const relX = ev.clientX - (rect.left + rect.width / 2);
+                const relY = ev.clientY - (rect.top + rect.height / 2);
+                zoomState = applyWheelZoom(zoomState, ev.deltaY, relX, relY, metrics, ev.ctrlKey);
+                applyZoomTransform(false);
+              },
+              { passive: false }
+            );
+
+            viewport.addEventListener('dblclick', (ev) => {
+              if ((ev.target as HTMLElement | null)?.closest('#lightbox-zoom-controls')) return;
+              ev.preventDefault();
+              const { rect, metrics } = getMetrics();
+              const relX = ev.clientX - (rect.left + rect.width / 2);
+              const relY = ev.clientY - (rect.top + rect.height / 2);
+              zoomState = toggleDoubleTapZoom(zoomState, relX, relY, metrics);
+              applyZoomTransform(true);
+            });
+
+            const readPinchPair = () => {
+              const pts = Array.from(activePointers.values());
+              if (pts.length < 2) return null;
+              const [a, b] = pts;
+              return {
+                midX: (a.x + b.x) / 2,
+                midY: (a.y + b.y) / 2,
+                dist: Math.hypot(b.x - a.x, b.y - a.y),
+              };
+            };
+
+            viewport.addEventListener('pointerdown', (ev) => {
+              if ((ev.target as HTMLElement | null)?.closest('#lightbox-zoom-controls')) return;
+              viewport.setPointerCapture?.(ev.pointerId);
+              activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+              if (activePointers.size === 2) {
+                prevPinch = readPinchPair();
+                panPointerId = null;
+                lastPanPos = null;
+                viewport.classList.remove('is-dragging');
+              } else if (activePointers.size === 1) {
+                // Touch double-tap detection
+                if (ev.pointerType === 'touch') {
+                  const now = Date.now();
+                  if (
+                    lastTapPos &&
+                    now - lastTapTimeMs < 320 &&
+                    Math.hypot(ev.clientX - lastTapPos.x, ev.clientY - lastTapPos.y) < 36
+                  ) {
+                    lastTapTimeMs = 0;
+                    lastTapPos = null;
+                    const { rect, metrics } = getMetrics();
+                    const relX = ev.clientX - (rect.left + rect.width / 2);
+                    const relY = ev.clientY - (rect.top + rect.height / 2);
+                    zoomState = toggleDoubleTapZoom(zoomState, relX, relY, metrics);
+                    applyZoomTransform(true);
+                    return;
+                  }
+                  lastTapTimeMs = now;
+                  lastTapPos = { x: ev.clientX, y: ev.clientY };
+                }
+                if (isZoomedIn(zoomState)) {
+                  panPointerId = ev.pointerId;
+                  lastPanPos = { x: ev.clientX, y: ev.clientY };
+                  viewport.classList.add('is-dragging');
+                }
+              }
+            });
+
+            viewport.addEventListener('pointermove', (ev) => {
+              if (!activePointers.has(ev.pointerId)) return;
+              activePointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+              if (activePointers.size >= 2) {
+                const curr = readPinchPair();
+                if (prevPinch && curr) {
+                  const { rect, metrics } = getMetrics();
+                  zoomState = applyTwoFingerPinch(
+                    zoomState,
+                    prevPinch.midX,
+                    prevPinch.midY,
+                    curr.midX,
+                    curr.midY,
+                    prevPinch.dist,
+                    curr.dist,
+                    rect.left + rect.width / 2,
+                    rect.top + rect.height / 2,
+                    metrics
+                  );
+                  applyZoomTransform(false);
+                }
+                prevPinch = curr;
+                return;
+              }
+
+              if (panPointerId === ev.pointerId && lastPanPos && isZoomedIn(zoomState)) {
+                const dx = ev.clientX - lastPanPos.x;
+                const dy = ev.clientY - lastPanPos.y;
+                lastPanPos = { x: ev.clientX, y: ev.clientY };
+                const { metrics } = getMetrics();
+                zoomState = applyPanDelta(zoomState, dx, dy, metrics);
+                applyZoomTransform(false);
+              }
+            });
+
+            const finishPointer = (ev: PointerEvent) => {
+              activePointers.delete(ev.pointerId);
+              if (activePointers.size < 2) {
+                prevPinch = null;
+              }
+              if (panPointerId === ev.pointerId) {
+                panPointerId = null;
+                lastPanPos = null;
+                viewport.classList.remove('is-dragging');
+              }
+            };
+            viewport.addEventListener('pointerup', finishPointer);
+            viewport.addEventListener('pointercancel', finishPointer);
+
+            const onLightboxKeyDown = (ev: KeyboardEvent) => {
+              if (ev.key === 'Escape') {
+                ev.preventDefault();
+                closeLightbox();
+              } else if (ev.key === '+' || ev.key === '=') {
+                const { metrics } = getMetrics();
+                zoomState = stepButtonZoom(zoomState, 'in', metrics);
+                applyZoomTransform(true);
+              } else if (ev.key === '-') {
+                const { metrics } = getMetrics();
+                zoomState = stepButtonZoom(zoomState, 'out', metrics);
+                applyZoomTransform(true);
+              } else if (ev.key === '0') {
+                zoomState = createInitialZoomPan();
+                applyZoomTransform(true);
+              }
+            };
+            window.addEventListener('keydown', onLightboxKeyDown);
+            activeLightboxCleanup = () => {
+              window.removeEventListener('keydown', onLightboxKeyDown);
+            };
           } else if (item.category === 'document') {
             const docPreview = await parseClientDocumentPreview(
               plainBytes,

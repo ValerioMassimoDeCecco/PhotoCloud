@@ -1,18 +1,23 @@
 package com.valerio.photocloud.zk
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -20,6 +25,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -113,18 +120,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.valerio.photocloud.GalleryDragSelectionController
 import com.valerio.photocloud.GridCellBounds
@@ -228,6 +241,66 @@ fun ZkV2VaultScreen(
         }
     }
 
+    fun requiredAutoBackupPermissions(): Array<String> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.POST_NOTIFICATIONS
+            )
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+    fun hasAutoBackupMediaPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED)
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    fun activateAutoBackupNow() {
+        if (session.keyProtectionStatus?.backgroundEnrolled != true) {
+            onAuthEvent(ZkV2UiEvent.ToggleBackgroundBackupKey(true))
+        }
+        val updated = backupConfig.copy(
+            enabled = true,
+            paused = false,
+            activatedAtMs = if (backupConfig.activatedAtMs == 0L) System.currentTimeMillis() else backupConfig.activatedAtMs
+        )
+        backupConfig = updated
+        ZkAutoBackupPrefs.save(context, updated)
+        ZkAutoBackupWorker.syncScheduleFromPrefs(context)
+    }
+
+    val autoBackupPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        onAuthEvent(ZkV2UiEvent.EndTransientExternalActivity)
+        val mediaGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            results[Manifest.permission.READ_MEDIA_IMAGES] == true ||
+                results[Manifest.permission.READ_MEDIA_VIDEO] == true ||
+                hasAutoBackupMediaPermission()
+        } else {
+            results[Manifest.permission.READ_EXTERNAL_STORAGE] == true || hasAutoBackupMediaPermission()
+        }
+        if (mediaGranted) {
+            activateAutoBackupNow()
+            Toast.makeText(context, "Auto-Backup cifrato attivato", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(
+                context,
+                "Permesso accesso foto/video necessario per l'Auto-Backup cifrato.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     // Refresh gallery automatically when an upload finishes
     val completedCount = transfers.count { it.status == ZkTransferStatus.COMPLETED }
     LaunchedEffect(completedCount) {
@@ -240,6 +313,7 @@ fun ZkV2VaultScreen(
         ZkV2PhotoEditorDialog(
             item = editorItem!!,
             repository = repository,
+            onUserActivity = { onAuthEvent(ZkV2UiEvent.TouchActivity) },
             onDismiss = { editorItem = null },
             onSavedCopy = { created ->
                 editorItem = null
@@ -272,6 +346,7 @@ fun ZkV2VaultScreen(
         ZkV2ItemViewerScreen(
             item = viewerItem!!,
             repository = repository,
+            onUserActivity = { onAuthEvent(ZkV2UiEvent.TouchActivity) },
             onClose = { viewerItem = null },
             onToggleFavorite = { item ->
                 scope.launch {
@@ -1056,17 +1131,22 @@ fun ZkV2VaultScreen(
                                     Switch(
                                         checked = backupConfig.enabled,
                                         onCheckedChange = { enable ->
-                                            if (enable && session.keyProtectionStatus?.backgroundEnrolled != true) {
-                                                onAuthEvent(ZkV2UiEvent.ToggleBackgroundBackupKey(true))
+                                            if (enable) {
+                                                if (hasAutoBackupMediaPermission()) {
+                                                    activateAutoBackupNow()
+                                                } else {
+                                                    onAuthEvent(ZkV2UiEvent.BeginTransientExternalActivity)
+                                                    autoBackupPermissionLauncher.launch(requiredAutoBackupPermissions())
+                                                }
+                                            } else {
+                                                val updated = backupConfig.copy(
+                                                    enabled = false,
+                                                    paused = false
+                                                )
+                                                backupConfig = updated
+                                                ZkAutoBackupPrefs.save(context, updated)
+                                                ZkAutoBackupWorker.syncScheduleFromPrefs(context)
                                             }
-                                            val updated = backupConfig.copy(
-                                                enabled = enable,
-                                                paused = false,
-                                                activatedAtMs = if (enable && backupConfig.activatedAtMs == 0L) System.currentTimeMillis() else backupConfig.activatedAtMs
-                                            )
-                                            backupConfig = updated
-                                            ZkAutoBackupPrefs.save(context, updated)
-                                            ZkAutoBackupWorker.syncScheduleFromPrefs(context)
                                         }
                                     )
                                 }
@@ -1561,6 +1641,7 @@ private fun ZkEncryptedThumbTile(
 private fun ZkV2ItemViewerScreen(
     item: DecryptedZkItem,
     repository: ZkVaultRepository,
+    onUserActivity: () -> Unit = {},
     onClose: () -> Unit,
     onToggleFavorite: (DecryptedZkItem) -> Unit,
     onEditPhoto: (DecryptedZkItem) -> Unit,
@@ -1574,6 +1655,7 @@ private fun ZkV2ItemViewerScreen(
     var isLoading by remember(item.blobId) { mutableStateOf(!item.isVideo) }
 
     LaunchedEffect(item.blobId) {
+        onUserActivity()
         if (!item.isVideo) {
             isLoading = true
             loadError = null
@@ -1646,25 +1728,25 @@ private fun ZkV2ItemViewerScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black)
+                .background(Color(0xFF050505))
                 .padding(innerPadding),
             contentAlignment = Alignment.Center
         ) {
             if (item.isVideo) {
                 ZkEncryptedStreamingVideoPlayer(
                     blobId = item.blobId,
-                    repository = repository
+                    repository = repository,
+                    onUserActivity = onUserActivity
                 )
             } else if (isLoading) {
                 CircularProgressIndicator()
             } else if (loadError != null) {
                 Text(text = loadError!!, color = Color.White)
             } else if (fullImageBitmap != null) {
-                Image(
-                    bitmap = fullImageBitmap!!.asImageBitmap(),
+                ZkZoomableImage(
+                    bitmap = fullImageBitmap!!,
                     contentDescription = item.meta.name,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize()
+                    onUserActivity = onUserActivity
                 )
             } else {
                 Text(
@@ -1677,10 +1759,216 @@ private fun ZkV2ItemViewerScreen(
     }
 }
 
+internal data class ZkZoomPanState(
+    val scale: Float = 1f,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f
+)
+
+internal object ZkZoomPanMath {
+    const val MIN_SCALE = 1f
+    const val MAX_SCALE = 5f
+    const val DOUBLE_TAP_SCALE = 2.5f
+
+    fun clamp(
+        scale: Float,
+        offsetX: Float,
+        offsetY: Float,
+        viewportWidth: Float,
+        viewportHeight: Float,
+        mediaWidth: Float,
+        mediaHeight: Float
+    ): ZkZoomPanState {
+        val safeScale = scale.coerceIn(MIN_SCALE, MAX_SCALE)
+        if (safeScale <= 1.02f || viewportWidth <= 0f || viewportHeight <= 0f) {
+            return ZkZoomPanState(1f, 0f, 0f)
+        }
+        val fitScale = if (mediaWidth > 0f && mediaHeight > 0f) {
+            minOf(viewportWidth / mediaWidth, viewportHeight / mediaHeight)
+        } else {
+            1f
+        }
+        val fittedW = if (mediaWidth > 0f && mediaHeight > 0f) mediaWidth * fitScale else viewportWidth
+        val fittedH = if (mediaWidth > 0f && mediaHeight > 0f) mediaHeight * fitScale else viewportHeight
+        val maxX = ((fittedW * safeScale - viewportWidth) / 2f).coerceAtLeast(0f)
+        val maxY = ((fittedH * safeScale - viewportHeight) / 2f).coerceAtLeast(0f)
+        return ZkZoomPanState(
+            scale = safeScale,
+            offsetX = offsetX.coerceIn(-maxX, maxX),
+            offsetY = offsetY.coerceIn(-maxY, maxY)
+        )
+    }
+
+    fun applyPinchAndPan(
+        current: ZkZoomPanState,
+        zoomChange: Float,
+        panChangeX: Float,
+        panChangeY: Float,
+        centroidX: Float,
+        centroidY: Float,
+        viewportWidth: Float,
+        viewportHeight: Float,
+        mediaWidth: Float,
+        mediaHeight: Float
+    ): ZkZoomPanState {
+        val nextScale = (current.scale * zoomChange).coerceIn(MIN_SCALE, MAX_SCALE)
+        val ratio = if (current.scale > 0f) nextScale / current.scale else 1f
+        val focalRelX = centroidX - viewportWidth / 2f
+        val focalRelY = centroidY - viewportHeight / 2f
+        val rawX = current.offsetX * ratio + panChangeX - focalRelX * (ratio - 1f)
+        val rawY = current.offsetY * ratio + panChangeY - focalRelY * (ratio - 1f)
+        return clamp(nextScale, rawX, rawY, viewportWidth, viewportHeight, mediaWidth, mediaHeight)
+    }
+
+    fun toggleDoubleTap(
+        current: ZkZoomPanState,
+        tapX: Float,
+        tapY: Float,
+        viewportWidth: Float,
+        viewportHeight: Float,
+        mediaWidth: Float,
+        mediaHeight: Float
+    ): ZkZoomPanState {
+        if (current.scale > 1.05f) {
+            return ZkZoomPanState(1f, 0f, 0f)
+        }
+        val focalRelX = tapX - viewportWidth / 2f
+        val focalRelY = tapY - viewportHeight / 2f
+        val rawX = -focalRelX * (DOUBLE_TAP_SCALE - 1f)
+        val rawY = -focalRelY * (DOUBLE_TAP_SCALE - 1f)
+        return clamp(DOUBLE_TAP_SCALE, rawX, rawY, viewportWidth, viewportHeight, mediaWidth, mediaHeight)
+    }
+}
+
+@Composable
+private fun ZkZoomableImage(
+    bitmap: Bitmap,
+    contentDescription: String,
+    onUserActivity: () -> Unit
+) {
+    var viewportSize by remember { mutableStateOf(IntSize.Zero) }
+    var targetState by remember(bitmap) { mutableStateOf(ZkZoomPanState()) }
+    var isGesturing by remember(bitmap) { mutableStateOf(false) }
+
+    val animDuration = if (isGesturing) 0 else 180
+    val displayScale by animateFloatAsState(
+        targetValue = targetState.scale,
+        animationSpec = tween(durationMillis = animDuration),
+        label = "zoomScale"
+    )
+    val displayOffsetX by animateFloatAsState(
+        targetValue = targetState.offsetX,
+        animationSpec = tween(durationMillis = animDuration),
+        label = "zoomOffsetX"
+    )
+    val displayOffsetY by animateFloatAsState(
+        targetValue = targetState.offsetY,
+        animationSpec = tween(durationMillis = animDuration),
+        label = "zoomOffsetY"
+    )
+
+    val mediaW = bitmap.width.toFloat().coerceAtLeast(1f)
+    val mediaH = bitmap.height.toFloat().coerceAtLeast(1f)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clipToBounds()
+            .onSizeChanged { viewportSize = it }
+            .pointerInput(bitmap, viewportSize) {
+                detectTapGestures(
+                    onDoubleTap = { tapOffset ->
+                        isGesturing = false
+                        onUserActivity()
+                        targetState = ZkZoomPanMath.toggleDoubleTap(
+                            current = targetState,
+                            tapX = tapOffset.x,
+                            tapY = tapOffset.y,
+                            viewportWidth = viewportSize.width.toFloat(),
+                            viewportHeight = viewportSize.height.toFloat(),
+                            mediaWidth = mediaW,
+                            mediaHeight = mediaH
+                        )
+                    }
+                )
+            }
+            .pointerInput(bitmap, viewportSize) {
+                detectTransformGestures { centroid, pan, zoom, _ ->
+                    if (viewportSize.width <= 0 || viewportSize.height <= 0) return@detectTransformGestures
+                    val isZooming = kotlin.math.abs(zoom - 1f) > 0.002f
+                    if (isZooming || targetState.scale > 1.02f) {
+                        isGesturing = true
+                        targetState = ZkZoomPanMath.applyPinchAndPan(
+                            current = targetState,
+                            zoomChange = zoom,
+                            panChangeX = pan.x,
+                            panChangeY = pan.y,
+                            centroidX = centroid.x,
+                            centroidY = centroid.y,
+                            viewportWidth = viewportSize.width.toFloat(),
+                            viewportHeight = viewportSize.height.toFloat(),
+                            mediaWidth = mediaW,
+                            mediaHeight = mediaH
+                        )
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = contentDescription,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer(
+                    scaleX = displayScale,
+                    scaleY = displayScale,
+                    translationX = displayOffsetX,
+                    translationY = displayOffsetY
+                )
+        )
+
+        if (targetState.scale > 1.05f) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xCC0D1117),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = String.format(Locale.US, "%.1f×", targetState.scale),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    TextButton(
+                        onClick = {
+                            isGesturing = false
+                            onUserActivity()
+                            targetState = ZkZoomPanState()
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text("Adatta", color = Color(0xFF38BDF8), style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ZkEncryptedStreamingVideoPlayer(
     blobId: String,
-    repository: ZkVaultRepository
+    repository: ZkVaultRepository,
+    onUserActivity: () -> Unit = {}
 ) {
     val reader = remember(blobId) { repository.openStreamingRangeReader(blobId) }
     var mediaPlayer by remember(blobId) { mutableStateOf<MediaPlayer?>(null) }
@@ -1702,10 +1990,16 @@ private fun ZkEncryptedStreamingVideoPlayer(
     }
 
     LaunchedEffect(mediaPlayer, isPlaying) {
+        var lastActivityHeartbeatMs = 0L
         while (isPlaying && mediaPlayer != null) {
             try {
                 positionMs = (mediaPlayer?.currentPosition ?: 0).toFloat()
             } catch (_: Throwable) {
+            }
+            val now = System.currentTimeMillis()
+            if (now - lastActivityHeartbeatMs >= 15_000L) {
+                lastActivityHeartbeatMs = now
+                onUserActivity()
             }
             delay(400L)
         }

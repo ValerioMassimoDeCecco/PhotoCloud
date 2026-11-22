@@ -2,6 +2,29 @@
 
 Tutte le modifiche rilevanti di PhotoCloud sono documentate in questo file.
 
+## [1.5.3] - Android versionCode 35
+
+### Riscritto & Migliorato
+- **Nuovo Pinch-to-Zoom (Android `ZkV2VaultScreen.kt` & Web `/v2` `main.ts` + `zoomPanMath.ts`)**:
+  - Zoom fluido centrato sul punto focale (`1×–5×`) sia su gesto multi-touch a due dita che su rotellina/trackpad.
+  - Doppio tap / doppio click immediato `1× ↔ 2.5×` centrato sul punto toccato, pan strettamente vincolato ai bordi dell'immagine e controlli zoom discreti (`−`, `%`, `+`, `Adatta`) + scorciatoie da tastiera (`+`, `-`, `0`, `Esc`).
+- **Nuovo Editor Foto E2EE (Android `ZkV2PhotoEditorDialog.kt` & Web `/v2` `photoEditorModal.ts`)**:
+  - Interfaccia minimalista darkroom (`#050505`) divisa in 3 schede chiare (**Filtri**, **Regola**, **Ritaglia**).
+  - Anteprime reali live della foto per ogni filtro (`Originale`, `Vivido`, `B&N`, `Seppia`, `Cinema`, `Freddo`, `Vintage`).
+  - Ritaglio interattivo diretto sull'immagine con maschera esterna scura, maniglie agli angoli/bordi, griglia dei terzi, rotazione `-90°/+90°`, specchiatura e proporzioni preimpostate (`Libero`, `1:1`, `4:3`, `4:5`, `16:9`).
+  - Regolazioni fluide a 60fps (preview scalata + `requestAnimationFrame` su Web; selettore singolo parametro + slider ampio su Android), azzeramento rapido del singolo valore, confronta con originale (tap o pressione prolungata) e `Undo/Redo`.
+
+### Corretto (Audit Lifecycle, Auto-Lock & Permessi)
+- **Android (`AndroidManifest.xml`, `MainActivity.kt`, `ZkV2AuthScreen.kt`, `ZkV2VaultScreen.kt`)**:
+  - Aggiunti `uiMode|smallestScreenSize|density|fontScale` in `configChanges` di `MainActivity` per impedire la ricreazione dell'Activity (e la perdita della sessione sbloccata) su cambio tema chiaro/scuro, split-screen o cambio densità.
+  - Persistite in `SharedPreferences` le impostazioni di Auto-Lock (`zk_auto_lock_timeout_ms` e `zk_lock_on_background`) con ripristino automatico all'avvio.
+  - Protetti con guardia `beginTransientExternalActivity()` l'attivazione biometrica (`executeBiometricEnroll`) e l'avvio dell'installer APK di aggiornamento (`AppAutoUpdater.promptInstallApk`).
+  - Aggiunta richiesta esplicita dei permessi runtime media/notifiche (`RequestMultiplePermissions`) quando si attiva l'Auto-Backup Zero-Knowledge v2.
+  - Aggiunto heartbeat di attività (`TouchActivity`) durante la riproduzione video cifrata in streaming e durante l'editing foto.
+- **Web App `/v2` (`src/client/zk-sdk/client.ts`, `src/client/v2-app/main.ts`)**:
+  - Estesa la protezione `activeTransfersCount` da solo upload a tutti i trasferimenti attivi (`downloadBlobToBytes`, `downloadBlobRange`, `exportZipStream`).
+  - Aggiunti listener globali throttled (`pointerdown`, `keydown`, `wheel`) + heartbeat su `<video>` (`play`/`timeupdate`) e fallback su `window.focus` alla chiusura del selettore file mobile.
+
 ## [1.5.2] - Android versionCode 34
 
 ### Corretto

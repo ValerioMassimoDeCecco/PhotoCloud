@@ -165,6 +165,7 @@ sealed interface ZkV2UiEvent {
     data class SelectProtocolMode(val useHttps: Boolean) : ZkV2UiEvent
     data object BeginTransientExternalActivity : ZkV2UiEvent
     data object EndTransientExternalActivity : ZkV2UiEvent
+    data object TouchActivity : ZkV2UiEvent
 }
 
 fun canUseStrongBiometricsOnly(activity: FragmentActivity): Boolean {
@@ -179,7 +180,8 @@ fun showV2StrongBiometricCryptoPrompt(
     title: String,
     subtitle: String,
     onSuccess: (Cipher) -> Unit,
-    onError: (String) -> Unit
+    onError: (String) -> Unit,
+    onCancelled: () -> Unit = {}
 ) {
     val executor = ContextCompat.getMainExecutor(activity)
     val callback = object : BiometricPrompt.AuthenticationCallback() {
@@ -195,10 +197,12 @@ fun showV2StrongBiometricCryptoPrompt(
 
         override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
             super.onAuthenticationError(errorCode, errString)
-            if (errorCode != BiometricPrompt.ERROR_USER_CANCELED &&
-                errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON &&
-                errorCode != BiometricPrompt.ERROR_CANCELED
+            if (errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                errorCode == BiometricPrompt.ERROR_CANCELED
             ) {
+                onCancelled()
+            } else {
                 onError(errString.toString())
             }
         }
@@ -592,12 +596,14 @@ fun ZkV2AuthCoordinator(
         try {
             val bioSession = sessionManager.prepareBiometricEnrollmentSession() as? AndroidBiometricCryptoSession
                 ?: return
+            sessionManager.beginTransientExternalActivity()
             showV2StrongBiometricCryptoPrompt(
                 activity = activity,
                 cipher = bioSession.cipher,
                 title = "Attiva Sblocco Biometrico v2",
                 subtitle = "Proteggi la Vault Key in AndroidKeyStore (invalidata se cambia l'impronta)",
                 onSuccess = { unlockedCipher ->
+                    sessionManager.endTransientExternalActivity()
                     try {
                         val status = sessionManager.completeBiometricEnrollment(
                             AndroidBiometricCryptoSession(unlockedCipher)
@@ -617,10 +623,15 @@ fun ZkV2AuthCoordinator(
                     }
                 },
                 onError = { err ->
+                    sessionManager.endTransientExternalActivity()
                     Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                },
+                onCancelled = {
+                    sessionManager.endTransientExternalActivity()
                 }
             )
         } catch (t: Throwable) {
+            sessionManager.endTransientExternalActivity()
             Toast.makeText(
                 context,
                 "Impossibile inizializzare KeyStore biometrico: ${t.message ?: "riprova"}",
@@ -732,6 +743,11 @@ fun ZkV2AuthCoordinator(
             }
             is ZkV2UiEvent.SetAutoLockConfig -> {
                 sessionManager.setAutoLockConfig(event.timeoutMs, event.lockOnBackground)
+                context.getSharedPreferences("photocloud_prefs", android.content.Context.MODE_PRIVATE)
+                    .edit()
+                    .putLong("zk_auto_lock_timeout_ms", event.timeoutMs)
+                    .putBoolean("zk_lock_on_background", event.lockOnBackground)
+                    .apply()
             }
             ZkV2UiEvent.LockNow -> {
                 keyFileJsonInMemory = null
@@ -837,6 +853,7 @@ fun ZkV2AuthCoordinator(
             is ZkV2UiEvent.SelectProtocolMode -> onSelectProtocolMode(event.useHttps)
             ZkV2UiEvent.BeginTransientExternalActivity -> sessionManager.beginTransientExternalActivity()
             ZkV2UiEvent.EndTransientExternalActivity -> sessionManager.endTransientExternalActivity()
+            ZkV2UiEvent.TouchActivity -> sessionManager.touchActivity()
         }
     }
 

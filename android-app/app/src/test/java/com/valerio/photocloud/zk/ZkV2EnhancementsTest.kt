@@ -388,4 +388,87 @@ class ZkV2EnhancementsTest {
             server.shutdown()
         }
     }
+
+    @Test
+    fun `ZkZoomPanMath handles focal pinch zoom, bounded pan, and double-tap toggle cleanly`() {
+        val initial = ZkZoomPanState()
+        val zoomed = ZkZoomPanMath.toggleDoubleTap(
+            current = initial,
+            tapX = 700f,
+            tapY = 300f,
+            viewportWidth = 1000f,
+            viewportHeight = 800f,
+            mediaWidth = 2000f,
+            mediaHeight = 1600f
+        )
+        assertEquals(ZkZoomPanMath.DOUBLE_TAP_SCALE, zoomed.scale, 0.001f)
+        assertTrue("Double-tap right of center should shift image left", zoomed.offsetX < 0f)
+        assertTrue("Double-tap above center should shift image down", zoomed.offsetY > 0f)
+
+        val reset = ZkZoomPanMath.toggleDoubleTap(
+            current = zoomed,
+            tapX = 500f,
+            tapY = 400f,
+            viewportWidth = 1000f,
+            viewportHeight = 800f,
+            mediaWidth = 2000f,
+            mediaHeight = 1600f
+        )
+        assertEquals(1f, reset.scale, 0.001f)
+        assertEquals(0f, reset.offsetX, 0.001f)
+        assertEquals(0f, reset.offsetY, 0.001f)
+
+        val clamped = ZkZoomPanMath.applyPinchAndPan(
+            current = ZkZoomPanState(scale = 2f, offsetX = 0f, offsetY = 0f),
+            zoomChange = 4f,
+            panChangeX = 9999f,
+            panChangeY = -9999f,
+            centroidX = 500f,
+            centroidY = 400f,
+            viewportWidth = 1000f,
+            viewportHeight = 800f,
+            mediaWidth = 2000f,
+            mediaHeight = 1600f
+        )
+        assertEquals(ZkZoomPanMath.MAX_SCALE, clamped.scale, 0.001f)
+        assertEquals(2000f, clamped.offsetX, 0.5f)
+        assertEquals(-1600f, clamped.offsetY, 0.5f)
+    }
+
+    @Test
+    fun `ZkCropBoxMath fits aspect ratios, hit-tests corners, and clamps drag bounds`() {
+        val squareBox = ZkCropBoxMath.fitAspect(2000, 1000, ZkCropAspect.SQUARE)
+        assertEquals(0.25f, squareBox.left, 0.01f)
+        assertEquals(0.75f, squareBox.right, 0.01f)
+        assertEquals(0f, squareBox.top, 0.01f)
+        assertEquals(1f, squareBox.bottom, 0.01f)
+
+        assertEquals(ZkCropHandle.NW, ZkCropBoxMath.hitTestHandle(0.26f, 0.02f, squareBox))
+        assertEquals(ZkCropHandle.SE, ZkCropBoxMath.hitTestHandle(0.74f, 0.98f, squareBox))
+        assertEquals(ZkCropHandle.MOVE, ZkCropBoxMath.hitTestHandle(0.5f, 0.5f, squareBox))
+
+        val moved = ZkCropBoxMath.dragHandle(
+            start = squareBox,
+            handle = ZkCropHandle.MOVE,
+            dxNorm = 0.5f,
+            dyNorm = 0f,
+            aspect = ZkCropAspect.SQUARE,
+            srcWidth = 2000,
+            srcHeight = 1000
+        )
+        assertEquals(0.5f, moved.left, 0.01f)
+        assertEquals(1.0f, moved.right, 0.01f)
+
+        val resized = ZkCropBoxMath.dragHandle(
+            start = ZkNormalizedCropBox(0.1f, 0.1f, 0.9f, 0.9f),
+            handle = ZkCropHandle.SE,
+            dxNorm = -0.2f,
+            dyNorm = -0.2f,
+            aspect = ZkCropAspect.FREE,
+            srcWidth = 1000,
+            srcHeight = 1000
+        )
+        assertEquals(0.7f, resized.right, 0.01f)
+        assertEquals(0.7f, resized.bottom, 0.01f)
+    }
 }
