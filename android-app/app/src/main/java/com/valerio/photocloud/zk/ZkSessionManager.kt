@@ -341,6 +341,8 @@ object ZkAccountCredentialsCodec {
 
 data class ZkSessionSnapshot(
     val isUnlocked: Boolean = false,
+    val isHttpSessionReady: Boolean = false,
+    val httpSessionGeneration: Long = 0L,
     val isLockedWithSavedKeystore: Boolean = false,
     val userId: String? = null,
     val username: String? = null,
@@ -452,7 +454,12 @@ class ZkSessionManager(
     @Volatile
     private var transientExternalActivityExpiresAtMs: Long = 0L
 
+    @Volatile
+    private var httpSessionGeneration: Long = 0L
+
     fun isUnlocked(): Boolean = vaultKey != null && subkeys != null && currentUserId != null
+
+    fun isHttpSessionReady(): Boolean = isUnlocked() && apiClient.hasActiveSessionCookie()
 
     fun getUserId(): String? = currentUserId
 
@@ -582,13 +589,17 @@ class ZkSessionManager(
     }
 
     private fun publishState(lockReason: String? = null) {
+        val unlocked = isUnlocked()
+        val httpReady = unlocked && apiClient.hasActiveSessionCookie()
         _sessionState.value = ZkSessionSnapshot(
-            isUnlocked = isUnlocked(),
-            isLockedWithSavedKeystore = !isUnlocked() && vaultKeyStore.hasBiometricWrappedVk(),
+            isUnlocked = unlocked,
+            isHttpSessionReady = httpReady,
+            httpSessionGeneration = httpSessionGeneration,
+            isLockedWithSavedKeystore = !unlocked && vaultKeyStore.hasBiometricWrappedVk(),
             userId = currentUserId,
             username = currentUsername,
             hasPassphrase = currentHasPassphrase,
-            canRewrapInMemory = isUnlocked() && accountKey != null && userSalt != null,
+            canRewrapInMemory = unlocked && accountKey != null && userSalt != null,
             keyProtectionStatus = vaultKeyStore.getStatus(),
             lastKdfChangeWarning = lastKdfChangeWarning,
             autoLockTimeoutMs = autoLockTimeoutMs,
@@ -755,6 +766,7 @@ class ZkSessionManager(
             )
             metadataStore.saveLastAccount(regResp.userId, regResp.username)
 
+            httpSessionGeneration += 1L
             touchActivity()
             publishState(lockReason = null)
 
@@ -929,6 +941,7 @@ class ZkSessionManager(
             )
             metadataStore.saveLastAccount(loginResp.userId, loginResp.username)
 
+            httpSessionGeneration += 1L
             touchActivity()
             publishState(lockReason = null)
             return warning
@@ -1017,9 +1030,34 @@ class ZkSessionManager(
      * and keeps the decrypted secret strictly in RAM until lock/logout.
      * Returns `true` if a valid HTTP session is now active, `false` if full keyfile login is required.
      */
-    suspend fun ensureHttpSessionAfterBiometricUnlock(): Boolean {
+    suspend fun ensureHttpSessionAfterBiometricUnlock(forceRenew: Boolean = false): Boolean {
         if (!isUnlocked()) return false
-        if (apiClient.hasActiveSessionCookie()) return true
+        if (!forceRenew && apiClient.hasActiveSessionCookie()) {
+            publishState(lockReason = null)
+            return true
+        }
+
+        // Fast path: if authSecret is still held in RAM (e.g. session cookie expired while unlocked),
+        // transparently re-authenticate with the server without prompting the user again.
+        val memUser = currentUsername?.trim().orEmpty()
+        val memAuth = lastAuthSecretBytes
+        if (memUser.isNotEmpty() && memAuth != null && memAuth.isNotEmpty()) {
+            try {
+                val loginResp = apiClient.login(memUser, ZkCoreCrypto.toBase64Url(memAuth))
+                this.currentUserId = loginResp.userId
+                this.currentUsername = loginResp.username
+                this.currentKdfParams = loginResp.kdfParams
+                this.wrappedVaultKeyB64u = loginResp.wrappedVaultKeyB64u
+                metadataStore.saveLastAccount(loginResp.userId, loginResp.username)
+                httpSessionGeneration += 1L
+                touchActivity()
+                publishState(lockReason = null)
+                return true
+            } catch (_: Throwable) {
+                // Fall through to biometric encrypted envelope if available
+            }
+        }
+
         val vk = vaultKey ?: return false
         val uid = currentUserId ?: return false
         val encEnvelopeB64u = metadataStore.getEncryptedBioSession() ?: return false
@@ -1053,6 +1091,9 @@ class ZkSessionManager(
             this.currentHasPassphrase = hasPass
             this.lastAuthSecretBytes?.zeroize()
             this.lastAuthSecretBytes = ZkCoreCrypto.fromBase64Url(authSecretB64u)
+            metadataStore.saveLastAccount(loginResp.userId, loginResp.username)
+            httpSessionGeneration += 1L
+            touchActivity()
             publishState(lockReason = null)
             true
         } catch (_: Throwable) {

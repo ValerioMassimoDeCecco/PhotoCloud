@@ -1,7 +1,7 @@
 {
   "name": "photocloud-mobile",
   "private": true,
-  "version": "1.5.3",
+  "version": "1.5.4",
   "type": "module",
   "engines": {
     "node": ">=22.13.0"

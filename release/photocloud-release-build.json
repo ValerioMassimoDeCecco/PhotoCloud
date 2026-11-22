@@ -1,17 +1,17 @@
 {
-  "apkFilename": "photocloud-release-v1.5.3-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.5.3-signed.apk",
+  "apkFilename": "photocloud-release-v1.5.4-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.5.4-signed.apk",
   "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "sizeBytes": 0,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.5.3",
-  "versionCode": 35,
-  "changelog": "Release 1.5.3 — Risolti tutti i bug di lifecycle/auto-lock/permessi su Android e Web /v2 (configChanges completi, persistenza impostazioni auto-lock, guardia biometrica e installer APK, permessi runtime Auto-Backup, heartbeat video/interazioni/download/ZIP) e riscritti da zero il Pinch-to-Zoom e l'Editor Foto in maniera semplice e intuitiva.",
+  "versionName": "1.5.4",
+  "versionCode": 36,
+  "changelog": "Release 1.5.4 — Risolta la race condition di accesso su Android per cui la galleria si apriva prima del rinnovo del cookie di sessione HTTP (mostrando stato non autenticato e galleria vuota fino al refresh manuale). Aggiunto stato esplicito 'Connesso · <utente>' nella top bar, auto-sync alla prontezza della sessione e recupero automatico su 401.",
   "features": [
-    "Nuovo Pinch-to-Zoom (Android & Web /v2): zoom fluido centrato sul punto focale (1x–5x), doppio tap/click 1x↔2.5x, pan vincolato ai bordi e controlli zoom discreti",
-    "Nuovo Editor Foto E2EE (Android & Web /v2): anteprime reali live dei filtri, ritaglio interattivo diretto sull'immagine con maniglie e griglia terzi, controlli regolazioni puliti, confronta con originale e Undo/Redo",
-    "Fix completi Auto-Lock & Lifecycle: persistenza impostazioni auto-lock, configChanges Android per tema/split-screen, guardia su biometria e installer APK, permessi runtime Auto-Backup, heartbeat durante riproduzione video, download grandi ed export ZIP streaming"
+    "Fix accesso -> galleria immediata (Android): tracciamento esplicito di isHttpSessionReady e httpSessionGeneration in ZkSessionManager, attesa del rinnovo cookie HTTP prima di aprire la galleria e auto-refresh immediato",
+    "Auto-recovery trasparente su HTTP 401 in galleria con cancellazione delle richieste obsolete in volo",
+    "Indicatore chiaro di sessione attiva nella barra superiore della galleria ('Connesso · <username>' con stato verde)"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.5.3",
-  "notes": "Pre-release v1.5.3: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release, firmato con la stessa firma persistente (nessun segreto committato)."
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.5.4",
+  "notes": "Pre-release v1.5.4: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release, firmato con la stessa firma persistente (nessun segreto committato)."
 }

@@ -2,6 +2,17 @@
 
 Tutte le modifiche rilevanti di PhotoCloud sono documentate in questo file.
 
+## [1.5.4] - Android versionCode 36
+
+### Corretto
+- **Accesso → Galleria vuota / errore non autenticato fino al refresh manuale (Android `ZkSessionManager.kt`, `ZkV2AuthScreen.kt`, `ZkV2VaultScreen.kt`)**:
+  - Risolta la race condition allo sblocco (in particolare sblocco biometrico a freddo) in cui `ZkV2VaultScreen` veniva montata non appena `isUnlocked` diventava `true`, avviando `refreshAll()` prima del completamento di `POST /api/v2/login` (cookie `photocloud_v2_sid` non ancora impostato → HTTP `401 UNAUTHENTICATED` e galleria vuota fino al tap manuale su Aggiorna).
+  - Aggiunti `isHttpSessionReady` e `httpSessionGeneration` a `ZkSessionSnapshot`: la schermata di accesso mostra un breve stato `"Accesso sicuro in corso..."` finché la sessione HTTP non è pronta, e la galleria si sincronizza automaticamente ad ogni nuova sessione HTTP.
+  - Aggiunto auto-recovery trasparente su HTTP `401` dentro `refreshAll()` (con cancellazione di eventuali richieste obsolete in volo) e rinnovo da `authSecret` in RAM o envelope biometrico.
+  - Aggiunto indicatore esplicito di stato connesso nella TopAppBar della galleria (`Connesso · <username>` con pallino verde attivo).
+- **Fix compilazione Android Editor Foto (`ZkV2PhotoEditorDialog.kt`)**:
+  - Allineate le chiamate di salvataggio a `replaceItemWithEditedBytes` e `uploadEditedCopyBytes` con rigenerazione delle miniature cifrate `320px`/`1280px` e zeroizzazione sicura dei buffer plaintext.
+
 ## [1.5.3] - Android versionCode 35
 
 ### Riscritto & Migliorato

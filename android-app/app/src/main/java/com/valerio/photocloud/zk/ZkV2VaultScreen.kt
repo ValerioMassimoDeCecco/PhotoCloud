@@ -142,6 +142,7 @@ import androidx.core.content.FileProvider
 import com.valerio.photocloud.GalleryDragSelectionController
 import com.valerio.photocloud.GridCellBounds
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -163,6 +164,7 @@ fun ZkV2VaultScreen(
     form: ZkV2LoginFormUiState,
     repository: ZkVaultRepository,
     transferManager: ZkTransferManager,
+    onEnsureHttpSession: suspend (Boolean) -> Boolean = { true },
     onAuthEvent: (ZkV2UiEvent) -> Unit
 ) {
     val context = LocalContext.current
@@ -197,16 +199,38 @@ fun ZkV2VaultScreen(
     val transfers by transferManager.transfers.collectAsState()
     val parallelism by transferManager.parallelism.collectAsState()
 
+    var refreshJob by remember { mutableStateOf<Job?>(null) }
+
     fun refreshAll() {
-        scope.launch {
+        if (!session.isUnlocked) return
+        refreshJob?.cancel()
+        refreshJob = scope.launch {
             isRefreshing = true
             statusError = null
             try {
-                activeItems = repository.listDecryptedItems(state = "active", limit = 200)
-                trashedItems = repository.listDecryptedItems(state = "trashed", limit = 200)
-                albumsState = repository.loadAlbums()
-                stats = repository.fetchStats()
+                if (!session.isHttpSessionReady) {
+                    val ready = onEnsureHttpSession(false)
+                    if (!ready) {
+                        statusError = "Sessione scaduta: accedi di nuovo per sincronizzare il vault."
+                        return@launch
+                    }
+                }
+                for (attempt in 0..1) {
+                    try {
+                        activeItems = repository.listDecryptedItems(state = "active", limit = 200)
+                        trashedItems = repository.listDecryptedItems(state = "trashed", limit = 200)
+                        albumsState = repository.loadAlbums()
+                        stats = repository.fetchStats()
+                        break
+                    } catch (httpErr: V2ApiHttpException) {
+                        if (attempt == 0 && httpErr.statusCode == 401 && onEnsureHttpSession(true)) {
+                            continue
+                        }
+                        throw httpErr
+                    }
+                }
             } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
                 statusError = t.message ?: "Errore sincronizzazione vault cifrato."
             } finally {
                 isRefreshing = false
@@ -214,8 +238,13 @@ fun ZkV2VaultScreen(
         }
     }
 
-    LaunchedEffect(session.userId, session.isUnlocked) {
-        if (session.isUnlocked) {
+    LaunchedEffect(
+        session.userId,
+        session.isUnlocked,
+        session.isHttpSessionReady,
+        session.httpSessionGeneration
+    ) {
+        if (session.isUnlocked && session.isHttpSessionReady) {
             refreshAll()
         }
     }
@@ -462,11 +491,31 @@ fun ZkV2VaultScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
-                            Text(
-                                text = session.username ?: "-",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (session.isHttpSessionReady) Color(0xFF22C55E) else Color(0xFFF59E0B)
+                                        )
+                                )
+                                val userLabel = session.username?.takeIf { it.isNotBlank() } ?: "Account"
+                                Text(
+                                    text = if (session.isHttpSessionReady) {
+                                        "Connesso · $userLabel"
+                                    } else {
+                                        "Connessione · $userLabel"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     },
                     actions = {

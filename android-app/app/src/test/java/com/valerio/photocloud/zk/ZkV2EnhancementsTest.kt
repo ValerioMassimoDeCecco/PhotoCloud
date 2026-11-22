@@ -229,6 +229,9 @@ class ZkV2EnhancementsTest {
             assertEquals("android_valerio", keyFile.username)
             assertFalse(keyFile.hasPassphrase)
             assertTrue(sessionManager.isUnlocked())
+            assertTrue(sessionManager.sessionState.value.isHttpSessionReady)
+            val genAfterReg = sessionManager.sessionState.value.httpSessionGeneration
+            assertTrue("Expected positive httpSessionGeneration after register", genAfterReg >= 1L)
             assertFalse(sessionManager.isPassphraseProtected())
             assertNotNull(sessionManager.getCurrentRecoveryCodeOrNull())
 
@@ -243,28 +246,49 @@ class ZkV2EnhancementsTest {
             sessionManager.lock("cold_restart_test")
             apiClient.cookieJar.clear()
             assertFalse(sessionManager.isUnlocked())
+            assertFalse(sessionManager.sessionState.value.isHttpSessionReady)
             assertFalse(apiClient.hasActiveSessionCookie())
 
             // 5. Biometric unlock + ensureHttpSessionAfterBiometricUnlock() transparently renews HTTP cookie!
+            // Before HTTP cookie renewal, isHttpSessionReady MUST be false so gallery does not fire a premature 401.
             val bioDecSession = sessionManager.prepareBiometricUnlockSession()
             sessionManager.completeBiometricUnlock(bioDecSession)
             assertTrue(sessionManager.isUnlocked())
             assertFalse(apiClient.hasActiveSessionCookie())
+            assertFalse(
+                "Gallery must not treat cold biometric unlock as HTTP-ready before session cookie is renewed",
+                sessionManager.sessionState.value.isHttpSessionReady
+            )
 
             val renewed = sessionManager.ensureHttpSessionAfterBiometricUnlock()
             assertTrue("Expected biometric cold unlock to transparently renew HTTP session", renewed)
             assertTrue(apiClient.hasActiveSessionCookie())
+            assertTrue(sessionManager.sessionState.value.isHttpSessionReady)
+            val genAfterBio = sessionManager.sessionState.value.httpSessionGeneration
+            assertTrue("Expected httpSessionGeneration to advance after biometric cookie renewal", genAfterBio > genAfterReg)
+            assertEquals("android_valerio", sessionManager.sessionState.value.username)
             assertEquals(1, loginCallsCount)
+
+            // 5b. Simulate mid-session server cookie expiry + automatic forced renewal from in-RAM authSecret
+            apiClient.cookieJar.clear()
+            val forcedRenewed = sessionManager.ensureHttpSessionAfterBiometricUnlock(forceRenew = true)
+            assertTrue("Expected forced renewal to restore HTTP session cookie seamlessly", forcedRenewed)
+            assertTrue(apiClient.hasActiveSessionCookie())
+            assertTrue(sessionManager.sessionState.value.isHttpSessionReady)
+            assertTrue(sessionManager.sessionState.value.httpSessionGeneration > genAfterBio)
+            assertEquals(2, loginCallsCount)
 
             // 6. Full logout + 1-click keyfile login without passphrase
             sessionManager.logout()
             assertFalse(sessionManager.isUnlocked())
+            assertFalse(sessionManager.sessionState.value.isHttpSessionReady)
 
             val keyFileJson = ZkAccountCredentialsCodec.serializeKeyFileJson(keyFile)
             sessionManager.loginWithKeyFileJson(keyFileJson, "")
             assertTrue(sessionManager.isUnlocked())
+            assertTrue(sessionManager.sessionState.value.isHttpSessionReady)
             assertEquals("android_valerio", sessionManager.getUsername())
-            assertEquals(2, loginCallsCount)
+            assertEquals(3, loginCallsCount)
         } finally {
             server.shutdown()
         }

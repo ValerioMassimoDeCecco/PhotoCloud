@@ -866,6 +866,9 @@ fun ZkV2AuthCoordinator(
                 form = effectiveForm,
                 repository = vaultRepository,
                 transferManager = transferManager,
+                onEnsureHttpSession = { forceRenew ->
+                    sessionManager.ensureHttpSessionAfterBiometricUnlock(forceRenew = forceRenew)
+                },
                 onAuthEvent = handleEvent
             )
         },
@@ -882,7 +885,7 @@ fun ZkV2AuthScreen(
 ) {
     var showPassphrase by remember { mutableStateOf(false) }
 
-    if (session.isUnlocked && unlockedContent != null) {
+    if (session.isUnlocked && session.isHttpSessionReady && unlockedContent != null) {
         unlockedContent()
     } else {
         Scaffold { innerPadding ->
@@ -994,7 +997,31 @@ fun ZkV2AuthScreen(
 
                     Spacer(Modifier.height(16.dp))
 
-                    if (!session.isUnlocked && form.hasBiometricSavedVk && form.canUseStrongBiometrics && form.showBiometricLockGate) {
+                    if (session.isUnlocked && !session.isHttpSessionReady && unlockedContent != null) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 32.dp)
+                            ) {
+                                CircularProgressIndicator()
+                                Text(
+                                    text = "Accesso sicuro in corso...",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Connessione alla sessione cifrata per ${session.username ?: "il tuo vault"}...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else if (!session.isUnlocked && form.hasBiometricSavedVk && form.canUseStrongBiometrics && form.showBiometricLockGate) {
                         ZkV2BiometricLockGateCard(
                             session = session,
                             form = form,
