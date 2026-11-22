@@ -133,6 +133,14 @@ internal enum class ZkCropHandle {
     MOVE, NW, NE, SW, SE
 }
 
+private class ZkRenderedPhotoExport(
+    val jpegBytes: ByteArray,
+    val thumb320: ByteArray,
+    val thumb1280: ByteArray,
+    val width: Int,
+    val height: Int
+)
+
 data class ZkNormalizedCropBox(
     val left: Float = 0f,
     val top: Float = 0f,
@@ -498,6 +506,30 @@ fun ZkV2PhotoEditorDialog(
         }
     }
 
+    fun encodeScaledJpeg(source: Bitmap, maxEdge: Int, quality: Int): ByteArray {
+        val largest = max(source.width, source.height)
+        val scaled = if (largest > maxEdge && largest > 0) {
+            val factor = maxEdge.toFloat() / largest.toFloat()
+            Bitmap.createScaledBitmap(
+                source,
+                max(1, (source.width * factor).roundToInt()),
+                max(1, (source.height * factor).roundToInt()),
+                true
+            )
+        } else {
+            source
+        }
+        return try {
+            val out = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
+            out.toByteArray()
+        } finally {
+            if (scaled !== source && !scaled.isRecycled) {
+                scaled.recycle()
+            }
+        }
+    }
+
     fun saveEdited(overwrite: Boolean) {
         val src = originalBitmap ?: return
         if (isSaving) return
@@ -506,40 +538,56 @@ fun ZkV2PhotoEditorDialog(
         loadError = null
         scope.launch {
             try {
-                val (jpegBytes, outW, outH) = withContext(Dispatchers.Default) {
+                val exported = withContext(Dispatchers.Default) {
                     val rendered = ZkPhotoEditorRenderer.render(src, params, maxOutputEdge = null, applyCrop = true)
                     val baos = ByteArrayOutputStream()
                     try {
                         rendered.compress(Bitmap.CompressFormat.JPEG, 92, baos)
-                        Triple(baos.toByteArray(), rendered.width, rendered.height)
+                        val t320 = encodeScaledJpeg(rendered, maxEdge = 320, quality = 80)
+                        val t1280 = encodeScaledJpeg(rendered, maxEdge = 1280, quality = 85)
+                        ZkRenderedPhotoExport(
+                            jpegBytes = baos.toByteArray(),
+                            thumb320 = t320,
+                            thumb1280 = t1280,
+                            width = rendered.width,
+                            height = rendered.height
+                        )
                     } finally {
                         rendered.recycle()
                     }
                 }
                 try {
                     if (overwrite) {
-                        val updated = repository.replaceItemWithEditedPhoto(
-                            existingItem = item,
-                            editedJpegBytes = jpegBytes,
-                            width = outW,
-                            height = outH
+                        val updated = repository.replaceItemWithEditedBytes(
+                            item = item,
+                            editedBytes = exported.jpegBytes,
+                            newWidth = exported.width,
+                            newHeight = exported.height,
+                            mime = "image/jpeg",
+                            thumb320Jpeg = exported.thumb320,
+                            thumb1280Jpeg = exported.thumb1280
                         )
                         onOverwritten(updated)
                     } else {
                         val copyBase = item.meta.name.substringBeforeLast('.', item.meta.name)
-                        val copyName = "${copyBase}_edited.jpg"
-                        val created = repository.uploadPlaintextBytesAsNewItem(
+                        val copyName = "${copyBase}_modificata.jpg"
+                        val created = repository.uploadEditedCopyBytes(
                             name = copyName,
                             mime = "image/jpeg",
-                            plaintextBytes = jpegBytes,
-                            width = outW,
-                            height = outH,
-                            takenAt = item.meta.takenAt
+                            editedBytes = exported.jpegBytes,
+                            width = exported.width,
+                            height = exported.height,
+                            takenAtMs = item.meta.takenAt,
+                            exifSubset = item.meta.exifSubset,
+                            thumb320Jpeg = exported.thumb320,
+                            thumb1280Jpeg = exported.thumb1280
                         )
                         onSavedCopy(created)
                     }
                 } finally {
-                    jpegBytes.zeroize()
+                    exported.jpegBytes.zeroize()
+                    exported.thumb320.zeroize()
+                    exported.thumb1280.zeroize()
                 }
             } catch (t: Throwable) {
                 loadError = t.message ?: "Errore salvataggio foto cifrata."
