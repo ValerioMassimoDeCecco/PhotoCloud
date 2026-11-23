@@ -70,11 +70,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -87,6 +90,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -110,13 +114,16 @@ enum class ZkPhotoFilterPreset(
 
 enum class ZkCropAspect(val label: String, val ratio: Float?) {
     FREE("Libero", null),
+    ORIGINAL("Originale", null),
     SQUARE("1:1", 1f),
     FOUR_THREE("4:3", 4f / 3f),
+    THREE_FOUR("3:4", 3f / 4f),
     FOUR_FIVE("4:5", 4f / 5f),
-    SIXTEEN_NINE("16:9", 16f / 9f)
+    SIXTEEN_NINE("16:9", 16f / 9f),
+    NINE_SIXTEEN("9:16", 9f / 16f)
 }
 
-private enum class ZkEditorTab(val label: String, val icon: ImageVector) {
+enum class ZkEditorTab(val label: String, val icon: ImageVector) {
     FILTERS("Filtri", Icons.Default.AutoFixHigh),
     ADJUST("Regola", Icons.Default.Tune),
     CROP("Ritaglia", Icons.Default.Crop)
@@ -130,7 +137,7 @@ private enum class ZkAdjustParam(val label: String) {
 }
 
 internal enum class ZkCropHandle {
-    MOVE, NW, NE, SW, SE
+    MOVE, NW, N, NE, E, SE, S, SW, W
 }
 
 private class ZkRenderedPhotoExport(
@@ -168,8 +175,19 @@ data class ZkNormalizedCropBox(
 }
 
 internal object ZkCropBoxMath {
+    fun resolveTargetRatio(aspect: ZkCropAspect, srcWidth: Int, srcHeight: Int): Float? {
+        if (aspect == ZkCropAspect.FREE) return null
+        val w = srcWidth.coerceAtLeast(1).toFloat()
+        val h = srcHeight.coerceAtLeast(1).toFloat()
+        if (aspect == ZkCropAspect.ORIGINAL) return w / h
+        return aspect.ratio
+    }
+
     fun fitAspect(srcWidth: Int, srcHeight: Int, aspect: ZkCropAspect): ZkNormalizedCropBox {
-        val target = aspect.ratio ?: return ZkNormalizedCropBox()
+        if (aspect == ZkCropAspect.FREE || aspect == ZkCropAspect.ORIGINAL) {
+            return ZkNormalizedCropBox()
+        }
+        val target = resolveTargetRatio(aspect, srcWidth, srcHeight) ?: return ZkNormalizedCropBox()
         val w = srcWidth.coerceAtLeast(1).toFloat()
         val h = srcHeight.coerceAtLeast(1).toFloat()
         val current = w / h
@@ -197,7 +215,73 @@ internal object ZkCropBoxMath {
         if (near(box.right, box.top)) return ZkCropHandle.NE
         if (near(box.left, box.bottom)) return ZkCropHandle.SW
         if (near(box.right, box.bottom)) return ZkCropHandle.SE
+
+        val midX = (box.left + box.right) / 2f
+        val midY = (box.top + box.bottom) / 2f
+        val edgeRadius = cornerRadiusNorm * 0.85f
+        fun nearEdge(ax: Float, ay: Float): Boolean =
+            abs(normX - ax) <= edgeRadius && abs(normY - ay) <= edgeRadius
+
+        if (nearEdge(midX, box.top)) return ZkCropHandle.N
+        if (nearEdge(midX, box.bottom)) return ZkCropHandle.S
+        if (nearEdge(box.left, midY)) return ZkCropHandle.W
+        if (nearEdge(box.right, midY)) return ZkCropHandle.E
+
         if (normX in box.left..box.right && normY in box.top..box.bottom) {
+            return ZkCropHandle.MOVE
+        }
+        return null
+    }
+
+    /**
+     * Screen-pixel hit-testing matching modern gallery apps (generous uniform touch radius
+     * regardless of photo aspect ratio, including forgiveness just outside the image edge).
+     */
+    fun hitTestHandlePx(
+        touchX: Float,
+        touchY: Float,
+        imgLeft: Float,
+        imgTop: Float,
+        imgW: Float,
+        imgH: Float,
+        box: ZkNormalizedCropBox,
+        touchRadiusPx: Float
+    ): ZkCropHandle? {
+        if (imgW <= 1f || imgH <= 1f) return null
+        val cl = imgLeft + box.left * imgW
+        val ct = imgTop + box.top * imgH
+        val cr = imgLeft + box.right * imgW
+        val cb = imgTop + box.bottom * imgH
+        val mx = (cl + cr) / 2f
+        val my = (ct + cb) / 2f
+
+        val cornerCandidates = listOf(
+            ZkCropHandle.NW to hypot((touchX - cl).toDouble(), (touchY - ct).toDouble()).toFloat(),
+            ZkCropHandle.NE to hypot((touchX - cr).toDouble(), (touchY - ct).toDouble()).toFloat(),
+            ZkCropHandle.SW to hypot((touchX - cl).toDouble(), (touchY - cb).toDouble()).toFloat(),
+            ZkCropHandle.SE to hypot((touchX - cr).toDouble(), (touchY - cb).toDouble()).toFloat()
+        )
+        val bestCorner = cornerCandidates.minByOrNull { it.second }
+        if (bestCorner != null && bestCorner.second <= touchRadiusPx) {
+            return bestCorner.first
+        }
+
+        val edgeTol = touchRadiusPx * 0.9f
+        val edgeCandidates = mutableListOf<Pair<ZkCropHandle, Float>>()
+        if (touchX in (cl - edgeTol * 0.4f)..(cr + edgeTol * 0.4f)) {
+            edgeCandidates.add(ZkCropHandle.N to abs(touchY - ct))
+            edgeCandidates.add(ZkCropHandle.S to abs(touchY - cb))
+        }
+        if (touchY in (ct - edgeTol * 0.4f)..(cb + edgeTol * 0.4f)) {
+            edgeCandidates.add(ZkCropHandle.W to abs(touchX - cl))
+            edgeCandidates.add(ZkCropHandle.E to abs(touchX - cr))
+        }
+        val bestEdge = edgeCandidates.minByOrNull { it.second }
+        if (bestEdge != null && bestEdge.second <= edgeTol) {
+            return bestEdge.first
+        }
+
+        if (touchX in cl..cr && touchY in ct..cb) {
             return ZkCropHandle.MOVE
         }
         return null
@@ -211,72 +295,137 @@ internal object ZkCropBoxMath {
         aspect: ZkCropAspect,
         srcWidth: Int,
         srcHeight: Int,
-        minSpan: Float = 0.14f
+        minSpan: Float = 0.12f
     ): ZkNormalizedCropBox {
+        val span = minSpan.coerceIn(0.05f, 0.5f)
+        val safeStart = start.clamped(span)
+
         if (handle == ZkCropHandle.MOVE) {
-            val dx = dxNorm.coerceIn(-start.left, 1f - start.right)
-            val dy = dyNorm.coerceIn(-start.top, 1f - start.bottom)
+            val dx = dxNorm.coerceIn(-safeStart.left, 1f - safeStart.right)
+            val dy = dyNorm.coerceIn(-safeStart.top, 1f - safeStart.bottom)
             return ZkNormalizedCropBox(
-                left = start.left + dx,
-                top = start.top + dy,
-                right = start.right + dx,
-                bottom = start.bottom + dy
+                left = safeStart.left + dx,
+                top = safeStart.top + dy,
+                right = safeStart.right + dx,
+                bottom = safeStart.bottom + dy
             )
         }
 
-        var l = start.left
-        var t = start.top
-        var r = start.right
-        var b = start.bottom
+        val targetRatio = resolveTargetRatio(aspect, srcWidth, srcHeight)
 
-        when (handle) {
-            ZkCropHandle.NW -> {
-                l = (start.left + dxNorm).coerceIn(0f, r - minSpan)
-                t = (start.top + dyNorm).coerceIn(0f, b - minSpan)
+        if (targetRatio == null) {
+            var l = safeStart.left
+            var t = safeStart.top
+            var r = safeStart.right
+            var b = safeStart.bottom
+            when (handle) {
+                ZkCropHandle.NW -> {
+                    l = (safeStart.left + dxNorm).coerceIn(0f, r - span)
+                    t = (safeStart.top + dyNorm).coerceIn(0f, b - span)
+                }
+                ZkCropHandle.N -> {
+                    t = (safeStart.top + dyNorm).coerceIn(0f, b - span)
+                }
+                ZkCropHandle.NE -> {
+                    r = (safeStart.right + dxNorm).coerceIn(l + span, 1f)
+                    t = (safeStart.top + dyNorm).coerceIn(0f, b - span)
+                }
+                ZkCropHandle.E -> {
+                    r = (safeStart.right + dxNorm).coerceIn(l + span, 1f)
+                }
+                ZkCropHandle.SE -> {
+                    r = (safeStart.right + dxNorm).coerceIn(l + span, 1f)
+                    b = (safeStart.bottom + dyNorm).coerceIn(t + span, 1f)
+                }
+                ZkCropHandle.S -> {
+                    b = (safeStart.bottom + dyNorm).coerceIn(t + span, 1f)
+                }
+                ZkCropHandle.SW -> {
+                    l = (safeStart.left + dxNorm).coerceIn(0f, r - span)
+                    b = (safeStart.bottom + dyNorm).coerceIn(t + span, 1f)
+                }
+                ZkCropHandle.W -> {
+                    l = (safeStart.left + dxNorm).coerceIn(0f, r - span)
+                }
+                ZkCropHandle.MOVE -> Unit
             }
-            ZkCropHandle.NE -> {
-                r = (start.right + dxNorm).coerceIn(l + minSpan, 1f)
-                t = (start.top + dyNorm).coerceIn(0f, b - minSpan)
-            }
-            ZkCropHandle.SW -> {
-                l = (start.left + dxNorm).coerceIn(0f, r - minSpan)
-                b = (start.bottom + dyNorm).coerceIn(t + minSpan, 1f)
-            }
-            ZkCropHandle.SE -> {
-                r = (start.right + dxNorm).coerceIn(l + minSpan, 1f)
-                b = (start.bottom + dyNorm).coerceIn(t + minSpan, 1f)
-            }
-            ZkCropHandle.MOVE -> Unit
+            return ZkNormalizedCropBox(l, t, r, b).clamped(span)
         }
 
-        val targetRatio = aspect.ratio
-        if (targetRatio != null && srcWidth > 0 && srcHeight > 0) {
-            val imgRatio = srcWidth.toFloat() / srcHeight.toFloat()
-            val normRatio = targetRatio / imgRatio
-            val newW = (r - l).coerceAtLeast(minSpan)
-            val desiredH = (newW / normRatio).coerceIn(minSpan, 1f)
-            if (handle == ZkCropHandle.NW || handle == ZkCropHandle.NE) {
-                t = (b - desiredH).coerceAtLeast(0f)
-                val actualH = b - t
-                val actualW = (actualH * normRatio).coerceIn(minSpan, 1f)
-                if (handle == ZkCropHandle.NW) {
-                    l = (r - actualW).coerceAtLeast(0f)
-                } else {
-                    r = (l + actualW).coerceAtMost(1f)
-                }
+        val imgRatio = srcWidth.coerceAtLeast(1).toFloat() / srcHeight.coerceAtLeast(1).toFloat()
+        val normRatio = targetRatio / imgRatio
+
+        if (handle == ZkCropHandle.N || handle == ZkCropHandle.S) {
+            val centerX = (safeStart.left + safeStart.right) / 2f
+            val availH = if (handle == ZkCropHandle.N) safeStart.bottom else 1f - safeStart.top
+            val maxH = min(availH, 1f / normRatio)
+            val minH = min(maxH, max(span, span / normRatio))
+            val rawH = if (handle == ZkCropHandle.N) {
+                safeStart.bottom - (safeStart.top + dyNorm)
             } else {
-                b = (t + desiredH).coerceAtMost(1f)
-                val actualH = b - t
-                val actualW = (actualH * normRatio).coerceIn(minSpan, 1f)
-                if (handle == ZkCropHandle.SW) {
-                    l = (r - actualW).coerceAtLeast(0f)
-                } else {
-                    r = (l + actualW).coerceAtMost(1f)
-                }
+                safeStart.bottom + dyNorm - safeStart.top
             }
+            val h = rawH.coerceIn(minH, maxH)
+            val w = min(1f, h * normRatio)
+            val l = (centerX - w / 2f).coerceIn(0f, 1f - w)
+            val r = l + w
+            val t = if (handle == ZkCropHandle.N) safeStart.bottom - h else safeStart.top
+            val b = if (handle == ZkCropHandle.N) safeStart.bottom else safeStart.top + h
+            return ZkNormalizedCropBox(l, t, r, b)
         }
 
-        return ZkNormalizedCropBox(l, t, r, b).clamped(minSpan)
+        if (handle == ZkCropHandle.W || handle == ZkCropHandle.E) {
+            val centerY = (safeStart.top + safeStart.bottom) / 2f
+            val availW = if (handle == ZkCropHandle.W) safeStart.right else 1f - safeStart.left
+            val maxW = min(availW, normRatio)
+            val minW = min(maxW, max(span, span * normRatio))
+            val rawW = if (handle == ZkCropHandle.W) {
+                safeStart.right - (safeStart.left + dxNorm)
+            } else {
+                safeStart.right + dxNorm - safeStart.left
+            }
+            val w = rawW.coerceIn(minW, maxW)
+            val h = min(1f, w / normRatio)
+            val t = (centerY - h / 2f).coerceIn(0f, 1f - h)
+            val b = t + h
+            val l = if (handle == ZkCropHandle.W) safeStart.right - w else safeStart.left
+            val r = if (handle == ZkCropHandle.W) safeStart.right else safeStart.left + w
+            return ZkNormalizedCropBox(l, t, r, b)
+        }
+
+        // Corner drags (NW, NE, SW, SE): strictly pin opposite anchor corner
+        val anchorLeft = handle == ZkCropHandle.NE || handle == ZkCropHandle.SE
+        val anchorTop = handle == ZkCropHandle.SW || handle == ZkCropHandle.SE
+        val anchorX = if (anchorLeft) safeStart.left else safeStart.right
+        val anchorY = if (anchorTop) safeStart.top else safeStart.bottom
+        val availW = if (anchorLeft) 1f - anchorX else anchorX
+        val availH = if (anchorTop) 1f - anchorY else anchorY
+
+        val maxW = min(availW, availH * normRatio)
+        val minW = min(maxW, max(span, span * normRatio))
+
+        val candWFromX = if (anchorLeft) {
+            safeStart.right + dxNorm - anchorX
+        } else {
+            anchorX - (safeStart.left + dxNorm)
+        }
+        val candHFromY = if (anchorTop) {
+            safeStart.bottom + dyNorm - anchorY
+        } else {
+            anchorY - (safeStart.top + dyNorm)
+        }
+        val candWFromY = candHFromY * normRatio
+
+        val startW = safeStart.right - safeStart.left
+        val chosenW = if (abs(candWFromX - startW) >= abs(candWFromY - startW)) candWFromX else candWFromY
+        val w = chosenW.coerceIn(minW, maxW)
+        val h = w / normRatio
+
+        val l = if (anchorLeft) anchorX else anchorX - w
+        val r = if (anchorLeft) anchorX + w else anchorX
+        val t = if (anchorTop) anchorY else anchorY - h
+        val b = if (anchorTop) anchorY + h else anchorY
+        return ZkNormalizedCropBox(l, t, r, b)
     }
 }
 
@@ -386,12 +535,14 @@ object ZkPhotoEditorRenderer {
 fun ZkV2PhotoEditorDialog(
     item: DecryptedZkItem,
     repository: ZkVaultRepository,
+    initialTab: ZkEditorTab = ZkEditorTab.FILTERS,
     onUserActivity: () -> Unit = {},
     onDismiss: () -> Unit,
     onSavedCopy: (DecryptedZkItem) -> Unit,
     onOverwritten: (DecryptedZkItem) -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
     var originalBitmap by remember(item.blobId) { mutableStateOf<Bitmap?>(null) }
     var previewBaseBitmap by remember(item.blobId) { mutableStateOf<Bitmap?>(null) }
     var previewBitmap by remember(item.blobId) { mutableStateOf<Bitmap?>(null) }
@@ -399,7 +550,7 @@ fun ZkV2PhotoEditorDialog(
     var loadError by remember(item.blobId) { mutableStateOf<String?>(null) }
     var isLoading by remember(item.blobId) { mutableStateOf(true) }
     var isSaving by remember(item.blobId) { mutableStateOf(false) }
-    var activeTab by remember { mutableStateOf(ZkEditorTab.FILTERS) }
+    var activeTab by remember(item.blobId, initialTab) { mutableStateOf(initialTab) }
     var activeAdjustParam by remember { mutableStateOf(ZkAdjustParam.BRIGHTNESS) }
     var compareOriginal by remember { mutableStateOf(false) }
 
@@ -477,9 +628,14 @@ fun ZkV2PhotoEditorDialog(
         }
     }
 
-    // In Crop tab, display full uncropped rotated bitmap so the user drags the crop box directly on it
+    // In Crop tab, display full uncropped rotated bitmap so dragging crop handles runs at 120fps with zero bitmap churn
     val showUncroppedForCrop = activeTab == ZkEditorTab.CROP && !compareOriginal
-    LaunchedEffect(previewBaseBitmap, params, compareOriginal, showUncroppedForCrop) {
+    val renderParamsKey = if (showUncroppedForCrop) {
+        params.copy(cropBox = ZkNormalizedCropBox(), aspect = ZkCropAspect.FREE)
+    } else {
+        params
+    }
+    LaunchedEffect(previewBaseBitmap, renderParamsKey, compareOriginal, showUncroppedForCrop) {
         val base = previewBaseBitmap ?: return@LaunchedEffect
         val rendered = withContext(Dispatchers.Default) {
             if (compareOriginal) {
@@ -487,7 +643,7 @@ fun ZkV2PhotoEditorDialog(
             } else {
                 ZkPhotoEditorRenderer.render(
                     source = base,
-                    params = params,
+                    params = renderParamsKey,
                     maxOutputEdge = 1280,
                     applyCrop = !showUncroppedForCrop
                 )
@@ -790,7 +946,7 @@ fun ZkV2PhotoEditorDialog(
                             }
                         }
 
-                        // Real interactive draggable crop overlay in Ritaglia tab
+                        // Real interactive draggable crop overlay in Ritaglia tab (120fps, zero bitmap churn)
                         if (showUncroppedForCrop && stageSize.width > 0 && stageSize.height > 0) {
                             var activeHandle by remember { mutableStateOf<ZkCropHandle?>(null) }
                             var dragStartBox by remember { mutableStateOf(params.cropBox) }
@@ -801,16 +957,26 @@ fun ZkV2PhotoEditorDialog(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .pointerInput(params.aspect, bmp.width, bmp.height, imgW, imgH, imgLeft, imgTop) {
+                                        val touchRadiusPx = 36.dp.toPx()
                                         detectDragGestures(
                                             onDragStart = { startOffset ->
-                                                val nx = (startOffset.x - imgLeft) / imgW
-                                                val ny = (startOffset.y - imgTop) / imgH
-                                                activeHandle = ZkCropBoxMath.hitTestHandle(nx, ny, params.cropBox)
+                                                val hit = ZkCropBoxMath.hitTestHandlePx(
+                                                    touchX = startOffset.x,
+                                                    touchY = startOffset.y,
+                                                    imgLeft = imgLeft,
+                                                    imgTop = imgTop,
+                                                    imgW = imgW,
+                                                    imgH = imgH,
+                                                    box = params.cropBox,
+                                                    touchRadiusPx = touchRadiusPx
+                                                )
+                                                activeHandle = hit
                                                 dragStartBox = params.cropBox
                                                 totalDx = 0f
                                                 totalDy = 0f
-                                                if (activeHandle != null) {
+                                                if (hit != null) {
                                                     onUserActivity()
+                                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                                 }
                                             },
                                             onDragEnd = {
@@ -843,13 +1009,14 @@ fun ZkV2PhotoEditorDialog(
                                     }
                             ) {
                                 val box = params.cropBox
+                                val isDraggingNow = activeHandle != null
                                 val cl = imgLeft + box.left * imgW
                                 val ct = imgTop + box.top * imgH
                                 val cr = imgLeft + box.right * imgW
                                 val cb = imgTop + box.bottom * imgH
                                 val cw = (cr - cl).coerceAtLeast(1f)
                                 val ch = (cb - ct).coerceAtLeast(1f)
-                                val scrim = Color(0xAA000000)
+                                val scrim = if (isDraggingNow) Color(0xC4000000) else Color(0x9E000000)
 
                                 // Dimmed exterior regions around crop box
                                 drawRect(scrim, topLeft = Offset(imgLeft, imgTop), size = Size(imgW, (ct - imgTop).coerceAtLeast(0f)))
@@ -857,8 +1024,8 @@ fun ZkV2PhotoEditorDialog(
                                 drawRect(scrim, topLeft = Offset(imgLeft, ct), size = Size((cl - imgLeft).coerceAtLeast(0f), ch))
                                 drawRect(scrim, topLeft = Offset(cr, ct), size = Size((imgLeft + imgW - cr).coerceAtLeast(0f), ch))
 
-                                // Rule of thirds grid
-                                val gridColor = Color.White.copy(alpha = 0.35f)
+                                // Rule of thirds grid (brightens smoothly while dragging)
+                                val gridColor = Color.White.copy(alpha = if (isDraggingNow) 0.78f else 0.36f)
                                 drawLine(gridColor, Offset(cl + cw / 3f, ct), Offset(cl + cw / 3f, cb), strokeWidth = 1.5f)
                                 drawLine(gridColor, Offset(cl + 2f * cw / 3f, ct), Offset(cl + 2f * cw / 3f, cb), strokeWidth = 1.5f)
                                 drawLine(gridColor, Offset(cl, ct + ch / 3f), Offset(cr, ct + ch / 3f), strokeWidth = 1.5f)
@@ -866,28 +1033,62 @@ fun ZkV2PhotoEditorDialog(
 
                                 // Crisp border
                                 drawRect(
-                                    color = Color.White.copy(alpha = 0.85f),
+                                    color = Color.White.copy(alpha = if (isDraggingNow) 1f else 0.88f),
                                     topLeft = Offset(cl, ct),
                                     size = Size(cw, ch),
-                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.5f)
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
                                 )
 
-                                // Bold corner L-brackets
-                                val arm = 22.dp.toPx().coerceAtMost(min(cw, ch) * 0.35f)
-                                val bracketStroke = 5.dp.toPx()
+                                // Bold corner L-brackets with rounded caps
+                                val arm = 22.dp.toPx().coerceAtMost(min(cw, ch) * 0.34f)
+                                val bracketStroke = 4.5.dp.toPx()
                                 val accent = Color.White
                                 // NW
-                                drawLine(accent, Offset(cl, ct), Offset(cl + arm, ct), strokeWidth = bracketStroke)
-                                drawLine(accent, Offset(cl, ct), Offset(cl, ct + arm), strokeWidth = bracketStroke)
+                                drawLine(accent, Offset(cl, ct), Offset(cl + arm, ct), strokeWidth = bracketStroke, cap = StrokeCap.Round)
+                                drawLine(accent, Offset(cl, ct), Offset(cl, ct + arm), strokeWidth = bracketStroke, cap = StrokeCap.Round)
                                 // NE
-                                drawLine(accent, Offset(cr, ct), Offset(cr - arm, ct), strokeWidth = bracketStroke)
-                                drawLine(accent, Offset(cr, ct), Offset(cr, ct + arm), strokeWidth = bracketStroke)
+                                drawLine(accent, Offset(cr, ct), Offset(cr - arm, ct), strokeWidth = bracketStroke, cap = StrokeCap.Round)
+                                drawLine(accent, Offset(cr, ct), Offset(cr, ct + arm), strokeWidth = bracketStroke, cap = StrokeCap.Round)
                                 // SW
-                                drawLine(accent, Offset(cl, cb), Offset(cl + arm, cb), strokeWidth = bracketStroke)
-                                drawLine(accent, Offset(cl, cb), Offset(cl, cb - arm), strokeWidth = bracketStroke)
+                                drawLine(accent, Offset(cl, cb), Offset(cl + arm, cb), strokeWidth = bracketStroke, cap = StrokeCap.Round)
+                                drawLine(accent, Offset(cl, cb), Offset(cl, cb - arm), strokeWidth = bracketStroke, cap = StrokeCap.Round)
                                 // SE
-                                drawLine(accent, Offset(cr, cb), Offset(cr - arm, cb), strokeWidth = bracketStroke)
-                                drawLine(accent, Offset(cr, cb), Offset(cr, cb - arm), strokeWidth = bracketStroke)
+                                drawLine(accent, Offset(cr, cb), Offset(cr - arm, cb), strokeWidth = bracketStroke, cap = StrokeCap.Round)
+                                drawLine(accent, Offset(cr, cb), Offset(cr, cb - arm), strokeWidth = bracketStroke, cap = StrokeCap.Round)
+
+                                // Centered side midpoint pill bars (N, S, W, E)
+                                val edgeBar = 24.dp.toPx().coerceAtMost(min(cw, ch) * 0.28f)
+                                val edgeStroke = 4.dp.toPx()
+                                val mx = (cl + cr) / 2f
+                                val my = (ct + cb) / 2f
+                                drawLine(accent, Offset(mx - edgeBar / 2f, ct), Offset(mx + edgeBar / 2f, ct), strokeWidth = edgeStroke, cap = StrokeCap.Round)
+                                drawLine(accent, Offset(mx - edgeBar / 2f, cb), Offset(mx + edgeBar / 2f, cb), strokeWidth = edgeStroke, cap = StrokeCap.Round)
+                                drawLine(accent, Offset(cl, my - edgeBar / 2f), Offset(cl, my + edgeBar / 2f), strokeWidth = edgeStroke, cap = StrokeCap.Round)
+                                drawLine(accent, Offset(cr, my - edgeBar / 2f), Offset(cr, my + edgeBar / 2f), strokeWidth = edgeStroke, cap = StrokeCap.Round)
+                            }
+
+                            if (activeHandle != null || !params.cropBox.isFullImage()) {
+                                val fullBase = originalBitmap ?: bmp
+                                val rot = ((params.rotationDeg % 360) + 360) % 360
+                                val fullW = if (rot == 90 || rot == 270) fullBase.height else fullBase.width
+                                val fullH = if (rot == 90 || rot == 270) fullBase.width else fullBase.height
+                                val outW = ((params.cropBox.right - params.cropBox.left) * fullW).roundToInt().coerceAtLeast(1)
+                                val outH = ((params.cropBox.bottom - params.cropBox.top) * fullH).roundToInt().coerceAtLeast(1)
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xD40B0F19),
+                                    modifier = Modifier
+                                        .align(Alignment.TopCenter)
+                                        .padding(top = 8.dp)
+                                ) {
+                                    Text(
+                                        text = "$outW × $outH px",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -1083,44 +1284,77 @@ fun ZkV2PhotoEditorDialog(
                         }
 
                         ZkEditorTab.CROP -> {
-                            // 1-tap rotate & flip strip
+                            // 1-tap rotate, flip & reset-crop strip
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceEvenly
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally)
                             ) {
-                                TextButton(onClick = {
-                                    pushParams(params.copy(rotationDeg = (params.rotationDeg + 270) % 360, cropBox = ZkNormalizedCropBox()))
-                                }) {
+                                TextButton(
+                                    onClick = {
+                                        pushParams(params.copy(rotationDeg = (params.rotationDeg + 270) % 360, cropBox = ZkNormalizedCropBox()))
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
                                     Icon(Icons.AutoMirrored.Filled.RotateLeft, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(4.dp))
                                     Text("-90°", color = Color.White, style = MaterialTheme.typography.labelMedium)
                                 }
-                                TextButton(onClick = {
-                                    pushParams(params.copy(rotationDeg = (params.rotationDeg + 90) % 360, cropBox = ZkNormalizedCropBox()))
-                                }) {
+                                TextButton(
+                                    onClick = {
+                                        pushParams(params.copy(rotationDeg = (params.rotationDeg + 90) % 360, cropBox = ZkNormalizedCropBox()))
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
                                     Icon(Icons.AutoMirrored.Filled.RotateRight, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(4.dp))
                                     Text("+90°", color = Color.White, style = MaterialTheme.typography.labelMedium)
                                 }
-                                TextButton(onClick = {
-                                    pushParams(params.copy(flipH = !params.flipH))
-                                }) {
+                                TextButton(
+                                    onClick = {
+                                        pushParams(params.copy(flipH = !params.flipH))
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
                                     Icon(Icons.Default.Flip, contentDescription = null, tint = if (params.flipH) Color(0xFF38BDF8) else Color.White, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(4.dp))
                                     Text("Specchia O", color = if (params.flipH) Color(0xFF38BDF8) else Color.White, style = MaterialTheme.typography.labelMedium)
                                 }
-                                TextButton(onClick = {
-                                    pushParams(params.copy(flipV = !params.flipV))
-                                }) {
+                                TextButton(
+                                    onClick = {
+                                        pushParams(params.copy(flipV = !params.flipV))
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
                                     Icon(Icons.Default.Flip, contentDescription = null, tint = if (params.flipV) Color(0xFF38BDF8) else Color.White, modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(4.dp))
                                     Text("Specchia V", color = if (params.flipV) Color(0xFF38BDF8) else Color.White, style = MaterialTheme.typography.labelMedium)
                                 }
+                                if (!params.cropBox.isFullImage() || params.aspect != ZkCropAspect.FREE) {
+                                    TextButton(
+                                        onClick = {
+                                            pushParams(
+                                                params.copy(
+                                                    aspect = ZkCropAspect.FREE,
+                                                    cropBox = ZkNormalizedCropBox()
+                                                )
+                                            )
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(Icons.Default.RestartAlt, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Azzera", color = Color(0xFF38BDF8), style = MaterialTheme.typography.labelMedium)
+                                    }
+                                }
                             }
 
-                            // Aspect ratio presets
+                            // Modern scrollable aspect ratio presets strip
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 val srcW = previewBitmap?.width ?: originalBitmap?.width ?: 1000
@@ -1139,13 +1373,13 @@ fun ZkV2PhotoEditorDialog(
                                         colors = ButtonDefaults.outlinedButtonColors(
                                             containerColor = if (selected) Color(0xFF0284C7) else Color(0xFF111827)
                                         ),
-                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
-                                        modifier = Modifier.weight(1f)
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                                     ) {
                                         Text(
                                             text = aspect.label,
                                             color = Color.White,
                                             style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                                             maxLines = 1
                                         )
                                     }

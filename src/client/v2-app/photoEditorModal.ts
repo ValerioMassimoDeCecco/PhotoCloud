@@ -8,6 +8,7 @@ import {
   createEditHistory,
   dragNormalizedCropHandle,
   fitAspectNormalizedCropBox,
+  isFullNormalizedCropBox,
   normalizeRotation,
   normalizedBoxToPixelRect,
   pushEditSnapshot,
@@ -187,11 +188,16 @@ function buildDownscaledPreviewSource(img: HTMLImageElement, maxEdge = 1280): HT
   return canvas;
 }
 
+export interface PhotoEditorOpenOptions {
+  initialTab?: 'filters' | 'adjust' | 'transform';
+}
+
 export function openPhotoEditorModal(
   container: HTMLElement,
   client: ZkVaultClient,
   item: DecryptedItemV2,
-  callbacks: PhotoEditorModalCallbacks
+  callbacks: PhotoEditorModalCallbacks,
+  options: PhotoEditorOpenOptions = {}
 ): () => void {
   const backdrop = el('div', 'modal-backdrop modal-backdrop-fullscreen');
   backdrop.id = 'photo-editor-modal';
@@ -271,12 +277,27 @@ export function openPhotoEditorModal(
   );
   cropBoxEl.appendChild(cropGrid);
 
-  const handles: CropDragHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+  const handleLabels: Record<Exclude<CropDragHandle, 'move'>, string> = {
+    nw: 'Ridimensiona angolo in alto a sinistra',
+    n: 'Ridimensiona bordo superiore',
+    ne: 'Ridimensiona angolo in alto a destra',
+    e: 'Ridimensiona bordo destro',
+    se: 'Ridimensiona angolo in basso a destra',
+    s: 'Ridimensiona bordo inferiore',
+    sw: 'Ridimensiona angolo in basso a sinistra',
+    w: 'Ridimensiona bordo sinistro',
+  };
+  const handles: Array<Exclude<CropDragHandle, 'move'>> = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
   for (const h of handles) {
     const handleEl = el('div', `editor-crop-handle handle-${h}`);
     handleEl.dataset.handle = h;
+    handleEl.setAttribute('aria-label', handleLabels[h]);
     cropBoxEl.appendChild(handleEl);
   }
+  const cropDimsBadge = el('div', 'editor-crop-dims-badge mono-nums', '');
+  cropDimsBadge.id = 'editor-crop-dims';
+  cropBoxEl.appendChild(cropDimsBadge);
+
   cropOverlay.appendChild(cropBoxEl);
   canvasWrap.appendChild(cropOverlay);
 
@@ -294,12 +315,12 @@ export function openPhotoEditorModal(
 
   const tabRow = el('div', 'editor-tab-row');
   tabRow.setAttribute('role', 'tablist');
-  let activeTab: 'filters' | 'adjust' | 'transform' = 'adjust';
+  let activeTab: 'filters' | 'adjust' | 'transform' = options.initialTab ?? 'adjust';
 
   const tabButtons: Record<'filters' | 'adjust' | 'transform', HTMLButtonElement> = {
-    adjust: el('button', 'editor-tab-btn active', 'Regola'),
-    filters: el('button', 'editor-tab-btn', 'Filtri'),
-    transform: el('button', 'editor-tab-btn', 'Ritaglia'),
+    adjust: el('button', `editor-tab-btn ${activeTab === 'adjust' ? 'active' : ''}`, 'Regola'),
+    filters: el('button', `editor-tab-btn ${activeTab === 'filters' ? 'active' : ''}`, 'Filtri'),
+    transform: el('button', `editor-tab-btn ${activeTab === 'transform' ? 'active' : ''}`, 'Ritaglia'),
   };
   tabButtons.adjust.id = 'editor-tab-adjust';
   tabButtons.filters.id = 'editor-tab-filters';
@@ -339,15 +360,48 @@ export function openPhotoEditorModal(
     compareBadge.style.display = isComparing ? 'block' : 'none';
   };
 
+  const computeOutputPixelRect = (st: PhotoEditState) => {
+    if (!sourceImage) return { x: 0, y: 0, width: 0, height: 0 };
+    const fullRot = normalizeRotation(st.rotation);
+    const fullW = fullRot === 90 || fullRot === 270 ? sourceImage.naturalHeight : sourceImage.naturalWidth;
+    const fullH = fullRot === 90 || fullRot === 270 ? sourceImage.naturalWidth : sourceImage.naturalHeight;
+    return normalizedBoxToPixelRect(fullW, fullH, st.cropBox);
+  };
+
+  const updateStatusLine = () => {
+    if (!sourceImage) return;
+    const st = currentState();
+    const outRect = computeOutputPixelRect(st);
+    if (isComparing) {
+      statusLine.textContent = `Originale · ${sourceImage.naturalWidth}×${sourceImage.naturalHeight} px`;
+      return;
+    }
+    const presetLabel = PHOTO_FILTER_PRESETS[st.filterPreset]?.label ?? 'Originale';
+    const parts = [`${outRect.width}×${outRect.height} px`];
+    if (st.rotation !== 0) parts.push(`${st.rotation}°`);
+    if (st.filterPreset !== 'original') parts.push(presetLabel);
+    if (activeTab === 'transform') parts.push('Trascina angoli o bordi per ritagliare');
+    statusLine.textContent = parts.join(' · ');
+  };
+
   const syncCropOverlayDom = () => {
     const showCrop = activeTab === 'transform' && !isComparing && Boolean(sourceImage);
     cropOverlay.style.display = showCrop ? 'block' : 'none';
     if (!showCrop) return;
-    const b = clampNormalizedCropBox(currentState().cropBox);
+    const st = currentState();
+    const b = clampNormalizedCropBox(st.cropBox);
     cropBoxEl.style.left = `${(b.left * 100).toFixed(3)}%`;
     cropBoxEl.style.top = `${(b.top * 100).toFixed(3)}%`;
     cropBoxEl.style.width = `${((b.right - b.left) * 100).toFixed(3)}%`;
     cropBoxEl.style.height = `${((b.bottom - b.top) * 100).toFixed(3)}%`;
+    cropBoxEl.dataset.cropLeft = b.left.toFixed(4);
+    cropBoxEl.dataset.cropTop = b.top.toFixed(4);
+    cropBoxEl.dataset.cropRight = b.right.toFixed(4);
+    cropBoxEl.dataset.cropBottom = b.bottom.toFixed(4);
+
+    const outRect = computeOutputPixelRect(st);
+    cropDimsBadge.textContent = `${outRect.width} × ${outRect.height}`;
+    cropDimsBadge.classList.toggle('visible', Boolean(activeCropDrag) || !isFullNormalizedCropBox(b));
   };
 
   const renderPreviewNow = () => {
@@ -370,22 +424,7 @@ export function openPhotoEditorModal(
       ctx.drawImage(rendered, 0, 0);
     }
 
-    const fullRot = normalizeRotation(st.rotation);
-    const fullW = fullRot === 90 || fullRot === 270 ? sourceImage.naturalHeight : sourceImage.naturalWidth;
-    const fullH = fullRot === 90 || fullRot === 270 ? sourceImage.naturalWidth : sourceImage.naturalHeight;
-    const outRect = normalizedBoxToPixelRect(fullW, fullH, st.cropBox);
-
-    if (isComparing) {
-      statusLine.textContent = `Originale · ${sourceImage.naturalWidth}×${sourceImage.naturalHeight} px`;
-    } else {
-      const presetLabel = PHOTO_FILTER_PRESETS[st.filterPreset]?.label ?? 'Originale';
-      const parts = [`${outRect.width}×${outRect.height} px`];
-      if (st.rotation !== 0) parts.push(`${st.rotation}°`);
-      if (st.filterPreset !== 'original') parts.push(presetLabel);
-      if (activeTab === 'transform') parts.push('Trascina i bordi per ritagliare');
-      statusLine.textContent = parts.join(' · ');
-    }
-
+    updateStatusLine();
     syncCropOverlayDom();
     updateUndoRedoButtons();
   };
@@ -609,16 +648,34 @@ export function openPhotoEditorModal(
       commitState({ ...cur, flipV: !cur.flipV }, true);
     });
 
-    actionRow.append(rotLeftBtn, rotRightBtn, flipHBtn, flipVBtn);
+    const resetCropBtn = el('button', 'btn btn-ghost editor-tool-btn', 'Azzera ritaglio');
+    resetCropBtn.id = 'btn-editor-reset-crop';
+    resetCropBtn.disabled = isFullNormalizedCropBox(st.cropBox) && st.cropAspect === 'free';
+    resetCropBtn.addEventListener('click', () => {
+      const cur = currentState();
+      commitState(
+        {
+          ...cur,
+          cropAspect: 'free',
+          cropBox: { ...DEFAULT_NORMALIZED_CROP_BOX },
+        },
+        true
+      );
+    });
+
+    actionRow.append(rotLeftBtn, rotRightBtn, flipHBtn, flipVBtn, resetCropBtn);
     wrap.appendChild(actionRow);
 
-    const aspectRow = el('div', 'editor-presets-row');
+    const aspectRow = el('div', 'editor-presets-row editor-aspect-strip');
     const aspects: Array<{ id: CropAspectRatio; label: string }> = [
       { id: 'free', label: 'Libero' },
+      { id: 'original', label: 'Originale' },
       { id: '1:1', label: '1:1' },
       { id: '4:3', label: '4:3' },
+      { id: '3:4', label: '3:4' },
       { id: '4:5', label: '4:5' },
       { id: '16:9', label: '16:9' },
+      { id: '9:16', label: '9:16' },
     ];
     for (const asp of aspects) {
       const btn = el(
@@ -628,6 +685,7 @@ export function openPhotoEditorModal(
       );
       btn.type = 'button';
       btn.id = `editor-aspect-${asp.id.replace(':', '-')}`;
+      btn.setAttribute('aria-pressed', String(st.cropAspect === asp.id));
       btn.addEventListener('click', () => {
         const cur = currentState();
         const fittedBox = fitAspectNormalizedCropBox(
@@ -643,8 +701,9 @@ export function openPhotoEditorModal(
     controlsBody.appendChild(wrap);
   };
 
-  // --- Interactive Crop Box Pointer Drag ---
+  // --- Interactive 120fps Crop Box Pointer Drag (Zero Canvas Re-renders While Dragging) ---
   let activeCropDrag: {
+    pointerId: number;
     handle: CropDragHandle;
     startX: number;
     startY: number;
@@ -660,7 +719,10 @@ export function openPhotoEditorModal(
     if (rect.width <= 0 || rect.height <= 0) return;
     ev.preventDefault();
     client.touchActivity();
+    cropBoxEl.setPointerCapture?.(ev.pointerId);
+    cropOverlay.classList.add('is-dragging');
     activeCropDrag = {
+      pointerId: ev.pointerId,
       handle,
       startX: ev.clientX,
       startY: ev.clientY,
@@ -668,13 +730,14 @@ export function openPhotoEditorModal(
       overlayW: rect.width,
       overlayH: rect.height,
     };
+    syncCropOverlayDom();
     window.addEventListener('pointermove', onCropPointerMove);
     window.addEventListener('pointerup', onCropPointerUp);
     window.addEventListener('pointercancel', onCropPointerUp);
   };
 
   const onCropPointerMove = (ev: PointerEvent) => {
-    if (!activeCropDrag) return;
+    if (!activeCropDrag || ev.pointerId !== activeCropDrag.pointerId) return;
     const dxNorm = (ev.clientX - activeCropDrag.startX) / activeCropDrag.overlayW;
     const dyNorm = (ev.clientY - activeCropDrag.startY) / activeCropDrag.overlayH;
     const nextBox = dragNormalizedCropHandle(
@@ -694,14 +757,20 @@ export function openPhotoEditorModal(
       },
     };
     syncCropOverlayDom();
-    schedulePreviewRender();
+    updateStatusLine();
   };
 
-  const onCropPointerUp = () => {
+  const onCropPointerUp = (ev?: PointerEvent) => {
     if (!activeCropDrag) return;
+    if (ev && ev.pointerId !== activeCropDrag.pointerId) return;
+    const pointerId = activeCropDrag.pointerId;
     const startBox = activeCropDrag.startBox;
     const endBox = currentState().cropBox;
     activeCropDrag = null;
+    cropOverlay.classList.remove('is-dragging');
+    if (cropBoxEl.hasPointerCapture?.(pointerId)) {
+      cropBoxEl.releasePointerCapture?.(pointerId);
+    }
     window.removeEventListener('pointermove', onCropPointerMove);
     window.removeEventListener('pointerup', onCropPointerUp);
     window.removeEventListener('pointercancel', onCropPointerUp);
@@ -719,8 +788,10 @@ export function openPhotoEditorModal(
         },
         cloneEditState(currentState())
       );
+      renderControlsBody();
       updateUndoRedoButtons();
     }
+    syncCropOverlayDom();
   };
 
   cropBoxEl.addEventListener('pointerdown', onCropPointerDown);

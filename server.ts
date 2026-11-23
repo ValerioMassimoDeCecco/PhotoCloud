@@ -52,7 +52,7 @@ const MAX_UPLOAD_MB =
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
 function readAndroidAppVersion(): { versionName: string; versionCode: number } {
-  const fallback = { versionName: '1.5.4', versionCode: 36 };
+  const fallback = { versionName: '1.5.5', versionCode: 37 };
   try {
     const gradlePath = path.resolve(APP_ROOT, 'android-app/app/build.gradle.kts');
     if (!fs.existsSync(gradlePath)) return fallback;

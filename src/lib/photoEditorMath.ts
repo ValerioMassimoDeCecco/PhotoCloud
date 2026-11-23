@@ -1,4 +1,12 @@
-export type CropAspectRatio = 'free' | '1:1' | '4:3' | '4:5' | '16:9';
+export type CropAspectRatio =
+  | 'free'
+  | 'original'
+  | '1:1'
+  | '4:3'
+  | '3:4'
+  | '4:5'
+  | '16:9'
+  | '9:16';
 
 export type CropDragHandle =
   | 'nw'
@@ -171,6 +179,35 @@ export function clampNormalizedCropBox(
   return { left, top, right, bottom };
 }
 
+export function isFullNormalizedCropBox(box: NormalizedCropBox, eps = 0.002): boolean {
+  return (
+    box.left <= eps &&
+    box.top <= eps &&
+    box.right >= 1 - eps &&
+    box.bottom >= 1 - eps
+  );
+}
+
+export function resolveAspectPixelRatio(
+  aspect: CropAspectRatio,
+  srcWidth: number,
+  srcHeight: number
+): number | null {
+  if (aspect === 'free') return null;
+  const w = Math.max(1, Number.isFinite(srcWidth) ? srcWidth : 1);
+  const h = Math.max(1, Number.isFinite(srcHeight) ? srcHeight : 1);
+  if (aspect === 'original') return w / h;
+  const ratioMap: Record<Exclude<CropAspectRatio, 'free' | 'original'>, number> = {
+    '1:1': 1,
+    '4:3': 4 / 3,
+    '3:4': 3 / 4,
+    '4:5': 4 / 5,
+    '16:9': 16 / 9,
+    '9:16': 9 / 16,
+  };
+  return ratioMap[aspect] ?? null;
+}
+
 export function fitAspectNormalizedCropBox(
   srcWidth: number,
   srcHeight: number,
@@ -198,89 +235,113 @@ export function dragNormalizedCropHandle(
   minSpan = 0.08
 ): NormalizedCropBox {
   const span = Math.max(0.04, Math.min(0.5, minSpan));
-  const boxW = startBox.right - startBox.left;
-  const boxH = startBox.bottom - startBox.top;
+  const safeStart = clampNormalizedCropBox(startBox, span);
 
   if (handle === 'move') {
-    const clampedDx = Math.max(-startBox.left, Math.min(1 - startBox.right, dxNorm));
-    const clampedDy = Math.max(-startBox.top, Math.min(1 - startBox.bottom, dyNorm));
+    const clampedDx = Math.max(-safeStart.left, Math.min(1 - safeStart.right, dxNorm));
+    const clampedDy = Math.max(-safeStart.top, Math.min(1 - safeStart.bottom, dyNorm));
     return {
-      left: startBox.left + clampedDx,
-      top: startBox.top + clampedDy,
-      right: startBox.right + clampedDx,
-      bottom: startBox.bottom + clampedDy,
+      left: safeStart.left + clampedDx,
+      top: safeStart.top + clampedDy,
+      right: safeStart.right + clampedDx,
+      bottom: safeStart.bottom + clampedDy,
     };
   }
 
-  let { left, top, right, bottom } = startBox;
+  const targetPixelRatio = resolveAspectPixelRatio(aspect, srcWidth, srcHeight);
 
-  if (handle.includes('w')) {
-    left = Math.max(0, Math.min(right - span, startBox.left + dxNorm));
-  }
-  if (handle.includes('e')) {
-    right = Math.min(1, Math.max(left + span, startBox.right + dxNorm));
-  }
-  if (handle.includes('n')) {
-    top = Math.max(0, Math.min(bottom - span, startBox.top + dyNorm));
-  }
-  if (handle.includes('s')) {
-    bottom = Math.min(1, Math.max(top + span, startBox.bottom + dyNorm));
-  }
-
-  if (aspect !== 'free') {
-    const ratioMap: Record<Exclude<CropAspectRatio, 'free'>, number> = {
-      '1:1': 1,
-      '4:3': 4 / 3,
-      '4:5': 4 / 5,
-      '16:9': 16 / 9,
-    };
-    const targetPixelRatio = ratioMap[aspect] || 1;
-    const imgRatio = Math.max(1, srcWidth) / Math.max(1, srcHeight);
-    // Normalized width / Normalized height = targetPixelRatio / imgRatio
-    const normRatio = targetPixelRatio / imgRatio;
-
-    const newW = right - left;
-    const newH = bottom - top;
-
-    if (handle === 'n' || handle === 's') {
-      const desiredW = Math.min(1, Math.max(span, newH * normRatio));
-      const centerX = (left + right) / 2;
-      left = Math.max(0, Math.min(1 - desiredW, centerX - desiredW / 2));
-      right = left + desiredW;
-    } else {
-      const desiredH = Math.min(1, Math.max(span, newW / normRatio));
-      if (handle.includes('n')) {
-        top = Math.max(0, bottom - desiredH);
-        bottom = top + desiredH;
-      } else if (handle.includes('s')) {
-        bottom = Math.min(1, top + desiredH);
-        top = bottom - desiredH;
-      } else {
-        const centerY = (top + bottom) / 2;
-        top = Math.max(0, Math.min(1 - desiredH, centerY - desiredH / 2));
-        bottom = top + desiredH;
-      }
+  if (targetPixelRatio === null) {
+    let { left, top, right, bottom } = safeStart;
+    if (handle.includes('w')) {
+      left = Math.max(0, Math.min(right - span, safeStart.left + dxNorm));
     }
-
-    // Ensure aspect-locked box stays within [0, 1]
-    if (right > 1 || bottom > 1 || left < 0 || top < 0) {
-      return clampNormalizedCropBox({ left, top, right, bottom }, span);
+    if (handle.includes('e')) {
+      right = Math.min(1, Math.max(left + span, safeStart.right + dxNorm));
     }
+    if (handle.includes('n')) {
+      top = Math.max(0, Math.min(bottom - span, safeStart.top + dyNorm));
+    }
+    if (handle.includes('s')) {
+      bottom = Math.min(1, Math.max(top + span, safeStart.bottom + dyNorm));
+    }
+    return clampNormalizedCropBox({ left, top, right, bottom }, span);
   }
 
-  if (right - left < span || bottom - top < span) {
-    return clampNormalizedCropBox(
-      {
-        left: startBox.left,
-        top: startBox.top,
-        right: startBox.left + Math.max(span, boxW),
-        bottom: startBox.top + Math.max(span, boxH),
-      },
-      span
-    );
+  const imgRatio = Math.max(1, srcWidth) / Math.max(1, srcHeight);
+  // Normalized width / normalized height = targetPixelRatio / imgRatio
+  const normRatio = targetPixelRatio / imgRatio;
+
+  // Vertical edge drags (N / S): pin opposite horizontal edge, expand/shrink symmetrically on X
+  if (handle === 'n' || handle === 's') {
+    const centerX = (safeStart.left + safeStart.right) / 2;
+    const availH = handle === 'n' ? safeStart.bottom : 1 - safeStart.top;
+    const maxH = Math.min(availH, 1 / normRatio);
+    const minH = Math.min(maxH, Math.max(span, span / normRatio));
+    const rawH =
+      handle === 'n'
+        ? safeStart.bottom - (safeStart.top + dyNorm)
+        : safeStart.bottom + dyNorm - safeStart.top;
+    const h = Math.max(minH, Math.min(maxH, rawH));
+    const w = Math.min(1, h * normRatio);
+    const left = Math.max(0, Math.min(1 - w, centerX - w / 2));
+    const right = left + w;
+    const top = handle === 'n' ? safeStart.bottom - h : safeStart.top;
+    const bottom = handle === 'n' ? safeStart.bottom : safeStart.top + h;
+    return { left, top, right, bottom };
   }
 
-  return clampNormalizedCropBox({ left, top, right, bottom }, span);
+  // Horizontal edge drags (W / E): pin opposite vertical edge, expand/shrink symmetrically on Y
+  if (handle === 'w' || handle === 'e') {
+    const centerY = (safeStart.top + safeStart.bottom) / 2;
+    const availW = handle === 'w' ? safeStart.right : 1 - safeStart.left;
+    const maxW = Math.min(availW, normRatio);
+    const minW = Math.min(maxW, Math.max(span, span * normRatio));
+    const rawW =
+      handle === 'w'
+        ? safeStart.right - (safeStart.left + dxNorm)
+        : safeStart.right + dxNorm - safeStart.left;
+    const w = Math.max(minW, Math.min(maxW, rawW));
+    const h = Math.min(1, w / normRatio);
+    const top = Math.max(0, Math.min(1 - h, centerY - h / 2));
+    const bottom = top + h;
+    const left = handle === 'w' ? safeStart.right - w : safeStart.left;
+    const right = handle === 'w' ? safeStart.right : safeStart.left + w;
+    return { left, top, right, bottom };
+  }
+
+  // Corner drags (NW, NE, SW, SE): strictly pin opposite corner anchor
+  const anchorLeft = handle.includes('e');
+  const anchorTop = handle.includes('s');
+  const anchorX = anchorLeft ? safeStart.left : safeStart.right;
+  const anchorY = anchorTop ? safeStart.top : safeStart.bottom;
+  const availW = anchorLeft ? 1 - anchorX : anchorX;
+  const availH = anchorTop ? 1 - anchorY : anchorY;
+
+  const maxW = Math.min(availW, availH * normRatio);
+  const minW = Math.min(maxW, Math.max(span, span * normRatio));
+
+  const candWFromX = anchorLeft
+    ? safeStart.right + dxNorm - anchorX
+    : anchorX - (safeStart.left + dxNorm);
+  const candHFromY = anchorTop
+    ? safeStart.bottom + dyNorm - anchorY
+    : anchorY - (safeStart.top + dyNorm);
+  const candWFromY = candHFromY * normRatio;
+
+  const startW = safeStart.right - safeStart.left;
+  const deltaWX = Math.abs(candWFromX - startW);
+  const deltaWY = Math.abs(candWFromY - startW);
+  const chosenW = deltaWX >= deltaWY ? candWFromX : candWFromY;
+
+  const w = Math.max(minW, Math.min(maxW, chosenW));
+  const h = w / normRatio;
+
+  const left = anchorLeft ? anchorX : anchorX - w;
+  const right = anchorLeft ? anchorX + w : anchorX;
+  const top = anchorTop ? anchorY : anchorY - h;
+  const bottom = anchorTop ? anchorY + h : anchorY;
+
+  return { left, top, right, bottom };
 }
 
 export function normalizedBoxToPixelRect(
@@ -305,18 +366,11 @@ export function computeCropRect(
 ): CropRect {
   const w = Math.max(1, Math.floor(srcWidth));
   const h = Math.max(1, Math.floor(srcHeight));
-  if (aspect === 'free') {
+  const targetRatio = resolveAspectPixelRatio(aspect, w, h);
+  if (targetRatio === null || aspect === 'original') {
     return { x: 0, y: 0, width: w, height: h };
   }
 
-  const ratioMap: Record<Exclude<CropAspectRatio, 'free'>, number> = {
-    '1:1': 1,
-    '4:3': 4 / 3,
-    '4:5': 4 / 5,
-    '16:9': 16 / 9,
-  };
-
-  const targetRatio = ratioMap[aspect] || 1;
   const currentRatio = w / h;
 
   let cropW = w;

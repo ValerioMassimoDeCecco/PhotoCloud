@@ -494,5 +494,50 @@ class ZkV2EnhancementsTest {
         )
         assertEquals(0.7f, resized.right, 0.01f)
         assertEquals(0.7f, resized.bottom, 0.01f)
+
+        // Screen-pixel hit testing for corners, edge midpoint bars, and interior move
+        assertEquals(
+            ZkCropHandle.N,
+            ZkCropBoxMath.hitTestHandlePx(500f, 102f, 0f, 0f, 1000f, 1000f, ZkNormalizedCropBox(0.1f, 0.1f, 0.9f, 0.9f), 40f)
+        )
+        assertEquals(
+            ZkCropHandle.E,
+            ZkCropBoxMath.hitTestHandlePx(898f, 500f, 0f, 0f, 1000f, 1000f, ZkNormalizedCropBox(0.1f, 0.1f, 0.9f, 0.9f), 40f)
+        )
+        assertEquals(
+            ZkCropHandle.SE,
+            ZkCropBoxMath.hitTestHandlePx(910f, 910f, 0f, 0f, 1000f, 1000f, ZkNormalizedCropBox(0.1f, 0.1f, 0.9f, 0.9f), 40f)
+        )
+
+        // Edge drag with ORIGINAL aspect preserves photo ratio & pins opposite edge
+        val origBox = ZkCropBoxMath.fitAspect(1600, 800, ZkCropAspect.ORIGINAL)
+        val edgeDragged = ZkCropBoxMath.dragHandle(
+            start = origBox,
+            handle = ZkCropHandle.N,
+            dxNorm = 0f,
+            dyNorm = 0.25f,
+            aspect = ZkCropAspect.ORIGINAL,
+            srcWidth = 1600,
+            srcHeight = 800
+        )
+        assertEquals(1.0f, edgeDragged.bottom, 0.005f)
+        val outRatio = ((edgeDragged.right - edgeDragged.left) * 1600f) / ((edgeDragged.bottom - edgeDragged.top) * 800f)
+        assertEquals(2.0f, outRatio, 0.02f)
+
+        // Aspect-locked corner over-drag pins opposite corner cleanly
+        val portrait = ZkCropBoxMath.fitAspect(1600, 900, ZkCropAspect.NINE_SIXTEEN)
+        val lockedSe = ZkCropBoxMath.dragHandle(
+            start = portrait,
+            handle = ZkCropHandle.SE,
+            dxNorm = -0.1f,
+            dyNorm = -0.2f,
+            aspect = ZkCropAspect.NINE_SIXTEEN,
+            srcWidth = 1600,
+            srcHeight = 900
+        )
+        assertEquals(portrait.left, lockedSe.left, 0.005f)
+        assertEquals(portrait.top, lockedSe.top, 0.005f)
+        val lockedRatio = ((lockedSe.right - lockedSe.left) * 1600f) / ((lockedSe.bottom - lockedSe.top) * 900f)
+        assertEquals(9f / 16f, lockedRatio, 0.02f)
     }
 }

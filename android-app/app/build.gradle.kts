@@ -20,8 +20,8 @@ android {
         applicationId = "com.valerio.photocloud"
         minSdk = 26
         targetSdk = 35
-        versionCode = 36
-        versionName = "1.5.4"
+        versionCode = 37
+        versionName = "1.5.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://10.0.2.2:3000\"")

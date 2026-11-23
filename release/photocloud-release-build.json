@@ -1,17 +1,18 @@
 {
-  "apkFilename": "photocloud-release-v1.5.4-signed.apk",
-  "apkDownloadUrl": "/release/photocloud-release-v1.5.4-signed.apk",
+  "apkFilename": "photocloud-release-v1.5.5-signed.apk",
+  "apkDownloadUrl": "/release/photocloud-release-v1.5.5-signed.apk",
   "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "sizeBytes": 0,
   "applicationId": "com.valerio.photocloud",
-  "versionName": "1.5.4",
-  "versionCode": 36,
-  "changelog": "Release 1.5.4 — Risolta la race condition di accesso su Android per cui la galleria si apriva prima del rinnovo del cookie di sessione HTTP (mostrando stato non autenticato e galleria vuota fino al refresh manuale). Aggiunto stato esplicito 'Connesso · <utente>' nella top bar, auto-sync alla prontezza della sessione e recupero automatico su 401.",
+  "versionName": "1.5.5",
+  "versionCode": 37,
+  "changelog": "Release 1.5.5 — Nuova esperienza di ritaglio immagine responsiva, veloce e intuitiva su Android e Web /v2: accesso diretto con un tap 'Ritaglia' dal visualizzatore, overlay stile galleria moderna con staffe a L agli angoli, maniglie laterali e feedback aptico, trascinamento fluido a 120fps senza ri-renderizzazione della bitmap/canvas, badge live delle dimensioni in pixel, 8 proporzioni preimpostate (Libero, Originale, 1:1, 4:3, 3:4, 4:5, 16:9, 9:16) con ancoraggio rigoroso ai bordi e azzeramento rapido del solo ritaglio.",
   "features": [
-    "Fix accesso -> galleria immediata (Android): tracciamento esplicito di isHttpSessionReady e httpSessionGeneration in ZkSessionManager, attesa del rinnovo cookie HTTP prima di aprire la galleria e auto-refresh immediato",
-    "Auto-recovery trasparente su HTTP 401 in galleria con cancellazione delle richieste obsolete in volo",
-    "Indicatore chiaro di sessione attiva nella barra superiore della galleria ('Connesso · <username>' con stato verde)"
+    "Accesso diretto 'Ritaglia' con un tap nella barra azioni del visualizzatore foto (Android e Web /v2)",
+    "Ritaglio a 120fps senza lag durante il trascinamento (zero re-render Bitmap/Canvas durante il drag) con feedback aptico su Android",
+    "Staffe a L agli angoli, barre centrali sui 4 lati, griglia dei terzi dinamica, maschera esterna adattiva e badge dimensioni live in pixel",
+    "8 proporzioni pronte all'uso (Libero, Originale, 1:1, 4:3, 3:4, 4:5, 16:9, 9:16) con blocco proporzioni matematicamente esatto ai bordi e tasto rapido 'Azzera ritaglio'"
   ],
-  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.5.4",
-  "notes": "Pre-release v1.5.4: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release, firmato con la stessa firma persistente (nessun segreto committato)."
+  "githubRelease": "https://github.com/ValerioMassimoDeCecco/PhotoCloud/releases/tag/v1.5.5",
+  "notes": "Pre-release v1.5.5: l'APK firmato non e' ancora presente sul server (sha256/sizeBytes placeholder). Verra popolato automaticamente dalla pipeline CI al publish della GitHub Release, firmato con la stessa firma persistente (nessun segreto committato)."
 }

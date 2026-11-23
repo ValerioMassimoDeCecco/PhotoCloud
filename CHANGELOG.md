@@ -2,6 +2,16 @@
 
 Tutte le modifiche rilevanti di PhotoCloud sono documentate in questo file.
 
+## [1.5.5] - Android versionCode 37
+
+### Aggiunto & Migliorato (Solo Ritaglio Immagine)
+- **Accesso diretto "Ritaglia" con 1 tap (`ZkV2VaultScreen.kt`, `src/client/v2-app/main.ts`)**:
+  - Aggiunto pulsante dedicato **Ritaglia** direttamente nella barra azioni del visualizzatore foto (accanto a Modifica Foto) sia su Android (`Icons.Default.Crop`) che su Web `/v2` (`#btn-lightbox-crop`), per aprire subito l'editor nella scheda Ritaglia.
+- **Ritaglio stile galleria moderna, responsivo e fluido a 120fps (`ZkV2PhotoEditorDialog.kt`, `src/client/v2-app/photoEditorModal.ts`, `public/v2/app.css`, `src/lib/photoEditorMath.ts`)**:
+  - Eliminata la ri-renderizzazione della Bitmap/Canvas ad ogni frame di trascinamento in modalità Ritaglia: ora il drag aggiorna esclusivamente l'overlay di ritaglio con latenza zero e massima fluidità.
+  - Nuovo overlay moderno con staffe bianche a **L** sui 4 angoli, barre centrali sui 4 lati (aree touch generose da `36dp`/`40px`), maschera esterna che si scurisce durante il trascinamento, griglia dei terzi ad alta leggibilità, feedback aptico su Android (`HapticFeedbackType.TextHandleMove`) e badge flottante live con le dimensioni esatte in pixel (`larghezza × altezza px`).
+  - Aggiunte **8 proporzioni pronte all'uso** scorrevoli orizzontalmente (`Libero`, `Originale`, `1:1`, `4:3`, `3:4`, `4:5`, `16:9`, `9:16`) con matematica di blocco proporzioni rigorosamente ancorata all'angolo/lato opposto ai bordi dell'immagine, più il tasto rapido **Azzera ritaglio** che ripristina solo la selezione di ritaglio senza toccare le altre regolazioni.
+
 ## [1.5.4] - Android versionCode 36
 
 ### Corretto

@@ -992,82 +992,223 @@ input[type="file"].form-input::file-selector-button {
   position: absolute;
   inset: 0;
   overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .editor-crop-box {
   position: absolute;
-  border: 1.5px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.66);
+  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.62);
   cursor: move;
   touch-action: none;
+  box-sizing: border-box;
+  transition: box-shadow 0.14s ease, border-color 0.14s ease;
+}
+
+.editor-crop-overlay.is-dragging .editor-crop-box {
+  border-color: #ffffff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.78);
 }
 
 .editor-crop-grid {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  opacity: 0.45;
+  transition: opacity 0.14s ease;
+}
+
+.editor-crop-overlay.is-dragging .editor-crop-grid {
+  opacity: 0.92;
 }
 
 .editor-crop-grid .editor-crop-line:nth-child(1) {
   position: absolute;
-  left: 33.33%;
+  left: 33.333%;
   top: 0;
   bottom: 0;
   width: 1px;
-  background: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.45);
 }
 
 .editor-crop-grid .editor-crop-line:nth-child(2) {
   position: absolute;
-  left: 66.66%;
+  left: 66.666%;
   top: 0;
   bottom: 0;
   width: 1px;
-  background: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.45);
 }
 
 .editor-crop-grid .editor-crop-line:nth-child(3) {
   position: absolute;
-  top: 33.33%;
+  top: 33.333%;
   left: 0;
   right: 0;
   height: 1px;
-  background: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.45);
 }
 
 .editor-crop-grid .editor-crop-line:nth-child(4) {
   position: absolute;
-  top: 66.66%;
+  top: 66.666%;
   left: 0;
   right: 0;
   height: 1px;
-  background: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.45);
 }
 
+.editor-crop-dims-badge {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.18rem 0.52rem;
+  border-radius: 6px;
+  background: rgba(9, 13, 22, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #f8fafc;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.14s ease;
+  z-index: 3;
+}
+
+.editor-crop-dims-badge.visible {
+  opacity: 1;
+}
+
+/* Generous 40x40 invisible hit zones with crisp gallery L-brackets & edge pills flush inside bounds */
 .editor-crop-handle {
   position: absolute;
-  width: 24px;
-  height: 24px;
+  width: 40px;
+  height: 40px;
   background: transparent;
+  touch-action: none;
+  z-index: 4;
 }
 
-.editor-crop-handle::after {
+/* Corner L-brackets */
+.handle-nw,
+.handle-ne,
+.handle-se,
+.handle-sw {
+  width: 40px;
+  height: 40px;
+}
+
+.handle-nw::before,
+.handle-nw::after,
+.handle-ne::before,
+.handle-ne::after,
+.handle-se::before,
+.handle-se::after,
+.handle-sw::before,
+.handle-sw::after {
   content: '';
   position: absolute;
-  inset: 6px;
-  border-radius: 2px;
   background: #ffffff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.75);
+  border-radius: 2px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
 }
 
-.handle-nw { top: -3px; left: -3px; cursor: nwse-resize; }
-.handle-n  { top: -3px; left: calc(50% - 12px); cursor: ns-resize; }
-.handle-ne { top: -3px; right: -3px; cursor: nesw-resize; }
-.handle-e  { top: calc(50% - 12px); right: -3px; cursor: ew-resize; }
-.handle-se { bottom: -3px; right: -3px; cursor: nwse-resize; }
-.handle-s  { bottom: -3px; left: calc(50% - 12px); cursor: ns-resize; }
-.handle-sw { bottom: -3px; left: -3px; cursor: nesw-resize; }
-.handle-w  { top: calc(50% - 12px); left: -3px; cursor: ew-resize; }
+.handle-nw { top: -10px; left: -10px; cursor: nwse-resize; }
+.handle-nw::before { top: 9px; left: 9px; width: 20px; height: 3.5px; }
+.handle-nw::after  { top: 9px; left: 9px; width: 3.5px; height: 20px; }
+
+.handle-ne { top: -10px; right: -10px; cursor: nesw-resize; }
+.handle-ne::before { top: 9px; right: 9px; width: 20px; height: 3.5px; }
+.handle-ne::after  { top: 9px; right: 9px; width: 3.5px; height: 20px; }
+
+.handle-se { bottom: -10px; right: -10px; cursor: nwse-resize; }
+.handle-se::before { bottom: 9px; right: 9px; width: 20px; height: 3.5px; }
+.handle-se::after  { bottom: 9px; right: 9px; width: 3.5px; height: 20px; }
+
+.handle-sw { bottom: -10px; left: -10px; cursor: nesw-resize; }
+.handle-sw::before { bottom: 9px; left: 9px; width: 20px; height: 3.5px; }
+.handle-sw::after  { bottom: 9px; left: 9px; width: 3.5px; height: 20px; }
+
+/* Side midpoint pill bars (flush inside border so 0%/100% bounds never clip them) */
+.handle-n { top: -18px; left: calc(50% - 20px); width: 40px; height: 36px; cursor: ns-resize; }
+.handle-n::after {
+  content: '';
+  position: absolute;
+  top: 17px;
+  left: 8px;
+  width: 24px;
+  height: 4px;
+  border-radius: 3px;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+}
+
+.handle-s { bottom: -18px; left: calc(50% - 20px); width: 40px; height: 36px; cursor: ns-resize; }
+.handle-s::after {
+  content: '';
+  position: absolute;
+  bottom: 17px;
+  left: 8px;
+  width: 24px;
+  height: 4px;
+  border-radius: 3px;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+}
+
+.handle-e { top: calc(50% - 20px); right: -18px; width: 36px; height: 40px; cursor: ew-resize; }
+.handle-e::after {
+  content: '';
+  position: absolute;
+  right: 17px;
+  top: 8px;
+  width: 4px;
+  height: 24px;
+  border-radius: 3px;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+}
+
+.handle-w { top: calc(50% - 20px); left: -18px; width: 36px; height: 40px; cursor: ew-resize; }
+.handle-w::after {
+  content: '';
+  position: absolute;
+  left: 17px;
+  top: 8px;
+  width: 4px;
+  height: 24px;
+  border-radius: 3px;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+}
+
+.editor-presets-row.editor-aspect-strip {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  justify-content: safe center;
+  gap: 0.42rem;
+  padding: 0.1rem 0.25rem 0.2rem;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.editor-presets-row.editor-aspect-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.editor-presets-row.editor-aspect-strip .editor-preset-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 
 .editor-status-line {
   font-size: 0.74rem;

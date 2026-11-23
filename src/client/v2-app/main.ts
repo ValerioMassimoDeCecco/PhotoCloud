@@ -2194,42 +2194,55 @@ export function initZkWebApp(): void {
       !isSvgMime(item.meta.mime, item.meta.name) &&
       item.state === 'active'
     ) {
-      const editBtn = el('button', 'btn btn-primary', 'Modifica Foto');
-      editBtn.id = 'btn-lightbox-edit';
-      editBtn.addEventListener('click', () => {
+      const openEditorWithTab = (initialTab: 'adjust' | 'transform') => {
         closeActiveOverlayModal();
         const targetItem = item;
         selectedLightboxItem = null;
         render();
-        activeModalCleanup = openPhotoEditorModal(rootEl!, client, targetItem, {
-          onClose: () => {
-            activeModalCleanup = null;
-            selectedLightboxItem = targetItem;
-            render();
+        activeModalCleanup = openPhotoEditorModal(
+          rootEl!,
+          client,
+          targetItem,
+          {
+            onClose: () => {
+              activeModalCleanup = null;
+              selectedLightboxItem = targetItem;
+              render();
+            },
+            onSavedOverwrite: (updated) => {
+              activeModalCleanup = null;
+              selectedLightboxItem = updated;
+              bannerMessage = {
+                type: 'success',
+                text: `Foto modificata e sovrascritta in E2EE (v${updated.version}).`,
+              };
+              render();
+            },
+            onSavedCopy: (copyName) => {
+              activeModalCleanup = null;
+              selectedLightboxItem = null;
+              bannerMessage = {
+                type: 'success',
+                text: `Copia modificata cifrata salvata come "${copyName}".`,
+              };
+              render();
+            },
+            onError: (msg) => {
+              bannerMessage = { type: 'error', text: msg };
+            },
           },
-          onSavedOverwrite: (updated) => {
-            activeModalCleanup = null;
-            selectedLightboxItem = updated;
-            bannerMessage = {
-              type: 'success',
-              text: `Foto modificata e sovrascritta in E2EE (v${updated.version}).`,
-            };
-            render();
-          },
-          onSavedCopy: (copyName) => {
-            activeModalCleanup = null;
-            selectedLightboxItem = null;
-            bannerMessage = {
-              type: 'success',
-              text: `Copia modificata cifrata salvata come "${copyName}".`,
-            };
-            render();
-          },
-          onError: (msg) => {
-            bannerMessage = { type: 'error', text: msg };
-          },
-        });
-      });
+          { initialTab }
+        );
+      };
+
+      const cropBtn = el('button', 'btn btn-ghost', 'Ritaglia');
+      cropBtn.id = 'btn-lightbox-crop';
+      cropBtn.addEventListener('click', () => openEditorWithTab('transform'));
+      actionsRow.appendChild(cropBtn);
+
+      const editBtn = el('button', 'btn btn-primary', 'Modifica Foto');
+      editBtn.id = 'btn-lightbox-edit';
+      editBtn.addEventListener('click', () => openEditorWithTab('adjust'));
       actionsRow.appendChild(editBtn);
     }
 

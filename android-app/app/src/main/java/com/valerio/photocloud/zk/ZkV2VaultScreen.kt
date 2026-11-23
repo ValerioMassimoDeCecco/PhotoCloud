@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Dns
@@ -183,6 +184,7 @@ fun ZkV2VaultScreen(
 
     var viewerItem by remember { mutableStateOf<DecryptedZkItem?>(null) }
     var editorItem by remember { mutableStateOf<DecryptedZkItem?>(null) }
+    var editorInitialTab by remember { mutableStateOf(ZkEditorTab.FILTERS) }
     var itemsForShareDialog by remember { mutableStateOf<List<DecryptedZkItem>?>(null) }
     var showAddToAlbumDialog by remember { mutableStateOf(false) }
     var shareResult by remember { mutableStateOf<ZkShareCreationResult?>(null) }
@@ -342,6 +344,7 @@ fun ZkV2VaultScreen(
         ZkV2PhotoEditorDialog(
             item = editorItem!!,
             repository = repository,
+            initialTab = editorInitialTab,
             onUserActivity = { onAuthEvent(ZkV2UiEvent.TouchActivity) },
             onDismiss = { editorItem = null },
             onSavedCopy = { created ->
@@ -388,7 +391,12 @@ fun ZkV2VaultScreen(
                     }
                 }
             },
+            onCropPhoto = { item ->
+                editorInitialTab = ZkEditorTab.CROP
+                editorItem = item
+            },
             onEditPhoto = { item ->
+                editorInitialTab = ZkEditorTab.FILTERS
                 editorItem = item
             },
             onOpenOnMap = { item ->
@@ -1693,6 +1701,7 @@ private fun ZkV2ItemViewerScreen(
     onUserActivity: () -> Unit = {},
     onClose: () -> Unit,
     onToggleFavorite: (DecryptedZkItem) -> Unit,
+    onCropPhoto: (DecryptedZkItem) -> Unit,
     onEditPhoto: (DecryptedZkItem) -> Unit,
     onOpenOnMap: (DecryptedZkItem) -> Unit,
     onCreateShare: (DecryptedZkItem) -> Unit,
@@ -1746,6 +1755,9 @@ private fun ZkV2ItemViewerScreen(
                 },
                 actions = {
                     if (item.isImage) {
+                        IconButton(onClick = { onCropPhoto(item) }) {
+                            Icon(Icons.Default.Crop, contentDescription = "Ritaglia foto")
+                        }
                         IconButton(onClick = { onEditPhoto(item) }) {
                             Icon(Icons.Default.Edit, contentDescription = "Modifica foto E2EE")
                         }
